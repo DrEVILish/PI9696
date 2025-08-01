@@ -1,0 +1,269 @@
+PI9696 Menu Display - Dot Matrix Representation (256x64 pixels)
+================================================================
+
+Display Dimensions: 256 pixels wide x 64 pixels tall
+Font: 8x8 pixel bitmap font
+Status Bar: Top row (0-7) with format info and USB status
+Content Area: Rows 8-63 for main display content
+
+DISPLAY LAYOUT OVERVIEW:
+========================
+
+0         64        128       192       256
+|---------|---------|---------|---------|
+| STATUS BAR: WAV 32bit 48kHz 2ch  4GB USB| Row 0-7
+| CONTENT | CONTENT | CONTENT | CONTENT | Row 8-15
+| AREA    | AREA    | AREA    | AREA    | Row 16-23
+|         |         |         |         | Row 24-31
+|         |         |         |         | Row 32-39
+|         |         |         |         | Row 40-47
+|         |         |         |         | Row 48-55
+|         |         |         |         | Row 56-63
+
+USB ICON (SVG-style bitmap representation 16x8 pixels):
+=======================================================
+
+USB Logo (simplified for 8-bit height):
+....................
+..██████████████....
+..██..........██....
+..██..██████..██....
+..██..██..██..██....
+..██..██████..██....
+..██..........██....
+..██████████████....
+
+Alternative USB connector icon (8x8):
+........
+.██████.
+.██..██.
+.██████.
+.██..██.
+.██..██.
+.██████.
+........
+
+STATUS BAR EXAMPLES:
+===================
+
+With USB (4GB drive):
+WAV 32bit 48kHz 2ch                                             4GB [USB]
+
+With USB (1TB drive):
+WAV 32bit 96kHz 8ch                                             1TB [USB]
+
+Without USB:
+WAV 32bit 48kHz 2ch                                                 [ ]
+
+Large channel count:
+WAV 32bit 48kHz 128ch                                          16GB [USB]
+
+COMPLETE SCREEN LAYOUTS:
+========================
+
+IDLE/STANDBY SCREEN:
+-------------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                                                               |
+16-23 |                                                               |
+24-31 |                            Standby                            |
+32-39 |                                                               |
+40-47 |                  Time Remaining: 02:45:12 (456MB)             |
+48-55 |                                                               |
+56-63 |                                                               |
+
+RECORDING SCREEN:
+----------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                                                               |
+16-23 |                         ●REC 00:05:23                        |
+24-31 |                                                               |
+32-39 |                  Time Remaining 01:39:49 (387MB)             |
+40-47 |                                                               |
+48-55 |              recording_20240131_143022_ch2_48kHz.wav         |
+56-63 |                                                               |
+
+SETTINGS MENU (accessible only from idle via encoder click):
+------------------------------------------------------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                           Settings                            |
+16-23 |                                                               |
+24-31 | > Sample Rate:                                       48kHz    |
+32-39 |   Channel Count:                                         2    |
+40-47 |   Copy Files to USB                                           |
+48-55 |   System Options                                              |
+56-63 |   Exit                                                        |
+
+
+
+FILE COPY MENU:
+---------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                      Copy Files to USB                       |
+16-23 |                                                               |
+24-31 | > Start Copy                                                  |
+32-39 |   [All] Select all files                                     |
+40-47 |   [NONE] Deselect all files                                  |
+48-55 |   [X] recording_20240131_143022_ch2_48kHz.wav                |
+56-63 |   [ ] recording_20240131_150045_ch2_96kHz.wav                |
+
+COPY PROGRESS SCREEN:
+--------------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                                                               |
+16-23 |                        Copying files...                       |
+24-31 |                                                               |
+32-39 |            [████████████████----------------] 50%  |
+40-47 |                                                               |
+48-55 |                     Remaining time: 02:34                     |
+56-63 |                   Hold encoder 3s to cancel                   |
+
+SYSTEM OPTIONS MENU:
+-------------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                       System Options                         |
+16-23 |                                                               |
+24-31 | > Delete All Recordings                                       |
+32-39 |   Format USB Drive                                            |
+40-47 |   Shutdown System                                             |
+48-55 |   Restart System                                              |
+56-63 |   Exit                                                        |
+
+CONFIRMATION DIALOG (Delete All):
+---------------------------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                                                               |
+16-23 |                         ARE YOU SURE?                         |
+24-31 |                                                               |
+32-39 |                     Delete ALL recordings?                    |
+40-47 |                                                               |
+48-55 |                     This cannot be undone!                    |
+56-63 |                      YES        > NO                          |
+
+CONFIRMATION DIALOG (Format USB):
+---------------------------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                                                               |
+16-23 |                      Format USB drive?                        |
+24-31 |                                                               |
+32-39 |                     All data will be lost!                    |
+40-47 |                                                               |
+48-55 |                     This cannot be undone!                    |
+56-63 |                      YES        > NO                          |
+
+CONFIRMATION DIALOG (Shutdown):
+-------------------------------
+ROW   | FULL WIDTH (0-255)                                      |
+------|----------------------------------------------------------|
+0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+8-15  |                                                               |
+16-23 |                                                               |
+24-31 |                                                               |
+32-39 |                      Shutdown system?                         |
+40-47 |                                                               |
+48-55 |                                                               |
+56-63 |                      YES        > NO                          |
+
+USB DRIVE SIZE CALCULATIONS:
+===========================
+
+Size ranges and display format:
+- 0-999 MB: Show as "XXXmb"
+- 1-999 GB: Show as "XXgb" (rounded to nearest GB)
+- 1+ TB: Show as "XTB" (rounded to nearest TB)
+
+Examples:
+512MB drive -> "512mb"
+3.7GB drive -> "4GB"
+2.1TB drive -> "2TB"
+15.8GB drive -> "16GB"
+
+SAMPLE RATE OPTIONS:
+===================
+
+Available sample rates (rotary selection):
+- 44.1kHz (CD quality)
+- 48kHz (Professional standard)
+- 96kHz (High resolution)
+- 192kHz (Ultra high resolution)
+
+Display in menu:
+44.1kHz   48kHz   > 96kHz   192kHz
+(Selected item has > prefix and is highlighted)
+
+PIXEL-LEVEL DETAILS:
+===================
+
+Status Bar Character Spacing:
+W A V   3 2 b i t   4 8 k H z   2 c h             4 G B   [ U S B ]
+(Left-aligned format info, right-aligned USB status)
+
+USB Icon States:
+Connected: [USB] (with solid bracket)
+Disconnected: [ ] (empty bracket)
+
+Recording Indicator:
+●REC (solid circle followed by REC text)
+
+Navigation Indicators:
+Selected: > Item Name
+Unselected:   Item Name
+Progress: [████████----------------] XX%
+Time: 00:00:00 format
+
+INTERACTION MODEL:
+==================
+
+From Idle Screen:
+- Encoder Click: Enter Settings Menu
+- Record Button: Start Recording
+- Stop Button: (ignored when not recording)
+
+From Settings Menu:
+- Encoder Rotate: Navigate menu items
+- Encoder Click: Select/Enter item
+- Encoder Hold 3s: Exit to idle
+
+Sample Rate and Channel Count Adjustment:
+- When selected in Settings menu: Encoder Rotate adjusts value directly
+- Sample Rate: Cycles through 44.1kHz → 48kHz → 96kHz → 192kHz
+- Channel Count: Increments/decrements (1-128)
+- Status bar updates immediately as values change
+- Encoder Click: Move to next menu item (no confirmation needed)
+
+Copy Operations:
+- Start Copy must be explicitly selected
+- Progress shown with remaining time estimate
+- Encoder Hold 3s: Cancel operation
+
+Confirmations:
+- Default to NO option for safety
+- Encoder Rotate: Toggle YES/NO
+- Encoder Click: Execute selected option
+
+Layout Notes:
+=============
+- Status bar always shows current recording format
+- USB status updates in real-time
+- Settings only accessible from idle (safety feature)
+- All confirmations default to safe option (NO)
+- Time remaining calculated based on available storage
+- File names truncated if longer than display width
+- Progress operations are cancellable with 3s hold
+- Recording prevents menu access completely
