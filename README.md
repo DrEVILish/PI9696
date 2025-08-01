@@ -159,11 +159,6 @@ sudo systemctl start pi9696.service
 - Verify wiring connections
 - Check permissions: `ls -l /dev/spidev*`
 
-### Audio Issues
-- List audio devices: `arecord -l`
-- Test recording: `arecord -D hw:0 -f S32_LE -r 48000 -c 2 test.wav`
-- Check ALSA configuration: `cat /proc/asound/cards`
-
 ### GPIO Issues
 - Ensure running as root/sudo
 - Check GPIO permissions: `ls -l /dev/gpiomem`
