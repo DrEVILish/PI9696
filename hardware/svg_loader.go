@@ -105,6 +105,18 @@ func (sl *SVGLoader) LoadNetworkIcon(size int, useSmall bool) ([][]byte, error) 
 	return sl.LoadSVGAsBitmap("network.svg", targetSize)
 }
 
+// LoadInfernoIcon loads the inferno SVG icon as bitmap data
+func (sl *SVGLoader) LoadInfernoIcon(size int, useSmall bool) ([][]byte, error) {
+	targetSize := size
+	if useSmall {
+		targetSize = 8
+	} else {
+		targetSize = 16
+	}
+	
+	return sl.LoadSVGAsBitmap("inferno.svg", targetSize)
+}
+
 // ConvertToFixedArray16 converts a dynamic bitmap to a fixed 16x16 array
 func ConvertToFixedArray16(bitmap [][]byte) [16][16]byte {
 	var result [16][16]byte

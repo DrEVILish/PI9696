@@ -95,6 +95,13 @@ func (hm *HardwareManager) DrawStatusBar(formatInfo, usbInfo string) error {
 	return hm.FiraCode.DrawStatusBarWithNetwork(formatInfo, usbInfo, networkConnected, networkInfo)
 }
 
+// DrawStatusBarWithInferno draws the status bar including Inferno server status
+func (hm *HardwareManager) DrawStatusBarWithInferno(formatInfo, usbInfo string, infernoRunning bool) error {
+	// Get network status
+	networkConnected, networkInfo := hm.Network.GetNetworkStatus()
+	return hm.FiraCode.DrawStatusBarWithInferno(formatInfo, usbInfo, networkConnected, networkInfo, infernoRunning)
+}
+
 func (hm *HardwareManager) DrawCenteredText(text, context string, y int) error {
 	return hm.FiraCode.DrawCenteredText(text, context, y)
 }

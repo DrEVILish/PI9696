@@ -452,6 +452,58 @@ func (d *TTFDisplay) getUSBIconSmall() [8][8]byte {
 	}
 }
 
+// Inferno icon bitmap (16x16 pixels) - flame icon
+func (d *TTFDisplay) getInfernoIconBitmap() [16][16]byte {
+	// Try to load from SVG first, fallback to hardcoded bitmap if failed
+	if d.svgLoader != nil {
+		if bitmap, err := d.svgLoader.LoadInfernoIcon(16, false); err == nil {
+			return ConvertToFixedArray16(bitmap)
+		}
+	}
+
+	// Hardcoded fallback - flame icon (16x16)
+	return [16][16]byte{
+		{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 0, 15, 15, 0, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 0, 15, 15, 15, 15, 0, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 0, 15, 15, 15, 15, 15, 15, 0, 0, 0, 0, 0},
+		{0, 0, 0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 0, 0, 0, 0},
+		{0, 0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 0, 0, 0},
+		{0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 0, 0},
+		{0, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 0},
+		{0, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 0},
+		{15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15},
+		{15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15},
+		{15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15},
+		{0, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 0},
+		{0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 0, 0},
+		{0, 0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 0, 0, 0},
+		{0, 0, 0, 0, 15, 15, 15, 15, 15, 15, 15, 15, 0, 0, 0, 0},
+	}
+}
+
+// Small inferno icon bitmap (8x8 pixels) for status bar
+func (d *TTFDisplay) getInfernoIconSmall() [8][8]byte {
+	// Try to load from SVG first, fallback to hardcoded bitmap if failed
+	if d.svgLoader != nil {
+		if bitmap, err := d.svgLoader.LoadInfernoIcon(8, true); err == nil {
+			return ConvertToFixedArray8(bitmap)
+		}
+	}
+
+	// Hardcoded fallback - small flame icon (8x8)
+	return [8][8]byte{
+		{0, 0, 0, 15, 15, 0, 0, 0},
+		{0, 0, 15, 15, 15, 15, 0, 0},
+		{0, 15, 15, 15, 15, 15, 15, 0},
+		{15, 15, 15, 15, 15, 15, 15, 15},
+		{15, 15, 15, 15, 15, 15, 15, 15},
+		{15, 15, 15, 15, 15, 15, 15, 15},
+		{0, 15, 15, 15, 15, 15, 15, 0},
+		{0, 0, 15, 15, 15, 15, 0, 0},
+	}
+}
+
 // DrawUSBIcon draws a USB icon at the specified position
 func (d *TTFDisplay) DrawUSBIcon(x, y int, size string) {
 	var iconData [][]byte
@@ -512,6 +564,56 @@ func (d *TTFDisplay) DrawNetworkIcon(x, y int, size string) {
 			}
 		}
 	}
+}
+
+// DrawInfernoIcon draws an inferno icon at the specified position
+func (d *TTFDisplay) DrawInfernoIcon(x, y int, size string) {
+	var iconData [][]byte
+	var iconSize int
+	
+	if size == "small" {
+		smallIcon := d.getInfernoIconSmall()
+		iconSize = 8
+		iconData = make([][]byte, iconSize)
+		for i := 0; i < iconSize; i++ {
+			iconData[i] = smallIcon[i][:]
+		}
+	} else {
+		largeIcon := d.getInfernoIconBitmap()
+		iconSize = 16
+		iconData = make([][]byte, iconSize)
+		for i := 0; i < iconSize; i++ {
+			iconData[i] = largeIcon[i][:]
+		}
+	}
+
+	// Draw the icon
+	for y_offset := 0; y_offset < iconSize; y_offset++ {
+		for x_offset := 0; x_offset < iconSize; x_offset++ {
+			if iconData[y_offset][x_offset] > 0 {
+				d.SetPixel(x+x_offset, y+y_offset, iconData[y_offset][x_offset])
+			}
+		}
+	}
+}
+
+// DrawInfernoStatus draws inferno server status with icon and text
+func (d *TTFDisplay) DrawInfernoStatus(x, y int, running bool) {
+	// Draw inferno icon
+	d.DrawInfernoIcon(x, y, "small")
+	
+	// Draw status
+	textX := x + 10 // Offset for icon width + margin
+	var statusText string
+	
+	if running {
+		statusText = "INF"
+	} else {
+		statusText = "---"
+	}
+	
+	// Draw status text
+	d.DrawText(textX, y+6, statusText)
 }
 
 // DrawNetworkStatus draws network connection status with icon and text
@@ -595,8 +697,8 @@ func (d *TTFDisplay) drawSimpleChar(x, y int, char byte, brightness byte) {
 	}
 }
 
-// DrawStatusBarWithIcons draws the status bar with USB and network icon integration
-func (d *TTFDisplay) DrawStatusBarWithIcons(formatInfo, usbInfo string, usbConnected bool, networkConnected bool, ipAddr string) {
+// DrawStatusBarWithIcons draws the status bar with USB, network, and inferno icon integration
+func (d *TTFDisplay) DrawStatusBarWithIcons(formatInfo, usbInfo string, usbConnected bool, networkConnected bool, ipAddr string, infernoRunning bool) {
 	// Clear status bar area
 	d.FillBox(0, 0, DisplayWidth, 12, 0)
 	
@@ -617,6 +719,13 @@ func (d *TTFDisplay) DrawStatusBarWithIcons(formatInfo, usbInfo string, usbConne
 	d.DrawNetworkStatus(netX, 2, networkConnected, ipAddr)
 	currentX = netX - 5
 	
+	// Draw inferno status with icon (left of network) - only if running
+	if infernoRunning {
+		infX := currentX - 35 // Reserve space for inferno icon + text
+		d.DrawInfernoStatus(infX, 2, infernoRunning)
+		currentX = infX - 5
+	}
+	
 	// Draw USB info text if connected and space allows
 	if usbConnected && usbInfo != "" {
 		infoWidth := d.GetTextWidth(usbInfo)
@@ -629,8 +738,8 @@ func (d *TTFDisplay) DrawStatusBarWithIcons(formatInfo, usbInfo string, usbConne
 
 // DrawStatusBarWithUSB draws the status bar with USB icon integration
 func (d *TTFDisplay) DrawStatusBarWithUSB(formatInfo, usbInfo string, usbConnected bool) {
-	// Call the enhanced version with no network info
-	d.DrawStatusBarWithIcons(formatInfo, usbInfo, usbConnected, false, "")
+	// Call the enhanced version with no network or inferno info
+	d.DrawStatusBarWithIcons(formatInfo, usbInfo, usbConnected, false, "", false)
 }
 
 func (d *TTFDisplay) Close() error {

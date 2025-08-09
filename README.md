@@ -52,18 +52,18 @@ echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-3. Install inferno2pipe and required dependencies:
+3. Install Inferno Audio over IP server and dependencies:
 ```bash
 sudo apt update
-sudo apt install alsa-utils
-# Install inferno2pipe according to its documentation
-# Ensure ./save_to_file executable is available in the project directory
+sudo apt install alsa-utils ffmpeg
+# Run the setup script to configure Inferno server integration
+./setup.sh
 ```
 
-4. Create recording directory:
+4. Create recording directories:
 ```bash
-sudo mkdir -p /rec
-sudo chown pi:pi /rec
+sudo mkdir -p /rec/raw
+sudo chown -R pi:pi /rec
 ```
 
 ### Building
@@ -114,8 +114,8 @@ sudo systemctl start pi9696.service
 
 ### Controls
 
-- **Record Button**: Start recording (only when idle)
-- **Stop Button**: Stop current recording
+- **Record Button**: Start recording (only when idle, requires Inferno server running)
+- **Stop Button**: Stop current recording (leaves Inferno server running)
 - **Play Button**: Reserved for future playback functionality
 - **Rotary Encoder**: Navigate menus, toggle between elapsed/remaining time
 - **Encoder Push**: Enter menus, confirm selections
@@ -129,14 +129,20 @@ sudo systemctl start pi9696.service
 
 ### Menu System
 
-1. **Sample Rate**: Toggle between 48kHz and 96kHz
-2. **Channel Count**: Adjust from 1 to 128 channels
+1. **Sample Rate**: 44.1kHz, 48kHz, 96kHz, 192kHz (auto-restarts Inferno server)
+2. **Channel Count**: Adjust from 1 to 128 channels (auto-restarts Inferno server)
 3. **Copy Files**: Transfer recordings to USB drive
-4. **Format USB**: Format connected USB drive (FAT32)
-5. **Delete All**: Remove all recordings with confirmation
-6. **Shutdown**: Power off system with confirmation
-7. **Restart**: Reboot system with confirmation
-8. **Exit**: Return to main display
+4. **System Options**: System management submenu
+5. **Network Info**: Display network connection details
+6. **Restart Inferno**: Manually restart Inferno Audio over IP server
+7. **Exit**: Return to main display
+
+### System Options Submenu
+1. **Delete All**: Remove all recordings with confirmation
+2. **Format USB**: Format connected USB drive (FAT32)
+3. **Shutdown**: Power off system with confirmation
+4. **Restart**: Reboot system with confirmation
+5. **Exit**: Return to settings menu
 
 ### File Copy Options
 
@@ -147,10 +153,20 @@ sudo systemctl start pi9696.service
 
 ### Recording Format
 
-- Format: WAV (PCM 32-bit)
-- Sample Rate: 48kHz or 96kHz (configurable)
-- Channels: 1-128 (configurable)
-- File naming: `recording_YYYYMMDD_HHMMSS_chN_NNkHz.wav`
+- **Output Format**: WAV (PCM 24-bit)
+- **Internal Pipeline**: 32-bit signed little-endian via FIFO
+- **Sample Rates**: 44.1kHz, 48kHz, 96kHz, 192kHz
+- **Channel Support**: 1-128 channels
+- **File Naming**: `recording_YYYYMMDD_HHMMSS_chN_NNkHz.wav`
+- **Raw FIFO**: `/rec/raw/inferno_YYYYMMDD_HHMMSS_chN_NNkHz.raw` (temporary)
+
+### Inferno Server Operation
+
+- **Startup**: Automatic when eth0 networking becomes available
+- **Persistence**: Runs continuously between recordings
+- **Auto-Restart**: When sample rate or channel count changes
+- **Status Display**: Flame icon (🔥) in status bar when running
+- **Manual Control**: "Restart Inferno" option in settings menu
 
 ## Troubleshooting
 
@@ -163,6 +179,14 @@ sudo systemctl start pi9696.service
 - List audio devices: `arecord -l`
 - Test recording: `arecord -D hw:0 -f S32_LE -r 48000 -c 2 test.wav`
 - Check ALSA configuration: `cat /proc/asound/cards`
+- Check Inferno server: Look for flame icon in status bar
+- Test Inferno manually: `cd inferno && INFERNO_SAMPLE_RATE=48000 cargo run -- -c 2 -o /tmp/test.fifo`
+
+### Network Issues
+- Check eth0 interface: `ip addr show eth0`
+- Monitor network status: Watch network icon in status bar
+- Check connectivity: `ping 8.8.8.8`
+- Inferno server requires network: Ensure eth0 is up and configured
 
 ### GPIO Issues
 - Ensure running as root/sudo
@@ -177,13 +201,18 @@ sudo systemctl start pi9696.service
 ## Development
 
 The project is structured as follows:
-- `main.go`: Main application logic and state management
-- `hardware/display.go`: SSD1322 OLED display driver
-- `hardware/encoder.go`: Rotary encoder with button support
-- `hardware/buttons.go`: GPIO button management
-- `hardware/manager.go`: Hardware initialization and coordination
+- `main.go`: Main application logic, state management, and Inferno server control
+- `hardware/`: Hardware abstraction layer with display, encoder, buttons, and network detection
+- `inferno/`: Inferno Audio over IP server project directory (Rust/Cargo)
+- `svg/`: Icon assets including inferno.svg for status bar
+- `rec/`: Final recording output directory
+- `rec/raw/`: Temporary FIFO files for audio pipeline
 
-To modify the display font or add characters, edit the `getCharBitmap()` function in `display.go`.
+### Inferno Server Integration
+- **Directory**: `./inferno/` contains the Rust/Cargo project
+- **Command**: `INFERNO_SAMPLE_RATE=<rate> cargo run -- -c <channels> -o <fifo>`
+- **Pipeline**: Inferno → FIFO → FFmpeg → WAV file
+- **Management**: Automatic startup, restart, and monitoring
 
 ## License
 
