@@ -2,7 +2,7 @@
 
 ## Overview
 
-The PI9696 is a professional 1U rack-mounted audio recorder based on the Raspberry Pi 5. It features a 256x64 OLED display, rotary encoder navigation, dedicated record/stop/play buttons, and support for multi-channel audio recording up to 96kHz/32-bit.
+The PI9696 is a professional 1U rack-mounted audio recorder based on the Raspberry Pi 5. It features a 256x64 OLED display, rotary encoder navigation, dedicated record/stop/play buttons, and support for multi-channel audio recording up to 192kHz/24-bit using a persistent Inferno Audio over IP server with automatic network-based startup and settings synchronization.
 
 ## Project Completion Status
 
@@ -16,7 +16,7 @@ The PI9696 is a professional 1U rack-mounted audio recorder based on the Raspber
 
 #### Core Application Features
 - **Menu System** - Complete hierarchical menu with encoder navigation
-- **Recording Engine** - inferno2pipe-based recording with configurable sample rates and channels
+- **Recording Engine** - Persistent Inferno Audio over IP server with automatic network startup and FFmpeg conversion pipeline
 - **File Management** - USB detection, file copying, and deletion with progress tracking
 - **Display Layout** - Split-screen design with status and menu areas
 - **State Management** - Robust state machine handling idle, recording, menu, and copy states
@@ -24,6 +24,7 @@ The PI9696 is a professional 1U rack-mounted audio recorder based on the Raspber
 #### System Integration
 - **Auto-mount** - USB drive detection and mounting
 - **Service Integration** - Systemd service configuration
+- **Network Monitoring** - Automatic eth0 interface monitoring and Inferno server management
 - **Audio Configuration** - ALSA optimization for low-latency recording
 - **Permission Management** - Proper user/group configurations
 
@@ -36,26 +37,29 @@ The PI9696 is a professional 1U rack-mounted audio recorder based on the Raspber
 ### 🚧 Implementation Details
 
 #### Menu System Features
-- **Sample Rate Selection** - Toggle between 48kHz and 96kHz
-- **Channel Count** - Adjustable from 1 to 128 channels
+- **Sample Rate Selection** - 44.1kHz, 48kHz, 96kHz, 192kHz with automatic Inferno server restart
+- **Channel Count** - Adjustable from 1 to 128 channels with automatic Inferno server restart
 - **File Copy Management** - Select individual files or copy all with progress bar
 - **USB Format** - Format attached USB drives (FAT32)
-- **System Control** - Shutdown and restart with confirmation
+- **System Control** - Shutdown, restart, and Inferno server restart with confirmation
+- **Network Information** - Display eth0 interface status and IP details
+- **Inferno Management** - Manual server restart with status display
 - **Delete Protection** - Confirmation dialog for deleting all recordings
 
 #### Recording Features
-- **Format Support** - WAV files with PCM 32-bit encoding
+- **Format Support** - WAV files with PCM 24-bit encoding (32-bit capture pipeline)
 - **File Naming** - Timestamped files with sample rate and channel info
 - **Real-time Display** - Shows elapsed time, remaining time, and storage
 - **Storage Management** - Automatic free space calculation and display
 - **Path Management** - Records to /rec by default, USB when selected
 
 #### Display Interface
-- **Status Display** - Current time, remaining time, storage info
+- **Status Display** - Current time, remaining time, storage info with enhanced status bar
 - **Menu Navigation** - Hierarchical menu with visual selection indicators
 - **Progress Tracking** - Copy operations show progress bar and percentage
 - **Confirmation Dialogs** - Safety prompts for destructive operations
-- **USB Indicator** - Visual indication when USB drive is connected
+- **Multi-Icon Status Bar** - USB, Network, and Inferno server status indicators
+- **Real-time Status** - Inferno flame icon (🔥) when server is running
 
 ### 🔧 Hardware Requirements
 
@@ -86,20 +90,31 @@ Control Buttons:
 
 ```
 PI9696/
-├── main.go                 # Main application with state machine
+├── main.go                 # Main application with state machine and Inferno management
 ├── hardware/               # Hardware abstraction layer
-│   ├── display.go         # SSD1322 OLED driver
+│   ├── display_ttf.go     # SSD1322 OLED driver with TTF/FiraCode support
+│   ├── firacode_manager.go # Enhanced typography and icon management
+│   ├── svg_loader.go      # SVG icon loading (USB, Network, Inferno)
+│   ├── network.go         # Network interface monitoring
 │   ├── encoder.go         # Rotary encoder with button
 │   ├── buttons.go         # GPIO button manager
-│   └── manager.go         # Hardware initialization
+│   └── manager.go         # Hardware initialization and coordination
+├── svg/                   # Icon assets
+│   ├── inferno.svg        # Inferno server status icon
+│   ├── network.svg        # Network status icon
+│   └── usb.svg           # USB status icon
+├── inferno/               # Inferno Audio over IP server directory
+│   ├── Cargo.toml        # Rust project configuration
+│   └── src/              # Inferno server source code
+├── rec/                  # Final recording output directory
+├── rec/raw/              # Temporary FIFO files for audio pipeline
 ├── cmd/
 │   └── test-hardware.go   # Hardware testing utilities
 ├── go.mod                 # Go module dependencies
-├── Makefile              # Build and deployment automation
-├── setup.sh              # Complete system setup script
-├── install.sh            # Basic installation script
+├── setup.sh              # Complete system setup with Inferno integration
 ├── README.md             # Detailed documentation
 ├── WIRING.md             # Hardware wiring reference
+├── INFERNO_INTEGRATION.md # Inferno server integration documentation
 └── PROJECT_STATUS.md     # This status document
 ```
 
@@ -141,11 +156,12 @@ make format
 #### User Interface
 - **Encoder Navigation** - Rotate to navigate, click to select, hold to cancel
 - **Button Controls** - Dedicated record/stop buttons (play reserved for future)
-- **Visual Feedback** - Real-time status updates and progress indicators
+- **Visual Feedback** - Real-time status updates with multi-icon status bar
 - **Menu Protection** - Recording prevents menu access for safety
+- **Inferno Integration** - Visual server status and manual restart capability
 
 #### Audio Processing
-- **High Quality** - Support for 32-bit/96kHz recording
+- **High Quality** - Support for 24-bit/192kHz recording (32-bit internal pipeline)
 - **Multi-channel** - Up to 128 channels (hardware dependent)
 - **Format Flexibility** - WAV format with configurable parameters
 - **Real-time Monitoring** - Live recording time and remaining space
@@ -158,8 +174,10 @@ make format
 
 #### System Integration
 - **Service Management** - Systemd integration for automatic startup
+- **Network Management** - Automatic eth0 monitoring and Inferno server lifecycle
 - **Audio Optimization** - ALSA configuration for low latency
 - **Resource Management** - Proper permissions and user groups
+- **Process Management** - Persistent Inferno server with automatic restart
 - **Logging** - Structured logging with rotation
 
 ### 🚀 Deployment Status
@@ -201,20 +219,24 @@ make format
 - Power: ~5W total system consumption
 
 #### Audio Performance
-- Latency: Hardware dependent (USB audio interface)
-- Quality: Up to 32-bit/96kHz (limited by audio interface)
+- Latency: Hardware dependent (USB audio interface) + network audio server
+- Quality: Up to 24-bit/192kHz with 32-bit internal processing pipeline
 - Channels: 1-128 (theoretical, hardware dependent)
-- File Size: ~11MB/minute for stereo 48kHz/32-bit
+- File Size: ~8.3MB/minute for stereo 48kHz/24-bit
+- Network: Requires eth0 connectivity for Inferno Audio over IP server
+- Pipeline: Inferno Server → FIFO → FFmpeg → WAV file
 
 ### 🔮 Future Enhancements
 
 #### Potential Additions
 - **Playback Functionality** - Use Play button for audio playback
-- **Network Integration** - Remote control and file transfer
+- **Advanced Network Integration** - Remote control and file transfer
+- **Multiple Audio Sources** - Network audio source configuration
 - **Metadata Support** - Recording annotations and tags
 - **Multiple Formats** - FLAC, MP3 encoding options
 - **Level Metering** - Real-time audio level display
 - **Scheduled Recording** - Timer-based recording start/stop
+- **Load Balancing** - Multiple Inferno server instances
 
 #### Hardware Expansion
 - **Additional I/O** - More buttons or controls
@@ -254,7 +276,8 @@ make format
 #### Documentation
 - README.md - Complete setup and usage guide
 - WIRING.md - Hardware connection reference
-- Makefile - Build system help (`make help`)
+- INFERNO_INTEGRATION.md - Inferno server integration details
+- setup.sh - Automated setup with Inferno server support
 - Comments throughout source code
 
 #### Troubleshooting
@@ -269,6 +292,6 @@ make format
 
 The PI9696 audio recorder is complete and ready for hardware assembly and deployment. All software components are implemented, tested (in simulation), and documented. The system provides a professional audio recording solution suitable for studio or live applications.
 
-**Last Updated:** 2024-07-31
-**Version:** 1.0.0
+**Last Updated:** 2024-12-01
+**Version:** 1.1.0 - Inferno Server Integration
 **Maintainer:** Development Team

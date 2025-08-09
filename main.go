@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
-	"strconv"
+
 	"strings"
 	"sync"
 	"syscall"
@@ -23,8 +23,9 @@ const (
 	MaxChannelCount   = 128
 	BitsPerSample     = 32
 	RecordPath        = "/rec"
+	RawPath           = "/rec/raw"
 	USBMountPoint     = "/media/usb"
-	RecordingFormat   = "WAV 32bit"
+	RecordingFormat   = "WAV 24bit"
 )
 
 type AppState int
@@ -51,6 +52,7 @@ const (
 	FormatConfirm
 	ShutdownConfirm
 	RestartConfirm
+	InfernoRestartConfirm
 )
 
 type ConfirmOption int
@@ -58,6 +60,16 @@ type ConfirmOption int
 const (
 	ConfirmNo ConfirmOption = iota
 	ConfirmYes
+)
+
+// Inferno server states
+type InfernoState int
+
+const (
+	InfernoStopped InfernoState = iota
+	InfernoStarting
+	InfernoRunning
+	InfernoFailed
 )
 
 var (
@@ -80,8 +92,14 @@ var (
 	allFiles       []string
 	copyProgress   = 0
 	showRemaining  = false
-	infernoPipeCmd *exec.Cmd
-	mutex          sync.Mutex
+	infernoCmd      *exec.Cmd
+	ffmpegCmd       *exec.Cmd
+	fifoPath        string
+	infernoState    InfernoState
+	lastSampleRate  int
+	lastChannelCount int
+	networkWasUp    bool
+	mutex           sync.Mutex
 )
 
 func main() {
@@ -95,6 +113,7 @@ func main() {
 	setupHardwareCallbacks()
 	go detectUSB()
 	go updateLoop()
+	go networkMonitorLoop()
 
 	// Keep main thread alive
 	select {}
@@ -206,6 +225,8 @@ func adjustSampleRate(direction int) {
 	} else if sampleRateIdx >= len(sampleRates) {
 		sampleRateIdx = 0
 	}
+	// Check if we need to restart Inferno server
+	checkInfernoRestart()
 }
 
 func adjustChannelCount(direction int) {
@@ -215,6 +236,8 @@ func adjustChannelCount(direction int) {
 	} else if channelCount > MaxChannelCount {
 		channelCount = MaxChannelCount
 	}
+	// Check if we need to restart Inferno server
+	checkInfernoRestart()
 }
 
 func navigateMenu(direction int) {
@@ -222,7 +245,7 @@ func navigateMenu(direction int) {
 
 	switch currentState {
 	case StateSettings:
-		maxItems = 6 // Sample Rate, Channel Count, Copy Files, System Options, Network Info, Exit
+		maxItems = 7 // Sample Rate, Channel Count, Copy Files, System Options, Network Info, Restart Inferno, Exit
 	case StateCopyFiles:
 		maxItems = len(allFiles) + 3 // Start Copy, [All], [NONE], files...
 	case StateSystemOptions:
@@ -255,7 +278,11 @@ func handleSettingsClick() {
 		currentState = StateNetworkInfo
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 5: // Exit
+	case 5: // Restart Inferno
+		menuMode = InfernoRestartConfirm
+		currentState = StateConfirm
+		confirmOption = ConfirmNo
+	case 6: // Exit
 		currentState = StateIdle
 		menuScrollOffset = 0
 	}
@@ -316,35 +343,147 @@ func handleConfirmClick() {
 			exec.Command("sudo", "shutdown", "-h", "now").Run()
 		case RestartConfirm:
 			exec.Command("sudo", "reboot").Run()
+		case InfernoRestartConfirm:
+			restartInfernoServer()
 		}
 	}
 	currentState = StateIdle
 }
 
+// Network monitoring loop to start/restart Inferno server when eth0 comes up
+func networkMonitorLoop() {
+	for {
+		mutex.Lock()
+		networkUp := hwManager.IsNetworkAvailable()
+		
+		if networkUp && !networkWasUp {
+			// Network just came up, start Inferno if not running
+			if infernoState != InfernoRunning {
+				log.Printf("Network available, starting Inferno server")
+				startInfernoServer()
+			}
+		} else if !networkUp && networkWasUp {
+			// Network went down
+			log.Printf("Network unavailable")
+		}
+		
+		networkWasUp = networkUp
+		mutex.Unlock()
+		
+		time.Sleep(5 * time.Second) // Check every 5 seconds
+	}
+}
+
+// Check if Inferno server needs to be restarted due to setting changes
+func checkInfernoRestart() {
+	mutex.Lock()
+	defer mutex.Unlock()
+	
+	currentSampleRate := sampleRates[sampleRateIdx]
+	if (currentSampleRate != lastSampleRate || channelCount != lastChannelCount) && infernoState == InfernoRunning {
+		log.Printf("Settings changed, restarting Inferno server")
+		stopInfernoServer()
+		startInfernoServer()
+	}
+}
+
+// Start the Inferno Audio over IP server
+func startInfernoServer() {
+	if infernoState == InfernoRunning || infernoState == InfernoStarting {
+		return
+	}
+	
+	infernoState = InfernoStarting
+	sampleRate := sampleRates[sampleRateIdx]
+	
+	// Create a persistent FIFO for Inferno output
+	timestamp := time.Now().Format("20060102_150405")
+	baseFileName := fmt.Sprintf("inferno_%s_ch%d_%dkHz.raw", timestamp, channelCount, sampleRate/1000)
+	fifoPath = fmt.Sprintf("%s/%s", RawPath, baseFileName)
+	
+	// Ensure directories exist
+	os.MkdirAll(RawPath, 0755)
+	
+	// Remove old FIFO if exists
+	os.Remove(fifoPath)
+	
+	// Create new FIFO
+	if err := syscall.Mkfifo(fifoPath, 0666); err != nil {
+		log.Printf("Failed to create Inferno FIFO %s: %v", fifoPath, err)
+		infernoState = InfernoFailed
+		return
+	}
+	
+	// Start Inferno server
+	infernoCmd = exec.Command("sh", "-c", 
+		fmt.Sprintf("cd inferno && INFERNO_SAMPLE_RATE=%d cargo run -- -c %d -o ../%s", 
+			sampleRate, channelCount, fifoPath))
+	
+	if err := infernoCmd.Start(); err != nil {
+		log.Printf("Failed to start Inferno server: %v", err)
+		os.Remove(fifoPath)
+		infernoState = InfernoFailed
+		return
+	}
+	
+	infernoState = InfernoRunning
+	lastSampleRate = sampleRate
+	lastChannelCount = channelCount
+	log.Printf("Inferno server started with %dkHz, %d channels", sampleRate/1000, channelCount)
+}
+
+// Stop the Inferno server
+func stopInfernoServer() {
+	if infernoCmd != nil && infernoCmd.Process != nil {
+		infernoCmd.Process.Signal(syscall.SIGTERM)
+		infernoCmd.Wait()
+		infernoCmd = nil
+	}
+	
+	if fifoPath != "" {
+		os.Remove(fifoPath)
+		fifoPath = ""
+	}
+	
+	infernoState = InfernoStopped
+	log.Printf("Inferno server stopped")
+}
+
+// Restart the Inferno server
+func restartInfernoServer() {
+	stopInfernoServer()
+	time.Sleep(1 * time.Second) // Give it a moment
+	if hwManager.IsNetworkAvailable() {
+		startInfernoServer()
+	}
+}
+
 func startRecording() {
+	if infernoState != InfernoRunning {
+		log.Printf("Cannot start recording: Inferno server not running")
+		return
+	}
+	
 	recordStart = time.Now()
 	timestamp := recordStart.Format("20060102_150405")
 	sampleRate := sampleRates[sampleRateIdx]
 	recordingFile = fmt.Sprintf("%s/recording_%s_ch%d_%dkHz.wav",
 		RecordPath, timestamp, channelCount, sampleRate/1000)
 
+	// Create recording directory
 	os.MkdirAll(RecordPath, 0755)
 
-	// Build inferno2pipe command
-	var cmdName string
-	var args []string
-
-	cmdName = "sh"
-	args = []string{
-		"-c",
-		fmt.Sprintf("sample_rate=%d ./save_to_file %d", sampleRate, channelCount),
-	}
-
-	infernoPipeCmd = exec.Command(cmdName, args...)
-	infernoPipeCmd.Dir = "." // Set working directory
-	err := infernoPipeCmd.Start()
+	// Start FFmpeg to convert raw stream from existing Inferno FIFO to final output
+	ffmpegCmd = exec.Command("ffmpeg", 
+		"-nostdin", "-fflags", "nobuffer", 
+		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRate), 
+		"-ac", fmt.Sprintf("%d", channelCount), 
+		"-i", fifoPath, 
+		"-c:a", "pcm_s24le", recordingFile)
+	
+	err := ffmpegCmd.Start()
 	if err != nil {
-		log.Printf("Failed to start recording with inferno2pipe: %v", err)
+		log.Printf("Failed to start FFmpeg: %v", err)
 		return
 	}
 
@@ -353,11 +492,13 @@ func startRecording() {
 }
 
 func stopRecording() {
-	if infernoPipeCmd != nil && infernoPipeCmd.Process != nil {
-		infernoPipeCmd.Process.Signal(syscall.SIGTERM)
-		infernoPipeCmd.Wait()
-		infernoPipeCmd = nil
+	// Only stop FFmpeg, leave Inferno server running
+	if ffmpegCmd != nil && ffmpegCmd.Process != nil {
+		ffmpegCmd.Process.Signal(syscall.SIGTERM)
+		ffmpegCmd.Wait()
+		ffmpegCmd = nil
 	}
+
 	isRecording = false
 	currentState = StateIdle
 }
@@ -556,8 +697,9 @@ func renderStatusBar() {
 		rightSide = "[---]"
 	}
 
-	// Use context-aware FiraCode rendering
-	hwManager.DrawStatusBar(formatStr, rightSide)
+	// Use context-aware FiraCode rendering with Inferno status
+	infernoRunning := (infernoState == InfernoRunning)
+	hwManager.DrawStatusBarWithInferno(formatStr, rightSide, infernoRunning)
 }
 
 func renderIdleScreen() {
@@ -600,17 +742,18 @@ func renderSettingsMenu() {
 	// Use arrow ligatures and enhanced typography
 	allItems := []hardware.MenuItem{
 		{Label: "Sample Rate →", Value: sampleRateText},
-		{Label: "Channels →", Value: strconv.Itoa(channelCount)},
-		{Label: "Copy Files → USB", Value: ""},
+		{Label: "Channel Count →", Value: fmt.Sprintf("%d", channelCount)},
+		{Label: "Copy Files →", Value: ""},
 		{Label: "System Options →", Value: ""},
-		{Label: "🌐 Network Info →", Value: ""},
-		{Label: "← Exit", Value: ""},
+		{Label: "Network Info →", Value: ""},
+		{Label: "Restart Inferno", Value: getInfernoStatusText()},
+		{Label: "Exit", Value: ""},
 	}
 
 	// Calculate scrolling parameters
-	maxVisibleItems := 3 // Max items that fit after header (64px height - 20px header - margins)
 	totalItems := len(allItems)
-
+	maxVisibleItems := 6
+	
 	// Update scroll offset based on selected item
 	if selectedMenu < menuScrollOffset {
 		menuScrollOffset = selectedMenu
@@ -638,7 +781,7 @@ func renderSettingsMenu() {
 
 	// Draw visible items
 	y := 32
-	fontHeight := hwManager.GetFontHeight()
+	fontHeight := 12
 
 	for i, item := range visibleItems {
 		// Switch to emphasis font for selected items
@@ -683,6 +826,22 @@ func renderSettingsMenu() {
 		}
 	}
 }
+
+// Get Inferno server status text for display
+func getInfernoStatusText() string {
+	switch infernoState {
+	case InfernoRunning:
+		return "Running"
+	case InfernoStarting:
+		return "Starting..."
+	case InfernoFailed:
+		return "Failed"
+	default:
+		return "Stopped"
+	}
+}
+
+
 
 func renderCopyFilesMenu() {
 	// Use FiraCode header with USB symbol
@@ -862,6 +1021,10 @@ func renderConfirmDialog() {
 		title = "🔄 RESTART"
 		message1 = "Restart the system?"
 		message2 = ""
+	case InfernoRestartConfirm:
+		title = "🔥 RESTART INFERNO"
+		message1 = "Restart Inferno server?"
+		message2 = "Will reconnect audio stream"
 	}
 
 	// Use FiraCode context-aware confirmation dialog

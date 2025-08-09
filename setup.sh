@@ -90,6 +90,8 @@ sudo apt install -y \
     git \
     golang-go \
     build-essential \
+    pkg-config \
+    libasound2-dev \
     udev \
     systemd \
     rsync \
@@ -134,19 +136,12 @@ else
 fi
 
 
-# Create recording directory
-log_info "Creating recording directory..."
-sudo mkdir -p /rec
-sudo chown pi:pi /rec
-sudo chmod 755 /rec
-log_success "Recording directory created: /rec"
-
-# Create USB mount point
-log_info "Creating USB mount point..."
-sudo mkdir -p /media/usb
-sudo chown pi:pi /media/usb
-sudo chmod 755 /media/usb
-log_success "USB mount point created: /media/usb"
+# Create recording directories
+log_info "Creating recording directories..."
+sudo mkdir -p /rec/raw
+sudo chown -R pi:pi /rec
+sudo chmod -R 755 /rec
+log_success "Recording directories created: /rec and /rec/raw"
 
 # Create log directory
 log_info "Creating log directory..."
@@ -255,6 +250,46 @@ done
 log_info "Setting CPU governor to performance..."
 echo 'GOVERNOR="performance"' | sudo tee /etc/default/cpufrequtils > /dev/null
 log_success "CPU governor set to performance"
+
+# Install Rust and Cargo for Inferno server
+log_step "Inferno Audio over IP Server Setup"
+
+if command -v cargo &> /dev/null; then
+    log_info "Rust/Cargo already installed: $(cargo --version)"
+else
+    log_info "Installing Rust and Cargo..."
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+    source ~/.cargo/env
+    log_success "Rust and Cargo installed: $(cargo --version)"
+fi
+
+# Create placeholder for Inferno server
+if [ ! -d "inferno" ]; then
+    log_info "Creating Inferno server directory placeholder..."
+    mkdir -p inferno
+    cat << 'INFERNO_EOF' > inferno/README.md
+# Inferno Audio over IP Server
+
+This directory should contain the Inferno Audio over IP server project.
+
+## Requirements:
+- Rust/Cargo project with Cargo.toml
+- Supports command line: cargo run -- -c <channels> -o <output_file>
+- Supports INFERNO_SAMPLE_RATE environment variable
+- Outputs s32le format audio data
+
+## Setup:
+1. Place the Inferno server source code in this directory
+2. Run: cargo build --release
+3. Test basic functionality
+
+## Example usage:
+INFERNO_SAMPLE_RATE=48000 cargo run -- -c 2 -o /rec/raw/test.fifo
+INFERNO_EOF
+    log_warning "Inferno server placeholder created. Please install the actual server."
+else
+    log_info "Inferno directory already exists"
+fi
 
 # Set up log rotation
 log_info "Configuring log rotation..."
@@ -595,10 +630,11 @@ log_success "PI9696 Audio Recorder with FiraCode Integration Setup Complete!"
 echo
 
 echo -e "${GREEN}📝 Installation Summary:${NC}"
-echo "  • System packages: INSTALLED"
+echo "  • System packages: INSTALLED (including FFmpeg)"
 echo "  • Hardware interfaces: CONFIGURED (SPI, I2C, GPIO)"
 echo "  • Audio system: OPTIMIZED (ALSA)"
-echo "  • USB auto-mount: CONFIGURED"
+echo "  • Rust/Cargo: INSTALLED"
+echo "  • Inferno server: PLACEHOLDER CREATED"
 echo "  • FiraCode fonts: INSTALLED (v${FIRACODE_VERSION})"
 echo "  • Programming ligatures: ENABLED"
 echo "  • Go dependencies: INSTALLED"
@@ -649,17 +685,20 @@ echo
 
 echo -e "${GREEN}📁 File Locations:${NC}"
 echo "  • Recordings:           /rec/"
+echo "  • Raw FIFO files:       /rec/raw/"
 echo "  • USB mount:            /media/usb/"
 echo "  • Logs:                 /var/log/pi9696/"
 echo "  • Fonts:                ./fonts/"
 echo "  • Font config:          ./fonts/font_config.json"
+echo "  • Inferno server:       ./inferno/"
 echo "  • Service:              /etc/systemd/system/pi9696.service"
 echo
 
 echo -e "${YELLOW}⚡ Next Steps:${NC}"
 echo "1. 🔌 Connect all hardware components (see wiring above)"
-echo "2. 🔄 Reboot the system: sudo reboot"
-echo "5. 🚀 Start service: sudo systemctl start pi9696"
+echo "2. 📦 Install Inferno Audio over IP server in ./inferno/ directory"
+echo "3. 🔄 Reboot the system: sudo reboot"
+echo "4. 🚀 Start service: sudo systemctl start pi9696"
 echo
 
 echo -e "${GREEN}📖 Documentation:${NC}"

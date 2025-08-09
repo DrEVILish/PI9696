@@ -200,6 +200,11 @@ func (fcm *FiraCodeManager) DrawStatusBar(formatInfo, usbInfo string) error {
 
 // DrawStatusBarWithNetwork renders the status bar with network and USB status
 func (fcm *FiraCodeManager) DrawStatusBarWithNetwork(formatInfo, usbInfo string, networkConnected bool, networkInfo string) error {
+	return fcm.DrawStatusBarWithInferno(formatInfo, usbInfo, networkConnected, networkInfo, false)
+}
+
+// DrawStatusBarWithInferno renders the status bar with network, USB, and Inferno status
+func (fcm *FiraCodeManager) DrawStatusBarWithInferno(formatInfo, usbInfo string, networkConnected bool, networkInfo string, infernoRunning bool) error {
 	if err := fcm.SwitchToContext("statusbar"); err != nil {
 		return err
 	}
@@ -209,8 +214,8 @@ func (fcm *FiraCodeManager) DrawStatusBarWithNetwork(formatInfo, usbInfo string,
 	// Determine USB connection status
 	usbConnected := usbInfo != "" && usbInfo != "[---]" && usbInfo != "[ ]"
 	
-	// Use enhanced status bar with both USB and network icons
-	fcm.display.DrawStatusBarWithIcons(formatInfo, usbInfo, usbConnected, networkConnected, networkInfo)
+	// Use enhanced status bar with USB, network, and inferno icons
+	fcm.display.DrawStatusBarWithIcons(formatInfo, usbInfo, usbConnected, networkConnected, networkInfo, infernoRunning)
 
 	return fcm.display.Update()
 }
