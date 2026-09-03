@@ -8,7 +8,14 @@ A professional audio recording interface for Raspberry Pi 5 designed to fit in a
 - 2.7" 256×64 OLED Display (SSD1322) via SPI
 - Rotary Encoder (EC11) with push button
 - 3x Momentary buttons (Record, Stop, Play)
+- 2x Status LEDs (Record, Inferno server status)
 - Audio interface (USB or HAT)
+
+## Software Requirements
+
+- Raspberry Pi OS (64-bit), Trixie release or newer
+- Go 1.25 or newer (setup.sh installs this directly from go.dev; Trixie's
+  `golang-go` apt package currently trails behind this module's minimum)
 
 ## Wiring
 
@@ -34,6 +41,11 @@ A professional audio recording interface for Raspberry Pi 5 designed to fit in a
 - Play → GPIO13
 - All buttons use internal pull-ups
 
+### Status LEDs
+- Record → GPIO12 (lit while recording)
+- Status → GPIO16 (lit while the Inferno server is running)
+- See WIRING.md for resistor/polarity details
+
 ## Software Setup
 
 ### Prerequisites
@@ -44,10 +56,11 @@ sudo raspi-config
 # Navigate to Interface Options > SPI > Enable
 ```
 
-2. Install Go (if not already installed):
+2. Install Go (if not already installed - this module requires Go 1.25+,
+   newer than Trixie's `golang-go` apt package):
 ```bash
-wget https://go.dev/dl/go1.21.0.linux-arm64.tar.gz
-sudo tar -C /usr/local -xzf go1.21.0.linux-arm64.tar.gz
+wget https://go.dev/dl/go1.27.0.linux-arm64.tar.gz
+sudo tar -C /usr/local -xzf go1.27.0.linux-arm64.tar.gz
 echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -63,7 +76,7 @@ sudo apt install alsa-utils ffmpeg
 4. Create recording directories:
 ```bash
 sudo mkdir -p /rec/raw
-sudo chown -R pi:pi /rec
+sudo chown -R "$(id -un):$(id -gn)" /rec
 ```
 
 ### Building
@@ -84,30 +97,54 @@ sudo ./pi9696
 
 Note: Requires sudo for GPIO access.
 
-### Auto-start on boot
+### Developing without a Raspberry Pi
 
-Create a systemd service:
+On a dev machine with no SPI/GPIO (e.g. x86), set `PI9696_SIM=1` to skip
+hardware init - the app starts up normally and every `Update()` call dumps
+the current framebuffer to `/tmp/pi9696_sim_frame.png` (override with
+`PI9696_SIM_OUT`) instead of writing to SPI:
 
 ```bash
-sudo tee /etc/systemd/system/pi9696.service > /dev/null <<EOF
-[Unit]
-Description=PI9696 Audio Recorder
-After=network.target
+PI9696_SIM=1 ./pi9696
+```
 
-[Service]
-Type=simple
-User=root
-WorkingDirectory=/home/pi/PI9696
-ExecStart=/home/pi/PI9696/pi9696
-Restart=always
-RestartSec=5
+To check a specific screen's layout without wiring up encoder/button input,
+`cmd/simcheck` renders each screen (idle, recording, every menu, dialogs) to
+`/tmp/pi9696_shots/*.png`:
 
-[Install]
-WantedBy=multi-user.target
-EOF
+```bash
+go run ./cmd/simcheck
+```
 
-sudo systemctl enable pi9696.service
-sudo systemctl start pi9696.service
+### Auto-start on boot
+
+`setup.sh` installs a version-controlled systemd unit from `deploy/pi9696.service`
+(the unit file lives in the repo, so service changes go through git) and enables
+it. The service runs as root for GPIO/SPI/ALSA/USB-mount access, uses `WorkingDirectory`
+pointing at the install directory (the app resolves the Inferno binary relative to it),
+and restarts automatically (`Restart=always`).
+
+```bash
+sudo systemctl start pi9696
+sudo systemctl status pi9696
+```
+
+### Rebuilding and restarting after code changes
+
+After editing Go source, rebuild and restart the service with the bundled helper:
+
+```bash
+./restart-pi9696.sh          # rebuild (go build) + restart the service
+./restart-pi9696.sh logs     # tail the service logs
+./restart-pi9696.sh status   # show service status
+```
+
+Or manually:
+
+```bash
+go build -o pi9696 .
+sudo systemctl restart pi9696.service
+sudo journalctl -u pi9696 -f   # view logs
 ```
 
 ## Usage
@@ -115,8 +152,8 @@ sudo systemctl start pi9696.service
 ### Controls
 
 - **Record Button**: Start recording (only when idle, requires Inferno server running)
-- **Stop Button**: Stop current recording (leaves Inferno server running)
-- **Play Button**: Reserved for future playback functionality
+- **Stop Button**: Stop current recording, or stop active playback
+- **Play Button**: Play back the most recent recording (only when idle, not recording)
 - **Rotary Encoder**: Navigate menus, toggle between elapsed/remaining time
 - **Encoder Push**: Enter menus, confirm selections
 - **Encoder Hold (3s)**: Cancel copy operations
@@ -131,11 +168,15 @@ sudo systemctl start pi9696.service
 
 1. **Sample Rate**: 44.1kHz, 48kHz, 96kHz, 192kHz (auto-restarts Inferno server)
 2. **Channel Count**: Adjust from 1 to 128 channels (auto-restarts Inferno server)
-3. **Copy Files**: Transfer recordings to USB drive
-4. **System Options**: System management submenu
-5. **Network Info**: Display network connection details
-6. **Restart Inferno**: Manually restart Inferno Audio over IP server
-7. **Exit**: Return to main display
+3. **Format**: WAV, FLAC, or MP3 (channel count limits which formats are selectable - see Recording Format below)
+4. **Tag**: Attach a preset tag (Show, Rehearsal, Soundcheck, Interview, Backup, or None) to the next recording's metadata
+5. **Schedule Recording**: Arm a one-shot recording at a set HH:MM, with an optional auto-stop duration
+6. **Copy Files**: Transfer recordings to USB drive
+7. **System Options**: System management submenu
+8. **Network Info**: Display network connection details
+9. **Remote Access**: Shows the URL and token for the web remote control
+10. **Restart Inferno**: Manually restart Inferno Audio over IP server
+11. **Exit**: Return to main display
 
 ### System Options Submenu
 1. **Delete All**: Remove all recordings with confirmation
@@ -153,19 +194,88 @@ sudo systemctl start pi9696.service
 
 ### Recording Format
 
-- **Output Format**: WAV (PCM 24-bit)
-- **Internal Pipeline**: 32-bit signed little-endian via FIFO
+- **Output Formats**: WAV (PCM 24-bit), FLAC (lossless, 24-bit), MP3 (320kbps CBR)
+- **Format Channel Limits**: WAV up to 128 channels, FLAC up to 8 channels, MP3 up to 2 channels
+  (MP3's bitstream format only supports mono/stereo; FLAC is impractical much above 8). Raising
+  the channel count past a selected format's limit automatically falls back to the next format
+  that still supports it.
+- **Internal Pipeline**: 32-bit signed little-endian via FIFO regardless of output format
 - **Sample Rates**: 44.1kHz, 48kHz, 96kHz, 192kHz
-- **Channel Support**: 1-128 channels
-- **File Naming**: `recording_YYYYMMDD_HHMMSS_chN_NNkHz.wav`
+- **Channel Support**: 1-128 channels (format-dependent, see above)
+- **File Naming**: `recording_YYYYMMDD_HHMMSS_chN_NNkHz.{wav,flac,mp3}`
 - **Raw FIFO**: `/rec/raw/inferno_YYYYMMDD_HHMMSS_chN_NNkHz.raw` (temporary)
+- **Metadata**: Every recording is stamped with a `date` tag (recording start time); a `comment`
+  tag is added when a Tag preset other than "None" is selected in Settings. Written via ffmpeg's
+  `-metadata`, which maps onto whichever tag mechanism the container uses (WAV INFO chunk, FLAC
+  Vorbis comments, MP3 ID3v2) - readable with `ffprobe -show_entries format_tags <file>` or any
+  standard tag reader.
+
+### Level Metering
+
+While recording, the third line of the recording screen shows Peak and RMS levels in dB
+(replacing the filename, which there's no vertical room to also show on a 64px display - it's
+still visible via Copy Files). Levels come from ffmpeg's own `astats` filter running alongside
+the encode (a pass-through filter - it doesn't touch the audio, just reads and reports it), so
+there's no separate metering pipeline to keep in sync with the recording. The same reading is
+available on the remote control dashboard.
+
+### Playback
+
+Press **Play** while idle to play back the most recently created recording (any supported
+format) through the default ALSA audio device. Press **Stop** or hold the encoder to stop
+playback early. Playback and recording are mutually exclusive - each button is a no-op while
+the other is active.
+
+### Remote Control
+
+A web UI is served on **eth0 only**, port 8080 (never on any other interface, and never
+`0.0.0.0`) once the interface has an IP - started/stopped automatically as eth0 comes up or
+down. Settings → Remote Access shows the URL and an 8-character access token (shown, and
+enterable at `/login`, as two groups of 4 - e.g. `K7M2 QX9F` - for readability; the separator is
+optional when typing it in). A correct token gets a session cookie good for 12 hours.
+
+The dashboard mirrors the physical device: the OLED display itself (a live PNG snapshot of the
+actual framebuffer, not a redrawn approximation) plus the rotary encoder and all three buttons
+at the top, so you can navigate the exact same menu system remotely - Format/Tag/Schedule
+settings, System Options, everything - the same way you would standing in front of it. Status,
+a read-only config summary, and the recordings file browser (download only - no upload, no
+delete-over-network, no arbitrary file access; downloads are checked against the app's own
+current recording list, not just sanitized user input) follow below.
+
+**Security posture, read before exposing this on a shared network:**
+- The server is **plain HTTP, not HTTPS** - no certificate management on an embedded device with
+  no stable hostname. Anyone who can sniff eth0's LAN traffic can see the token and hijack the
+  session. Treat this the way you'd treat an unencrypted admin page on any other LAN appliance:
+  fine on a trusted/isolated recording-room network, not fine on shared/untrusted networks.
+- The token is short (8 characters, ~40 bits of entropy) so it fits on the OLED and is typeable
+  from a phone; a login rate limiter (5 failed attempts locks out that IP for 60s) is what keeps
+  it from being brute-forceable over the network, not the token's raw length.
+- The token is regenerated every time the app starts and is never written to disk - if you need
+  it, read it off the device's own display.
+- **Because the remote encoder/button controls drive the real menu system**, anyone with the
+  token has the same reach as someone standing at the device: Delete All, Format USB, Shutdown,
+  and Restart are all reachable remotely, the same as physically. Every one of them still needs
+  its confirmation dialog navigated and confirmed - there's no one-click destructive action - but
+  token possession is now equivalent to physical presence at the front panel, not just
+  "can start/stop a recording." Weigh that against the plain-HTTP caveat above.
+
+### Scheduled Recording
+
+Settings → Schedule Recording lets you set an Hour, Minute, and optional auto-stop Duration
+(0 = manual stop), then Arm the schedule. Once armed, a background check fires the recording
+automatically at the next occurrence of that time (today, or tomorrow if it's already passed)
+- as long as the Inferno server is running and the app is idle at that moment. Firing disarms
+the schedule; re-arm it for the next day. If a duration was set, the recording stops itself
+automatically after that many minutes. If the device is busy (already recording, playing, or
+mid-menu) at the target minute, the schedule is disarmed rather than silently carried over to
+fire a day later than expected - re-arm it if you still want it.
 
 ### Inferno Server Operation
 
 - **Startup**: Automatic when eth0 networking becomes available
 - **Persistence**: Runs continuously between recordings
 - **Auto-Restart**: When sample rate or channel count changes
-- **Status Display**: Flame icon (🔥) in status bar when running
+- **Status Display**: `[INF]` indicator in status bar when running
 - **Manual Control**: "Restart Inferno" option in settings menu
 
 ## Troubleshooting
@@ -179,12 +289,12 @@ sudo systemctl start pi9696.service
 - List audio devices: `arecord -l`
 - Test recording: `arecord -D hw:0 -f S32_LE -r 48000 -c 2 test.wav`
 - Check ALSA configuration: `cat /proc/asound/cards`
-- Check Inferno server: Look for flame icon in status bar
-- Test Inferno manually: `cd inferno && INFERNO_SAMPLE_RATE=48000 cargo run -- -c 2 -o /tmp/test.fifo`
+- Check Inferno server: Look for `[INF]` in the status bar
+- Test Inferno manually: `cd inferno && INFERNO_SAMPLE_RATE=48000 ./target/release/inferno -c 2 -o /tmp/test.fifo`
 
 ### Network Issues
 - Check eth0 interface: `ip addr show eth0`
-- Monitor network status: Watch network icon in status bar
+- Monitor network status: Watch for `[ETH]` in the status bar
 - Check connectivity: `ping 8.8.8.8`
 - Inferno server requires network: Ensure eth0 is up and configured
 
@@ -204,13 +314,17 @@ The project is structured as follows:
 - `main.go`: Main application logic, state management, and Inferno server control
 - `hardware/`: Hardware abstraction layer with display, encoder, buttons, and network detection
 - `inferno/`: Inferno Audio over IP server project directory (Rust/Cargo)
-- `svg/`: Icon assets including inferno.svg for status bar
 - `rec/`: Final recording output directory
 - `rec/raw/`: Temporary FIFO files for audio pipeline
+- `remote.go`: Remote control web server (auth, dashboard, recording control, downloads)
+- `web/`: `htmx.min.js`, downloaded by setup.sh (gitignored)
+- `cmd/simcheck/`: Dev-only tool that renders each screen to PNG via `PI9696_SIM` for checking layout without hardware
 
 ### Inferno Server Integration
 - **Directory**: `./inferno/` contains the Rust/Cargo project
-- **Command**: `INFERNO_SAMPLE_RATE=<rate> cargo run -- -c <channels> -o <fifo>`
+- **Build**: `setup.sh` runs `cargo build --release` once during installation, producing `inferno/target/release/inferno`
+- **Command**: `INFERNO_SAMPLE_RATE=<rate> ./target/release/inferno -c <channels> -o <fifo>`
+- **Runtime**: the app launches the prebuilt binary directly (no `cargo run` at runtime, which would recompile and block on the FIFO during every restart)
 - **Pipeline**: Inferno → FIFO → FFmpeg → WAV file
 - **Management**: Automatic startup, restart, and monitoring
 

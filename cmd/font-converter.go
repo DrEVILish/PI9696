@@ -4,11 +4,11 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/color"
 	"image/draw"
 	"io/ioutil"
 	"log"
 	"os"
-	"strings"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
@@ -23,12 +23,12 @@ type FontConverter struct {
 
 func main() {
 	var (
-		fontPath   = flag.String("font", "", "Path to TTF font file")
-		fontSize   = flag.Float64("size", 12.0, "Font size in points")
-		outputPath = flag.String("output", "font_data.go", "Output Go file path")
+		fontPath    = flag.String("font", "", "Path to TTF font file")
+		fontSize    = flag.Float64("size", 12.0, "Font size in points")
+		outputPath  = flag.String("output", "font_data.go", "Output Go file path")
 		packageName = flag.String("package", "hardware", "Go package name")
-		fontName   = flag.String("name", "CustomFont", "Font variable name")
-		charSet    = flag.String("charset", "", "Character set to include (default: ASCII printable)")
+		fontName    = flag.String("name", "CustomFont", "Font variable name")
+		charSet     = flag.String("charset", "", "Character set to include (default: ASCII printable)")
 	)
 	flag.Parse()
 
@@ -190,8 +190,8 @@ func (fc *FontConverter) getMaxCharDimensions() (int, int) {
 	maxHeight := 0
 
 	for _, char := range fc.charSet {
-		bounds, _ := fc.fontFace.GlyphBounds(rune(char))
-		width := int((bounds.Max.X - bounds.Min.X) >> 6)  // Convert from fixed.Int26_6
+		bounds, _, _ := fc.fontFace.GlyphBounds(rune(char))
+		width := int((bounds.Max.X - bounds.Min.X) >> 6) // Convert from fixed.Int26_6
 		height := int((bounds.Max.Y - bounds.Min.Y) >> 6)
 
 		if width > maxWidth {
@@ -216,14 +216,14 @@ func (fc *FontConverter) getMaxCharDimensions() (int, int) {
 func (fc *FontConverter) renderCharToBitmap(char byte, width, height int) ([]byte, error) {
 	// Create a small image for rendering the character
 	img := image.NewGray(image.Rect(0, 0, width, height))
-	
+
 	// Clear the image (set to black)
-	draw.Draw(img, img.Bounds(), &image.Uniform{image.Gray{0}}, image.Point{}, draw.Src)
+	draw.Draw(img, img.Bounds(), &image.Uniform{color.Gray{Y: 0}}, image.Point{}, draw.Src)
 
 	// Create drawer
 	drawer := &font.Drawer{
 		Dst:  img,
-		Src:  &image.Uniform{image.Gray{255}}, // White text
+		Src:  &image.Uniform{color.Gray{Y: 255}}, // White text
 		Face: fc.fontFace,
 		Dot:  fixed.Point26_6{X: fixed.I(0), Y: fixed.I(int(fc.fontFace.Metrics().Ascent >> 6))},
 	}

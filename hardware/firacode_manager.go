@@ -2,9 +2,12 @@ package hardware
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
+
+	"golang.org/x/image/font"
 )
 
 // FiraCodeManager handles FiraCode font integration for PI9696
@@ -13,18 +16,19 @@ type FiraCodeManager struct {
 	config      *FiraCodeConfig
 	currentFont string
 	currentSize float64
+	fontFaces   map[string]font.Face // cache keyed by "path@size", avoids re-parsing TTFs on every context switch
 }
 
 // FiraCodeConfig holds all FiraCode font variants and settings
 type FiraCodeConfig struct {
-	BasePath   string
-	Regular    string
-	Bold       string
-	Light      string
-	Medium     string
-	SemiBold   string
-	Retina     string
-	sizes      map[string]float64
+	BasePath string
+	Regular  string
+	Bold     string
+	Light    string
+	Medium   string
+	SemiBold string
+	Retina   string
+	sizes    map[string]float64
 }
 
 // NewFiraCodeManager creates a new FiraCode font manager
@@ -32,13 +36,13 @@ func NewFiraCodeManager() (*FiraCodeManager, error) {
 	config := &FiraCodeConfig{
 		BasePath: "./fonts",
 		sizes: map[string]float64{
-			"StatusBar":    9.0,  // Top status bar - compact but readable
-			"MainContent":  11.0, // Primary content - optimal balance
-			"MenuItems":    10.0, // Menu navigation - clean spacing
-			"Headers":      13.0, // Section headers - prominent
-			"Recording":    14.0, // Recording indicator - attention grabbing
-			"Small":        8.0,  // Fine details - minimum readable
-			"Large":        16.0, // Alerts/emphasis - maximum for display
+			"StatusBar":   9.0,  // Top status bar - compact but readable
+			"MainContent": 11.0, // Primary content - optimal balance
+			"MenuItems":   10.0, // Menu navigation - clean spacing
+			"Headers":     13.0, // Section headers - prominent
+			"Recording":   14.0, // Recording indicator - attention grabbing
+			"Small":       8.0,  // Fine details - minimum readable
+			"Large":       16.0, // Alerts/emphasis - maximum for display
 		},
 	}
 
@@ -66,10 +70,17 @@ func NewFiraCodeManager() (*FiraCodeManager, error) {
 		config:      config,
 		currentFont: config.Regular,
 		currentSize: config.sizes["MainContent"],
+		fontFaces:   make(map[string]font.Face),
 	}
+	manager.fontFaces[fontFaceKey(config.Regular, config.sizes["MainContent"])] = display.font
 
 	log.Printf("FiraCode manager initialized successfully")
 	return manager, nil
+}
+
+// fontFaceKey builds the cache key for a given font path and point size.
+func fontFaceKey(fontPath string, fontSize float64) string {
+	return fmt.Sprintf("%s@%.1f", fontPath, fontSize)
 }
 
 // ValidateInstallation checks if required FiraCode fonts are available
@@ -154,11 +165,11 @@ func (fcm *FiraCodeManager) GetSizeForContext(context string) float64 {
 	switch context {
 	case "statusbar":
 		return fcm.config.sizes["StatusBar"]
-	case "recording", "alert", "header":
+	case "recording", "alert":
 		return fcm.config.sizes["Recording"]
 	case "menu", "navigation", "settings":
 		return fcm.config.sizes["MenuItems"]
-	case "title", "section":
+	case "header", "title", "section":
 		return fcm.config.sizes["Headers"]
 	case "details", "filename", "metadata":
 		return fcm.config.sizes["Small"]
@@ -169,22 +180,25 @@ func (fcm *FiraCodeManager) GetSizeForContext(context string) float64 {
 	}
 }
 
-// switchFont changes the current font and size
+// switchFont changes the active font face on the existing display. Faces are
+// cached per (path, size) so repeated context switches (e.g. alternating
+// "menu"/"selected" per menu item) don't re-read and re-parse TTF files or
+// touch the SPI/GPIO connection - it only swaps which face draws text, so
+// anything already drawn to the canvas this frame is preserved.
 func (fcm *FiraCodeManager) switchFont(fontPath string, fontSize float64) error {
-	// Close current display
-	if fcm.display != nil {
-		fcm.display.Close()
+	key := fontFaceKey(fontPath, fontSize)
+
+	face, ok := fcm.fontFaces[key]
+	if !ok {
+		var err error
+		face, err = loadTTFFont(fontPath, fontSize)
+		if err != nil {
+			return fmt.Errorf("failed to load font %s at %.1fpt: %v", fontPath, fontSize, err)
+		}
+		fcm.fontFaces[key] = face
 	}
 
-	// Create new display with specified font
-	newDisplay, err := NewTTFDisplay(fontPath, fontSize)
-	if err != nil {
-		// Try to restore previous font
-		fcm.display, _ = NewTTFDisplay(fcm.currentFont, fcm.currentSize)
-		return fmt.Errorf("failed to switch to font %s at %.1fpt: %v", fontPath, fontSize, err)
-	}
-
-	fcm.display = newDisplay
+	fcm.display.SetFontFace(face)
 	fcm.currentFont = fontPath
 	fcm.currentSize = fontSize
 
@@ -209,15 +223,13 @@ func (fcm *FiraCodeManager) DrawStatusBarWithInferno(formatInfo, usbInfo string,
 		return err
 	}
 
-	fcm.display.Clear()
-
 	// Determine USB connection status
 	usbConnected := usbInfo != "" && usbInfo != "[---]" && usbInfo != "[ ]"
-	
+
 	// Use enhanced status bar with USB, network, and inferno icons
 	fcm.display.DrawStatusBarWithIcons(formatInfo, usbInfo, usbConnected, networkConnected, networkInfo, infernoRunning)
 
-	return fcm.display.Update()
+	return nil
 }
 
 // DrawCenteredText draws text centered with context-appropriate styling
@@ -274,13 +286,11 @@ func (fcm *FiraCodeManager) DrawMenuItems(items []MenuItem, selectedIndex int) e
 		}
 	}
 
-	return fcm.display.Update()
+	return nil
 }
 
 // DrawRecordingStatus shows recording information with bold emphasis
 func (fcm *FiraCodeManager) DrawRecordingStatus(elapsed, remaining, filename string) error {
-	fcm.display.Clear()
-
 	// Recording indicator with bold font
 	if err := fcm.SwitchToContext("recording"); err != nil {
 		return err
@@ -310,18 +320,52 @@ func (fcm *FiraCodeManager) DrawRecordingStatus(elapsed, remaining, filename str
 		fcm.display.DrawTextCentered(filename, 56)
 	}
 
-	return fcm.display.Update()
+	return nil
 }
 
-// DrawProgressBar renders a progress bar with percentage
-func (fcm *FiraCodeManager) DrawProgressBar(title string, progress float64, details string) error {
-	fcm.display.Clear()
+// DrawPlaybackStatus shows playback information, mirroring DrawRecordingStatus's
+// layout without the "remaining" row: playback has no space math to display.
+func (fcm *FiraCodeManager) DrawPlaybackStatus(elapsed, filename string) error {
+	if err := fcm.SwitchToContext("recording"); err != nil {
+		return err
+	}
+	playText := fmt.Sprintf("▶ PLAY %s", elapsed)
+	fcm.display.DrawTextCentered(playText, 24)
 
+	if err := fcm.SwitchToContext("details"); err != nil {
+		return err
+	}
+	if filename != "" {
+		maxWidth := 256 - 32
+		if fcm.display.GetTextWidth(filename) > maxWidth {
+			avgCharWidth := fcm.display.GetTextWidth("M")
+			maxChars := maxWidth/avgCharWidth - 3
+			if maxChars > 0 && maxChars < len(filename) {
+				filename = filename[:maxChars] + "..."
+			}
+		}
+		fcm.display.DrawTextCentered(filename, 40)
+	}
+
+	return nil
+}
+
+// EncodePNG writes the current display frame as a PNG.
+func (fcm *FiraCodeManager) EncodePNG(w io.Writer) error {
+	return fcm.display.EncodePNG(w)
+}
+
+// DrawProgressBar renders a progress bar with percentage. details is the
+// only text row below the bar - callers should fold any secondary hint
+// (e.g. a cancel instruction) into that same string, since there isn't
+// vertical room on a 64px display for a title, bar, percentage, and two
+// more independent lines.
+func (fcm *FiraCodeManager) DrawProgressBar(title string, progress float64, details string) error {
 	// Title
 	if err := fcm.SwitchToContext("header"); err != nil {
 		return err
 	}
-	fcm.display.DrawTextCentered(title, 20)
+	fcm.display.DrawTextCentered(title, 24)
 
 	// Progress bar (32 characters wide, centered)
 	barWidth := 32
@@ -334,29 +378,29 @@ func (fcm *FiraCodeManager) DrawProgressBar(title string, progress float64, deta
 		return err
 	}
 	percentText := fmt.Sprintf("%.0f%%", progress)
-	fcm.display.DrawTextCentered(percentText, 48)
+	fcm.display.DrawTextCentered(percentText, 46)
 
 	// Details
 	if details != "" {
-		fcm.display.DrawTextCentered(details, 56)
+		fcm.display.DrawTextCentered(details, 58)
 	}
 
-	return fcm.display.Update()
+	return nil
 }
 
 // DrawConfirmationDialog shows YES/NO confirmation with proper emphasis
 func (fcm *FiraCodeManager) DrawConfirmationDialog(title, message1, message2 string, selectedOption int) error {
-	fcm.display.Clear()
-
-	y := 16
+	// Fixed y positions sized for the "alert" (14pt) title and "menu" (10pt)
+	// message fonts so nothing collides with the status bar above (rows
+	// 0-11) or the YES/NO row below.
+	const titleY, message1Y, message2Y, yesNoY = 24, 38, 49, 61
 
 	// Title with emphasis
 	if title != "" {
 		if err := fcm.SwitchToContext("alert"); err != nil {
 			return err
 		}
-		fcm.display.DrawTextCentered(title, y)
-		y += 16
+		fcm.display.DrawTextCentered(title, titleY)
 	}
 
 	// Messages with regular font
@@ -365,12 +409,11 @@ func (fcm *FiraCodeManager) DrawConfirmationDialog(title, message1, message2 str
 	}
 
 	if message1 != "" {
-		fcm.display.DrawTextCentered(message1, y)
-		y += 12
+		fcm.display.DrawTextCentered(message1, message1Y)
 	}
 
 	if message2 != "" {
-		fcm.display.DrawTextCentered(message2, y)
+		fcm.display.DrawTextCentered(message2, message2Y)
 	}
 
 	// YES/NO options
@@ -383,26 +426,26 @@ func (fcm *FiraCodeManager) DrawConfirmationDialog(title, message1, message2 str
 			return err
 		}
 		yesText = "> YES"
-		fcm.display.DrawText(96, 56, yesText)
+		fcm.display.DrawText(96, yesNoY, yesText)
 
 		if err := fcm.SwitchToContext("menu"); err != nil {
 			return err
 		}
-		fcm.display.DrawText(160, 56, noText)
+		fcm.display.DrawText(160, yesNoY, noText)
 	} else { // NO selected (default)
 		if err := fcm.SwitchToContext("menu"); err != nil {
 			return err
 		}
-		fcm.display.DrawText(96, 56, yesText)
+		fcm.display.DrawText(96, yesNoY, yesText)
 
 		if err := fcm.SwitchToContext("selected"); err != nil {
 			return err
 		}
 		noText = "> NO"
-		fcm.display.DrawText(160, 56, noText)
+		fcm.display.DrawText(160, yesNoY, noText)
 	}
 
-	return fcm.display.Update()
+	return nil
 }
 
 // MenuItem represents a menu item with label and optional value
@@ -429,7 +472,7 @@ func (fcm *FiraCodeManager) GetCurrentSize() float64 {
 // GetAvailableFonts returns a list of available FiraCode variants
 func (fcm *FiraCodeManager) GetAvailableFonts() map[string]string {
 	fonts := make(map[string]string)
-	
+
 	variants := map[string]string{
 		"Regular":  fcm.config.Regular,
 		"Bold":     fcm.config.Bold,
@@ -451,6 +494,9 @@ func (fcm *FiraCodeManager) GetAvailableFonts() map[string]string {
 
 // Close releases resources used by the FiraCode manager
 func (fcm *FiraCodeManager) Close() error {
+	for _, face := range fcm.fontFaces {
+		face.Close()
+	}
 	if fcm.display != nil {
 		return fcm.display.Close()
 	}

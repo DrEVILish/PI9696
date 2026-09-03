@@ -1,0 +1,57 @@
+[Unit]
+Description=PI9696 Audio Recorder
+Documentation=https://github.com/user/PI9696
+# Don't start until eth0 (and thus Inferno, which requires the network) can
+# come up, but don't hard-fail the unit if network is slow to appear - the app
+# has its own networkMonitorLoop that starts Inferno once eth0 has an IP.
+After=network.target sound.target local-fs.target
+Wants=sound.target
+RequiresMountsFor=/rec
+
+[Service]
+Type=simple
+# Root is required for GPIO (/dev/gpiomem, /dev/gpiochip*), SPI (/dev/spidev*),
+# ALSA recording, USB mount/unmount, and creating the /rec/raw FIFO.
+User=root
+Group=root
+# The app resolves the Inferno binary via a relative path
+# (inferno/target/release/inferno), so it must run from the project directory.
+# __PI9696_DIR__ is substituted with the actual install path by setup.sh.
+WorkingDirectory=__PI9696_DIR__
+ExecStart=__PI9696_DIR__/pi9696
+# Straightforward restart path after rebuilding: `systemctl restart pi9696`.
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+# Give a graceful stop window so an in-flight recording segment can be
+# finalized (verified: ffmpeg's WAV segment muxer writes valid RIFF/data chunk
+# sizes for the partial segment on SIGTERM).
+TimeoutStopSec=20
+# Kill the whole cgroup, but allow processes a chance to clean up first.
+KillMode=mixed
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# --- Security hardening -----------------------------------------------
+# This is a root-run hardware-control daemon that must touch GPIO, SPI, ALSA,
+# /tmp (ffmpeg scratch), mount USB drives and create the /rec/raw FIFO. A
+# strict mount-namespace sandbox is deliberately NOT used here: `ReadWritePaths`
+# (and `PrivateTmp`) make systemd hard-fail the unit with EXIT_NAMESPACE if any
+# listed path is absent at start time - which reliably happens on boot before a
+# USB stick is present (/media/usb) or when /rec has not been created yet. The
+# cost of that fragility outweighs the hardening for an always-root daemon.
+
+# Environment
+Environment=HOME=/root
+Environment=USER=root
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pi9696
+
+[Install]
+WantedBy=multi-user.target

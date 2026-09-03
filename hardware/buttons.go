@@ -2,10 +2,10 @@ package hardware
 
 import (
 	"fmt"
-	"sync"
-	"time"
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/conn/v3/gpio/gpioreg"
+	"sync"
+	"time"
 )
 
 type ButtonType int
@@ -20,7 +20,7 @@ type Button struct {
 	pin        gpio.PinIn
 	buttonType ButtonType
 	pressed    bool
-	lastPress  time.Time
+	lastChange time.Time
 	mutex      sync.Mutex
 	callback   func(ButtonType)
 }
@@ -33,6 +33,15 @@ type ButtonManager struct {
 func NewButtonManager() (*ButtonManager, error) {
 	bm := &ButtonManager{
 		buttons: make([]*Button, 3),
+	}
+
+	if simMode() {
+		// No real GPIO on a dev machine; callbacks simply won't fire from
+		// hardware input, but the rest of the app can still run.
+		bm.buttons[RecordButton] = &Button{buttonType: RecordButton}
+		bm.buttons[StopButton] = &Button{buttonType: StopButton}
+		bm.buttons[PlayButton] = &Button{buttonType: PlayButton}
+		return bm, nil
 	}
 
 	// Initialize Record button (GPIO5)
@@ -97,27 +106,37 @@ func (bm *ButtonManager) readButton(button *Button) {
 	button.mutex.Lock()
 	defer button.mutex.Unlock()
 
+	// Debounce both transitions, not just press. The previous version only
+	// guarded the press edge; the release edge cleared `pressed` on the
+	// first low->high reading with no debounce at all. A single bounce
+	// while the button was still physically held would clear `pressed`,
+	// and once the original press's debounce window elapsed the next low
+	// reading (the same continuous press) was treated as a brand-new press
+	// and fired the callback a second time.
+	now := time.Now()
+	if now.Sub(button.lastChange) < 50*time.Millisecond {
+		return
+	}
+
 	if currentState && !button.pressed {
 		// Button just pressed
-		now := time.Now()
-		if now.Sub(button.lastPress) > 50*time.Millisecond { // Debounce
-			button.pressed = true
-			button.lastPress = now
-			
-			if button.callback != nil {
-				go button.callback(button.buttonType)
-			}
+		button.pressed = true
+		button.lastChange = now
+
+		if button.callback != nil {
+			go button.callback(button.buttonType)
 		}
 	} else if !currentState && button.pressed {
 		// Button released
 		button.pressed = false
+		button.lastChange = now
 	}
 }
 
 func (bm *ButtonManager) SetCallback(buttonType ButtonType, callback func(ButtonType)) {
 	bm.mutex.Lock()
 	defer bm.mutex.Unlock()
-	
+
 	if int(buttonType) < len(bm.buttons) && bm.buttons[buttonType] != nil {
 		bm.buttons[buttonType].mutex.Lock()
 		bm.buttons[buttonType].callback = callback
@@ -128,7 +147,7 @@ func (bm *ButtonManager) SetCallback(buttonType ButtonType, callback func(Button
 func (bm *ButtonManager) IsPressed(buttonType ButtonType) bool {
 	bm.mutex.Lock()
 	defer bm.mutex.Unlock()
-	
+
 	if int(buttonType) < len(bm.buttons) && bm.buttons[buttonType] != nil {
 		bm.buttons[buttonType].mutex.Lock()
 		pressed := bm.buttons[buttonType].pressed
