@@ -166,7 +166,7 @@ func (nd *NetworkDetector) getGateway() string {
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Fields(line)
-		
+
 		// Look for default route (destination 00000000)
 		if len(fields) >= 3 && fields[1] == "00000000" {
 			// Gateway is in field 2, convert from hex
@@ -212,7 +212,7 @@ func (nd *NetworkDetector) getDNSServers() []string {
 
 	nameserverRegex := regexp.MustCompile(`^nameserver\s+(\S+)`)
 	scanner := bufio.NewScanner(file)
-	
+
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if matches := nameserverRegex.FindStringSubmatch(line); matches != nil {

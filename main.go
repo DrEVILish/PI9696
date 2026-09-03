@@ -1,13 +1,19 @@
 package main
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 
 	"strings"
 	"sync"
@@ -15,31 +21,393 @@ import (
 	"time"
 
 	"pi9696/hardware"
+
+	"github.com/skip2/go-qrcode"
 )
 
 const (
-	DisplayWidth      = 256
-	DisplayHeight     = 64
-	MaxChannelCount   = 128
-	BitsPerSample     = 32
-	RecordPath        = "/rec"
-	RawPath           = "/rec/raw"
-	USBMountPoint     = "/media/usb"
-	RecordingFormat   = "WAV 24bit"
+	DisplayWidth        = 256
+	DisplayHeight       = 64
+	MaxChannelCount     = 128
+	BitsPerSample       = 32 // internal FIFO/pipeline sample width, shown in status bar
+	OutputBitsPerSample = 24 // actual pcm_s24le WAV written to disk, used for storage math
+	RecordPath          = "/rec"
+	RawPath             = "/rec/raw"
+	USBMountPoint       = "/media/usb"
+	meterSilence        = -100.0 // dB sentinel shown/reported when no recording is active
 )
+
+// InfernoBinary is the prebuilt Inferno server executable, produced once by
+// setup.sh (`cargo build --release`) rather than compiled at runtime. It's
+// relative to the app's working directory (the systemd unit runs the app from
+// its project dir). See the inferno template README in setup.sh for the CLI
+// contract it implements.
+const InfernoBinary = "inferno/target/release/inferno"
+
+// ConfigPath is where the app persists non-destructive settings (unit name,
+// format/channel/tag choices, meter preferences, WiFi config) across
+// restarts. In sim/dev mode it defaults to a per-user file so nothing needs
+// root; on a real Pi it lives in /etc. Override with PI9696_CONFIG.
+var ConfigPath string
+
+func init() {
+	if p := os.Getenv("PI9696_CONFIG"); p != "" {
+		ConfigPath = p
+	} else if isSimMode() {
+		ConfigPath = "/tmp/pi9696-config.json"
+	} else {
+		ConfigPath = "/etc/pi9696/config.json"
+	}
+}
+
+// isSimMode mirrors hardware.simMode: PI9696_SIM=1 runs without real
+// SPI/GPIO on a dev machine. gpioDetecting sim is needed in main too (config
+// path, WiFi/AP no-ops), so it's re-derived here rather than exported.
+func isSimMode() bool {
+	return os.Getenv("PI9696_SIM") != ""
+}
+
+// loadPersistedConfig reads ConfigPath and restores the non-destructive
+// settings onto the globals, clamping out-of-range values so a hand-edited
+// config can't push an index past its slice. Called once at startup before
+// the UI/loops start. A missing/corrupt config is not fatal - defaults stand.
+func loadPersistedConfig() {
+	data, err := os.ReadFile(ConfigPath)
+	if err != nil {
+		log.Printf("No persisted config at %s (%v) - using defaults", ConfigPath, err)
+		return
+	}
+	var c PersistedConfig
+	if err := json.Unmarshal(data, &c); err != nil {
+		log.Printf("Corrupt config at %s (%v) - using defaults", ConfigPath, err)
+		return
+	}
+
+	if c.DeviceName != "" && isValidDeviceName(c.DeviceName) {
+		deviceName = c.DeviceName
+	}
+	if c.SampleRateIdx >= 0 && c.SampleRateIdx < len(sampleRates) {
+		sampleRateIdx = c.SampleRateIdx
+	}
+	if c.ChannelCount >= 1 && c.ChannelCount <= MaxChannelCount {
+		channelCount = c.ChannelCount
+	}
+	if c.RecordFormat >= 0 && int(c.RecordFormat) < len(formatNames) {
+		recordFormat = RecordFormat(c.RecordFormat)
+	}
+	if c.TagPresetIdx >= 0 && c.TagPresetIdx < len(tagPresets) {
+		tagPresetIdx = c.TagPresetIdx
+	}
+	if c.VURangeIdx >= 0 && c.VURangeIdx < len(vuRangeOptions) {
+		vuRangeIdx = c.VURangeIdx
+	}
+	if c.PeakHoldIdx >= 0 && c.PeakHoldIdx < len(peakHoldOptions) {
+		peakHoldIdx = c.PeakHoldIdx
+	}
+	if c.TransportMode == "icon" || c.TransportMode == "text" {
+		transportMode = c.TransportMode
+	}
+
+	wifiEnabled = c.WifiEnabled
+	wifiSSID = c.WifiSSID
+	wifiPassword = c.WifiPassword
+
+	log.Printf("Loaded persisted config from %s (device %q, %dkHz %dch %s)",
+		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount, formatNames[recordFormat])
+}
+
+// persistConfig snapshots the current non-destructive settings to ConfigPath.
+// Safe to call under the app mutex (it only reads globals); the write is
+// atomic via a temp file + rename so a power cut mid-write can't truncate it.
+func persistConfig() {
+	cur := PersistedConfig{
+		DeviceName:    deviceName,
+		SampleRateIdx: sampleRateIdx,
+		ChannelCount:  channelCount,
+		RecordFormat:  int(recordFormat),
+		TagPresetIdx:  tagPresetIdx,
+		VURangeIdx:    vuRangeIdx,
+		PeakHoldIdx:   peakHoldIdx,
+		TransportMode: transportMode,
+		WifiEnabled:   wifiEnabled,
+		WifiSSID:      wifiSSID,
+		WifiPassword:  wifiPassword,
+	}
+	data, err := json.MarshalIndent(&cur, "", "  ")
+	if err != nil {
+		log.Printf("Failed to marshal config: %v", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(ConfigPath), 0755); err != nil {
+		log.Printf("Failed to create config dir: %v", err)
+		return
+	}
+	tmp := ConfigPath + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		log.Printf("Failed to write config: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, ConfigPath); err != nil {
+		log.Printf("Failed to commit config: %v", err)
+	}
+	log.Printf("Persisted settings to %s", ConfigPath)
+}
+
+// settingChanged is a tiny helper for the handful of places a persistent
+// setting is mutated, so they all funnel through persistConfig.
+func settingChanged() {
+	persistConfig()
+}
+
+// applyWifiConfig writes the hostapd configuration and starts/stops the
+// PI9696 access point service. On a real Pi this drives systemctl; in
+// sim/dev mode it only logs (there's no wlan0/AP hardware to touch, and a
+// dev box's network must not be disturbed). Takes explicit args rather than
+// reading globals so callers can capture the values under the app mutex and
+// call it from a goroutine - applying the change can block on systemctl for a
+// moment, which must never run under the UI mutex.
+//
+// WiFi is OFF by default: nothing in setup.sh enables it, and wifiEnabled
+// starts false unless the operator persisted an explicit on. wifiSSID (the AP
+// name) defaults to the device name; the password is user-set via the web UI.
+func applyWifiConfig(ssid, pass string, enabled bool) {
+	if isSimMode() {
+		log.Printf("wifi: sim mode - AP %q enabled=%v (no hardware change)", ssid, enabled)
+		wifiInited = true
+		return
+	}
+
+	apConf := "/etc/hostapd/pi9696.conf"
+	conf := "interface=wlan0\ndriver=nl80211\nssid=" + sanitizeHostapd(ssid) +
+		"\nwpa=2\nwpa_passphrase=" + pass +
+		"\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nchannel=6\nhw_mode=g\nignore_broadcast_ssid=0\n"
+	if err := os.WriteFile(apConf, []byte(conf), 0600); err != nil {
+		log.Printf("wifi: failed to write %s: %v", apConf, err)
+		return
+	}
+
+	var cmd *exec.Cmd
+	if enabled {
+		cmd = exec.Command("systemctl", "enable", "--now", "hostapd")
+	} else {
+		cmd = exec.Command("systemctl", "disable", "--now", "hostapd")
+	}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("wifi: hostapd %s failed: %v: %s", map[bool]string{true: "start", false: "stop"}[enabled], err, out)
+	}
+	wifiInited = true
+	log.Printf("wifi: access point %q %s", ssid, map[bool]string{true: "started", false: "stopped"}[enabled])
+}
+
+// setWifiEnabled flips the runtime AP state, persists it (so it's also the
+// "on/off at startup" preference), and applies it off the UI mutex. Must be
+// called under mutex (it reads wifiSSID/wifiPassword to pass to the apply
+// goroutine).
+func setWifiEnabled(on bool) {
+	wifiEnabled = on
+	ssid := wifiSSID
+	pass := wifiPassword
+	persistConfig()
+	go applyWifiConfig(ssid, pass, on)
+}
+
+// updateWifiCredentials updates the AP SSID/password (e.g. set via the web
+// dashboard) and re-applies the AP. Must be called under mutex.
+func updateWifiCredentials(ssid, pass string) {
+	if ssid != "" {
+		wifiSSID = ssid
+	}
+	if len(pass) >= 8 {
+		wifiPassword = pass
+	}
+	persistConfig()
+	go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
+}
+
+// wifiQRContent builds the WiFi QR payload (WIFI: scheme) so a phone camera
+// can join the AP directly. See renderWifiQRScreen.
+func wifiQRContent() string {
+	// WIFI:T:<security>;S:<ssid>;P:<password>;; - the de-facto standard QR
+	// WiFi barcode format understood by iOS/Android camera apps.
+	return fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", wifiSSID, wifiPassword)
+}
+
+// renderWifiQRScreen draws the WiFi join QR code plus the SSID/password text
+// on the OLED, scaled to fit the 256x64 panel (the QR sits on the right,
+// ~100px square, with the access point name and password read out on the
+// left). Requires mutex held. If the AP is off or unconfigured it shows a
+// short message instead.
+func renderWifiQRScreen() {
+	if !wifiEnabled {
+		hwManager.DrawCenteredText("WiFi is OFF", "header", 28)
+		hwManager.DrawCenteredText("enable in WiFi menu", "details", 40)
+		return
+	}
+
+	hwManager.SwitchToContext("header")
+	hwManager.DrawText(4, 14, "WiFi AP")
+
+	hwManager.SwitchToContext("details")
+	label := wifiSSID
+	if label == "" {
+		label = deviceName
+	}
+	hwManager.DrawText(4, 30, "SSID "+label)
+	hwManager.DrawText(4, 42, "Pass "+wifiPassword)
+
+	// QR module bitmap from the WIFI: string, drawn right of the text. Each
+	// module is 2x2 px so a ~25-module QR fits the 100px-deep right side.
+	code, err := qrcode.New(wifiQRContent(), qrcode.Medium)
+	if err != nil {
+		log.Printf("wifi: failed to generate QR: %v", err)
+		return
+	}
+	bmp := code.Bitmap()
+	const modulePx = 2
+	n := len(bmp)
+	x0 := 130
+	y0 := (DisplayHeight - n*modulePx) / 2
+	hwManager.SwitchToContext("menu")
+	for i := 0; i < n; i++ {
+		for j := 0; j < n; j++ {
+			if bmp[i][j] {
+				hwManager.FillBox(x0+j*modulePx, y0+i*modulePx, modulePx, modulePx, 0xFF)
+			}
+		}
+	}
+}
+
+// sanitizeHostapd strips characters hostapd (or its parsing) would treat
+// specially; SSIDs are otherwise free-form UTF-8.
+func sanitizeHostapd(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r == '\n' || r == '\r' || r == '"' || r == '\\' {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// sanitizeMDNSHost coerces a device name into a valid mDNS host label: mDNS
+// (RFC 6762) labels are ASCII [A-Za-z0-9-], must start/end alphanumeric, and
+// are case-insensitive - so the name is lowercased and non-alphanumerics are
+// replaced with '-'.
+func sanitizeMDNSHost(name string) string {
+	var b strings.Builder
+	prevDash := true
+	for _, r := range strings.ToLower(name) {
+		ok := r >= 'a' && r <= 'z' || r >= '0' && r <= '9'
+		if ok {
+			b.WriteRune(r)
+			prevDash = false
+		} else if !prevDash && b.Len() > 0 {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	s := b.String()
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return "pi9696"
+	}
+	return s
+}
+
+// mdnsLoop keeps an mDNS (avahi) advertisement of the current device name
+// alive on the local network, advertising <device>.local so phones/PCs can
+// reach the web UI without knowing the IP. It restarts the advertisement
+// whenever the device name changes at runtime. No-op in sim/dev mode - there's
+// no avahi-daemon to drive and a dev box shouldn't start publishing on the
+// reviewer's own network.
+func mdnsLoop() {
+	if isSimMode() {
+		return
+	}
+	var cmd *exec.Cmd
+	lastName := ""
+	for {
+		mutex.Lock()
+		name := deviceName
+		mutex.Unlock()
+
+		if name != lastName {
+			if cmd != nil {
+				cmd.Process.Kill()
+				cmd.Wait()
+				cmd = nil
+			}
+			host := sanitizeMDNSHost(name)
+			// avahi-publish-service <name>._workstation._tcp <port> advertises
+			// a browseable workstation service; the important bit is that
+			// avahi also registers the local hostname so <host>.local resolves.
+			c := exec.Command("avahi-publish-service", "-s", host, "_workstation._tcp", "9")
+			if err := c.Start(); err != nil {
+				log.Printf("mdns: avahi publish failed: %v", err)
+			} else {
+				cmd = c
+				log.Printf("mdns: advertising %s.local", host)
+			}
+			lastName = name
+		}
+		time.Sleep(5 * time.Second)
+	}
+}
 
 type AppState int
 
 const (
 	StateIdle AppState = iota
 	StateRecording
+	StatePlaying
+	StatePaused
 	StateSettings
+	StateSchedule
+	StateRemoteInfo
 	StateCopyFiles
 	StateCopying
 	StateSystemOptions
 	StateNetworkInfo
 	StateConfirm
+	StateIdleBrowse // encoder-driven idle browsing: paged VU meters, then a network/token page - see onEncoderRotate's StateIdle case
+	StateWifi       // WiFi access-point submenu (enable/disable, show QR)
+	StateWifiQR     // full-screen QR code for joining the WiFi AP
+	StateAudio      // Audio submenu: Sample Rate, Channel Count, Format, Tag
+	StateMetering   // Metering submenu: Meter Range, Peak Hold
 )
+
+// RecordFormat selects the container/codec ffmpeg encodes to when finalizing
+// a recording. Each has a different channel-count ceiling (see
+// maxChannelsForFormat): WAV is uncompressed PCM with no practical limit,
+// FLAC is lossless but only reasonably supports up to 8 channels, and MP3's
+// bitstream format only supports mono/stereo.
+type RecordFormat int
+
+const (
+	FormatWAV RecordFormat = iota
+	FormatFLAC
+	FormatMP3
+)
+
+var formatNames = []string{"WAV", "FLAC", "MP3"}
+
+// tagPresets are the selectable values for the recording-tag metadata field.
+// Free-text annotation would need a text-entry UI this encoder-only,
+// no-keyboard hardware doesn't have; a preset list is the practical
+// alternative. "" (first entry) means no tag is written.
+var tagPresets = []string{"", "Show", "Rehearsal", "Soundcheck", "Interview", "Backup"}
+
+func maxChannelsForFormat(f RecordFormat) int {
+	switch f {
+	case FormatFLAC:
+		return 8
+	case FormatMP3:
+		return 2
+	default:
+		return MaxChannelCount
+	}
+}
 
 type MenuMode int
 
@@ -73,50 +441,205 @@ const (
 )
 
 var (
-	hwManager      *hardware.HardwareManager
-	sampleRates    = []int{44100, 48000, 96000, 192000}
-	sampleRateIdx  = 1 // Default to 48kHz
-	channelCount   = 2
-	isRecording    = false
-	isCopying      = false
-	recordStart    time.Time
-	recordingFile  string
-	currentState   = StateIdle
-	menuMode       = SettingsMenu
-	selectedMenu   = 0
-	menuScrollOffset = 0
-	confirmOption  = ConfirmNo
-	usbMounted     = false
-	usbSize        = ""
-	filesToCopy    = make(map[string]bool)
-	allFiles       []string
-	copyProgress   = 0
-	showRemaining  = false
-	infernoCmd      *exec.Cmd
-	ffmpegCmd       *exec.Cmd
-	fifoPath        string
-	infernoState    InfernoState
-	lastSampleRate  int
-	lastChannelCount int
-	networkWasUp    bool
-	mutex           sync.Mutex
+	hwManager              *hardware.HardwareManager
+	sampleRates            = []int{44100, 48000, 96000, 192000}
+	sampleRateIdx          = 1 // Default to 48kHz
+	channelCount           = 2
+	recordFormat           = FormatWAV
+	tagPresetIdx           = 0
+	isRecording            = false
+	isCopying              = false
+	recordStart            time.Time
+	recordingFile          string
+	playbackCmd            *exec.Cmd
+	playbackFile           string
+	playbackStart          time.Time
+	playbackDone           chan struct{}
+	recordingDone          chan struct{}
+	meterPeakDB            = meterSilence
+	meterRMSDB             = meterSilence
+	meterChannelPeak       []float64 // raw per-channel instantaneous dBFS straight from ffmpeg, index 0 = channel 1; see meterReader
+	meterChannelRMS        []float64
+	meterChannelPeakHeld   []float64 // display-facing peak after hold/decay ballistics - see decayPeakHold; everything that shows a peak marker (OLED, WebUI) reads this, never meterChannelPeak directly
+	peakHeldSetAt          []time.Time
+	vuRangeIdx             = 3      // index into vuRangeOptions; -90dBFS default
+	peakHoldIdx            = 4      // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
+	transportMode          = "icon" // web dashboard transport buttons: "icon" or "text" labels - persisted, see PersistedConfig
+	monitoring             bool     // input-monitor ffmpeg reading the Inferno FIFO for levels only, no recording - see startMonitor
+	monitorCmd             *exec.Cmd
+	monitorDone            chan struct{}
+	monitoringOutput       bool          // playback's output-monitoring mode: the input monitor is stood down while a track plays (see startPlayback); UI shows "monitoring output" - no real output tap, so audio latency is untouched
+	autoMonitor            bool          // true if the input monitor was started automatically at startup (see doStartInferno) rather than by the idle-browse flow; it persists across idle-browse sessions and is only stood down for recording/playback
+	playbackPausedElapsed  time.Duration // frozen playback time captured the moment playback paused - see pausePlayback
+	demoMode               bool          // synthetic VU-only demo, no real audio - see startDemo/demoLoop
+	demoKind               string
+	demoStart              time.Time
+	idleBrowsePage         int  // current page within StateIdleBrowse - see onEncoderRotate
+	idleBrowseMonitorOwned bool // true if entering idle-browse started the monitor itself, so it knows to stop it again on exit rather than killing a monitor session started deliberately from the web UI
+	scheduleHour           = 8
+	scheduleMinute         = 0
+	scheduleDuration       = 0 // minutes; 0 = manual stop
+	scheduleArmed          = false
+	scheduleFiredDate      string     // "YYYYMMDD" of the day the schedule last fired, so scheduleLoop's 1s poll doesn't refire within the same matching minute
+	editingParameter       bool       // true once a parameter row (Sample Rate/Channel/Format/Tag in Settings, Hour/Minute/Duration in Schedule) has been clicked into - only then does rotation adjust its value instead of navigating
+	deviceName             = "PI9696" // unit name shown on the login/dashboard and passed to Inferno as INFERNO_NAME; changeable only from the authenticated dashboard
+	currentState           = StateIdle
+	menuMode               = SettingsMenu
+	selectedMenu           = 0
+	menuScrollOffset       = 0
+	confirmOption          = ConfirmNo
+	usbMounted             = false
+	usbSize                = ""
+	filesToCopy            = make(map[string]bool)
+	allFiles               []string
+	copyProgress           = 0
+	infernoCmd             *exec.Cmd
+	ffmpegCmd              *exec.Cmd
+	fifoPath               string
+	infernoState           InfernoState
+	lastSampleRate         int
+	lastChannelCount       int
+	// diskWarnUntil marks how long a "low disk" warning stays on the idle
+	// screen after a refused record press (see onButtonPress/lowDisk).
+	diskWarnUntil time.Time
+	networkWasUp  bool
+	mutex         sync.Mutex
+
+	// WiFi access point settings - OFF by default. wifiSSID is the AP name
+	// (device name by default), wifiPassword is user-set via the web UI.
+	// wifiEnabled is the user's last on/off choice, persisted, so it's also
+	// the "on or off at startup" preference (see applyWifiConfig).
+	wifiEnabled  bool
+	wifiSSID     string
+	wifiPassword string
 )
+
+// PersistedConfig holds the non-destructive settings that survive a restart.
+// WiFi access is deliberately OFF by default; everything else only ever
+// changes through the normal menu/web flows, and is re-stored on change.
+// See loadPersistedConfig/persistConfig. Password is stored in plaintext in
+// the (root-only) config file - it's a credential for a range-limited AP on a
+// local network, acceptable for this device; see the WiFi notes.
+type PersistedConfig struct {
+	DeviceName    string `json:"deviceName"`
+	SampleRateIdx int    `json:"sampleRateIdx"`
+	ChannelCount  int    `json:"channelCount"`
+	RecordFormat  int    `json:"recordFormat"`
+	TagPresetIdx  int    `json:"tagPresetIdx"`
+	VURangeIdx    int    `json:"vuRangeIdx"`
+	PeakHoldIdx   int    `json:"peakHoldIdx"`
+	TransportMode string `json:"transportMode"`
+
+	WifiEnabled  bool   `json:"wifiEnabled"`
+	WifiSSID     string `json:"wifiSSID"`
+	WifiPassword string `json:"wifiPassword"`
+}
+
+// wifiInited tracks whether applyWifiConfig has been run at least once so the
+// startup OFF default and the "on/off at startup" toggle don't fight.
+var wifiInited bool
 
 func main() {
 	var err error
+	loadPersistedConfig()
+
 	hwManager, err = hardware.NewHardwareManager()
 	if err != nil {
 		log.Fatalf("Failed to initialize hardware: %v", err)
 	}
-	defer hwManager.Close()
+
+	remoteToken = generateRemoteToken()
 
 	setupHardwareCallbacks()
+	go infernoWorker()
+	go systemOpWorker()
 	go detectUSB()
 	go updateLoop()
 	go networkMonitorLoop()
+	go scheduleLoop()
+	go demoLoop()
+	go peakHoldLoop()
+	go mdnsLoop()
 
-	// Keep main thread alive
-	select {}
+	// Bring the WiFi access point to the persisted startup state (OFF unless
+	// explicitly enabled+startup-armed), once the network is up enough to
+	// bring up wlan0.
+	if wifiSSID == "" {
+		wifiSSID = deviceName
+	}
+	applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
+
+	// PI9696_REMOTE_BIND is a manual test-only escape hatch: it exists
+	// because remoteControlLoop only ever binds to eth0's own IP (a
+	// deliberate security constraint - see PROJECT_STATUS.md's Remote
+	// Control section), which means the remote UI never comes up at all on
+	// a dev box with no real eth0 interface. Never set this on a real
+	// deployment - it bypasses that constraint entirely, binding wherever
+	// you tell it to (e.g. "0.0.0.0" for every interface).
+	if bindHost := os.Getenv("PI9696_REMOTE_BIND"); bindHost != "" {
+		if _, err := startRemoteServer(bindHost); err != nil {
+			log.Fatalf("PI9696_REMOTE_BIND: failed to bind %s:%s: %v", bindHost, remoteControlPort, err)
+		}
+		log.Printf("TEST-ONLY remote control server: http://%s:%s (token: %s)", bindHost, remoteControlPort, formatToken(remoteToken))
+	} else {
+		go remoteControlLoop()
+	}
+
+	// Block until asked to stop, then clean up in order: finalize any
+	// active recording (ffmpeg needs SIGTERM to write a valid WAV header -
+	// verified directly against a FIFO - so dying instantly here would
+	// leave a corrupt file), then stop Inferno, then release the display.
+	// Without this, `systemctl restart` (or any signal, including Ctrl-C
+	// when run manually outside systemd) mid-recording destroyed the take,
+	// and the Inferno subprocess could be orphaned when not managed by
+	// systemd's cgroup cleanup.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	<-sigCh
+
+	log.Println("Shutting down...")
+	gracefulShutdown()
+}
+
+func gracefulShutdown() {
+	mutex.Lock()
+	recording := isRecording
+	playing := currentState == StatePlaying || currentState == StatePaused
+	mon := monitoring
+	var recDone, playDone, monDone chan struct{}
+	if recording {
+		log.Println("Stopping active recording before shutdown")
+		recDone = recordingDone
+		stopRecording()
+	}
+	if playing {
+		log.Println("Stopping active playback before shutdown")
+		playDone = playbackDone
+		stopPlayback()
+	}
+	if mon {
+		log.Println("Stopping input monitor before shutdown")
+		monDone = monitorDone
+		stopMonitor()
+	}
+	mutex.Unlock()
+
+	// Wait for the owning goroutines (see startRecording/startPlayback/
+	// startMonitor) to actually reap their processes before the app exits,
+	// so ffmpeg isn't orphaned and the recording's WAV/FLAC/MP3 header gets
+	// finalized.
+	if recDone != nil {
+		<-recDone
+	}
+	if playDone != nil {
+		<-playDone
+	}
+	if monDone != nil {
+		<-monDone
+	}
+
+	stopInfernoAndWait()
+	hwManager.Close()
 }
 
 func setupHardwareCallbacks() {
@@ -137,15 +660,78 @@ func onEncoderRotate(direction int) {
 
 	switch currentState {
 	case StateIdle:
-		// No action on idle screen
+		// Rotating from the home screen opens the idle-browse flow: paged
+		// per-channel VU meters, then a network/access-token page (see
+		// onEncoderRotate's StateIdleBrowse case and render's
+		// renderIdleBrowse). If nothing is already feeding the meters
+		// (recording or an existing monitor session), start one so the
+		// meters show real input levels rather than sitting silent.
+		idleBrowsePage = 0
+		currentState = StateIdleBrowse
+		idleBrowseMonitorOwned = false
+		if !monitoring {
+			startMonitor()
+			idleBrowseMonitorOwned = monitoring
+		}
+
+	case StateIdleBrowse:
+		totalPages := idleVUPageCount() + 2 // + the waveform page, + the network/token page
+		idleBrowsePage = ((idleBrowsePage+direction)%totalPages + totalPages) % totalPages
 
 	case StateSettings:
-		if selectedMenu == 0 { // Sample Rate
-			adjustSampleRate(direction)
-		} else if selectedMenu == 1 { // Channel Count
-			adjustChannelCount(direction)
-		} else {
+		// The top-level Settings screen is pure navigation now - every
+		// parameter lives inside a sub-menu (Audio / Metering / WiFi), so a
+		// rotate just moves the cursor. Editing happens inside those
+		// sub-menus (see StateAudio/StateMetering below).
+		navigateMenu(direction)
+
+	case StateAudio:
+		// Param rows are press-to-edit, rotate-to-adjust, press-again-to-
+		// confirm (see the comment that used to live in StateSettings).
+		if !editingParameter {
 			navigateMenu(direction)
+			break
+		}
+		switch selectedMenu {
+		case 0: // Sample Rate
+			adjustSampleRate(direction)
+		case 1: // Channel Count
+			adjustChannelCount(direction)
+		case 2: // Format
+			adjustRecordFormat(direction)
+		case 3: // Tag
+			adjustRecordTag(direction)
+		}
+
+	case StateMetering:
+		if !editingParameter {
+			navigateMenu(direction)
+			break
+		}
+		switch selectedMenu {
+		case 0: // Meter Range
+			adjustVURange(direction)
+		case 1: // Peak Hold
+			adjustPeakHold(direction)
+		}
+
+	case StateSchedule:
+		if !editingParameter {
+			navigateMenu(direction)
+			break
+		}
+		switch selectedMenu {
+		case 0: // Hour
+			scheduleHour = ((scheduleHour+direction)%24 + 24) % 24
+		case 1: // Minute
+			scheduleMinute = ((scheduleMinute+direction)%60 + 60) % 60
+		case 2: // Duration, in 5-minute steps, 0-480 (8h)
+			scheduleDuration += direction * 5
+			if scheduleDuration < 0 {
+				scheduleDuration = 0
+			} else if scheduleDuration > 480 {
+				scheduleDuration = 480
+			}
 		}
 
 	case StateCopyFiles:
@@ -153,6 +739,14 @@ func onEncoderRotate(direction int) {
 
 	case StateSystemOptions:
 		navigateMenu(direction)
+
+	case StateWifi:
+		navigateMenu(direction)
+
+	case StateWifiQR:
+		currentState = StateWifi
+		selectedMenu = 0
+		menuScrollOffset = 0
 
 	case StateConfirm:
 		if confirmOption == ConfirmNo {
@@ -172,16 +766,38 @@ func onEncoderClick() {
 		if !isRecording {
 			currentState = StateSettings
 			selectedMenu = 0
+			editingParameter = false
 		}
+
+	case StateIdleBrowse:
+		exitIdleBrowse()
 
 	case StateSettings:
 		handleSettingsClick()
+
+	case StateSchedule:
+		handleScheduleClick()
 
 	case StateCopyFiles:
 		handleCopyFilesClick()
 
 	case StateSystemOptions:
 		handleSystemOptionsClick()
+
+	case StateWifi:
+		handleWifiClick()
+
+	case StateWifiQR:
+		// A press anywhere on the QR view returns to the WiFi submenu.
+		currentState = StateWifi
+		selectedMenu = 0
+		menuScrollOffset = 0
+
+	case StateAudio:
+		handleAudioClick()
+
+	case StateMetering:
+		handleMeteringClick()
 
 	case StateConfirm:
 		handleConfirmClick()
@@ -195,11 +811,28 @@ func onEncoderHold() {
 	if currentState == StateCopying {
 		isCopying = false
 		currentState = StateIdle
+	} else if currentState == StatePlaying || currentState == StatePaused {
+		stopPlayback()
+	} else if currentState == StateIdleBrowse {
+		exitIdleBrowse()
 	} else if currentState != StateIdle && currentState != StateRecording {
 		currentState = StateIdle
 		selectedMenu = 0
 		menuScrollOffset = 0
+		editingParameter = false
 	}
+}
+
+// exitIdleBrowse returns from the idle-browse flow (see onEncoderRotate's
+// StateIdle case) back to the home screen, stopping the input monitor only
+// if idle-browse was the one that started it - a monitor session started
+// deliberately from the web UI must keep running after leaving this view.
+func exitIdleBrowse() {
+	if idleBrowseMonitorOwned && monitoring {
+		stopMonitor()
+	}
+	idleBrowseMonitorOwned = false
+	currentState = StateIdle
 }
 
 func onButtonPress(buttonType hardware.ButtonType) {
@@ -208,12 +841,44 @@ func onButtonPress(buttonType hardware.ButtonType) {
 
 	switch buttonType {
 	case hardware.RecordButton:
-		if currentState == StateIdle && !isRecording {
-			startRecording()
+		// Also reachable from StateIdleBrowse: monitoring may already be
+		// running there (see onEncoderRotate's StateIdle case), so hitting
+		// Record after checking levels goes straight into recording -
+		// startRecording stops the monitor itself before taking over the
+		// FIFO (see its own comment).
+		if (currentState == StateIdle || currentState == StateIdleBrowse) && !isRecording {
+			if lowDisk() {
+				// Refuse to start a take there isn't room to finish: flash a
+				// warning on the idle screen instead (see renderIdleScreen).
+				diskWarnUntil = time.Now().Add(5 * time.Second)
+				log.Printf("Refusing to record: less than 30 minutes of space remains")
+			} else {
+				startRecording()
+			}
 		}
 	case hardware.StopButton:
 		if isRecording {
 			stopRecording()
+		} else if currentState == StatePlaying || currentState == StatePaused {
+			stopPlayback()
+		}
+	case hardware.PlayButton:
+		// The PLAY key doubles as PAUSE while a track is running: it pauses
+		// an active playback and resumes a paused one, so the same physical
+		// key toggles the transport without needing a dedicated pause key.
+		if currentState == StatePlaying {
+			pausePlayback()
+		} else if currentState == StatePaused {
+			resumePlayback()
+		} else if (currentState == StateIdle || currentState == StateIdleBrowse) && !isRecording {
+			// Unlike Record, startPlayback doesn't need the FIFO and won't
+			// stop a monitor itself - do it here so an idle-browse-owned
+			// monitor doesn't keep running pointlessly through playback.
+			if idleBrowseMonitorOwned && monitoring {
+				stopMonitor()
+				idleBrowseMonitorOwned = false
+			}
+			startPlayback()
 		}
 	}
 }
@@ -227,6 +892,7 @@ func adjustSampleRate(direction int) {
 	}
 	// Check if we need to restart Inferno server
 	checkInfernoRestart()
+	settingChanged()
 }
 
 func adjustChannelCount(direction int) {
@@ -236,8 +902,42 @@ func adjustChannelCount(direction int) {
 	} else if channelCount > MaxChannelCount {
 		channelCount = MaxChannelCount
 	}
+
+	// A format's channel ceiling (FLAC ~8, MP3 2) can be exceeded by
+	// widening the channel count after that format was already selected;
+	// fall back to the next more permissive format rather than silently
+	// keeping a format/channel-count combination ffmpeg can't encode.
+	for recordFormat != FormatWAV && channelCount > maxChannelsForFormat(recordFormat) {
+		old := recordFormat
+		recordFormat--
+		log.Printf("Channel count %d exceeds %s limit, falling back to %s", channelCount, formatNames[old], formatNames[recordFormat])
+	}
+
 	// Check if we need to restart Inferno server
 	checkInfernoRestart()
+	settingChanged()
+}
+
+// adjustRecordTag cycles through tagPresets, wrapping in both directions.
+func adjustRecordTag(direction int) {
+	tagPresetIdx = ((tagPresetIdx+direction)%len(tagPresets) + len(tagPresets)) % len(tagPresets)
+	settingChanged()
+}
+
+// adjustRecordFormat cycles recordFormat, skipping any format whose channel
+// ceiling (see maxChannelsForFormat) the current channelCount already
+// exceeds. The loop is bounded by len(formatNames) and always terminates
+// since FormatWAV has no ceiling below MaxChannelCount.
+func adjustRecordFormat(direction int) {
+	next := recordFormat
+	for i := 0; i < len(formatNames); i++ {
+		next = RecordFormat((int(next) + direction + len(formatNames)) % len(formatNames))
+		if channelCount <= maxChannelsForFormat(next) {
+			recordFormat = next
+			settingChanged()
+			return
+		}
+	}
 }
 
 func navigateMenu(direction int) {
@@ -245,11 +945,19 @@ func navigateMenu(direction int) {
 
 	switch currentState {
 	case StateSettings:
-		maxItems = 7 // Sample Rate, Channel Count, Copy Files, System Options, Network Info, Restart Inferno, Exit
+		maxItems = 10 // Audio, Metering, Schedule Recording, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
+	case StateAudio:
+		maxItems = 5 // Sample Rate, Channel Count, Format, Tag, Back
+	case StateMetering:
+		maxItems = 3 // Meter Range, Peak Hold, Back
+	case StateSchedule:
+		maxItems = 5 // Hour, Minute, Duration, Arm/Disarm, Exit
 	case StateCopyFiles:
 		maxItems = len(allFiles) + 3 // Start Copy, [All], [NONE], files...
 	case StateSystemOptions:
 		maxItems = 5 // Delete All, Format USB, Shutdown, Restart, Exit
+	case StateWifi:
+		maxItems = 3 // Enable AP, Show QR, Back
 	}
 
 	selectedMenu += direction
@@ -261,29 +969,116 @@ func navigateMenu(direction int) {
 }
 
 func handleSettingsClick() {
+	// A click while a parameter is being edited confirms/exits back to
+	// navigation, regardless of which row is selected - it does not also
+	// act on that row (e.g. clicking out of editing Sample Rate must not
+	// simultaneously enter Channel Count).
+	if editingParameter {
+		editingParameter = false
+		return
+	}
+
 	switch selectedMenu {
-	case 0, 1: // Sample Rate or Channel Count - do nothing, direct adjustment
-	case 2: // Copy Files
+	case 0: // Audio submenu (Sample Rate, Channel Count, Format, Tag)
+		currentState = StateAudio
+		selectedMenu = 0
+		menuScrollOffset = 0
+	case 1: // Metering submenu (Meter Range, Peak Hold)
+		currentState = StateMetering
+		selectedMenu = 0
+		menuScrollOffset = 0
+	case 2: // Schedule Recording
+		currentState = StateSchedule
+		selectedMenu = 0
+		menuScrollOffset = 0
+	case 3: // Copy Files
 		if usbMounted {
 			loadFilesToCopy()
 			currentState = StateCopyFiles
 			selectedMenu = 0
 			menuScrollOffset = 0
 		}
-	case 3: // System Options
+	case 4: // System Options
 		currentState = StateSystemOptions
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 4: // Network Info
+	case 5: // Network Info
 		currentState = StateNetworkInfo
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 5: // Restart Inferno
+	case 6: // Remote Access
+		currentState = StateRemoteInfo
+		selectedMenu = 0
+		menuScrollOffset = 0
+	case 7: // Restart Inferno
 		menuMode = InfernoRestartConfirm
 		currentState = StateConfirm
 		confirmOption = ConfirmNo
-	case 6: // Exit
+	case 8: // WiFi submenu (enable/disable + QR)
+		currentState = StateWifi
+		selectedMenu = 0
+		menuScrollOffset = 0
+	case 9: // Exit
 		currentState = StateIdle
+		menuScrollOffset = 0
+	}
+}
+
+// handleAudioClick drives the Audio submenu (StateAudio): the four format
+// rows behave exactly like they did when they were top-level settings - a
+// click enters edit mode, rotate adjusts, click again confirms.
+func handleAudioClick() {
+	if editingParameter {
+		editingParameter = false
+		return
+	}
+	switch selectedMenu {
+	case 0, 1, 2, 3: // Sample Rate, Channel Count, Format, Tag
+		editingParameter = true
+	case 4: // Back
+		currentState = StateSettings
+		selectedMenu = 0
+		menuScrollOffset = 0
+	}
+}
+
+// handleMeteringClick drives the Metering submenu (StateMetering): Meter
+// Range and Peak Hold, both press-to-edit, plus Back.
+func handleMeteringClick() {
+	if editingParameter {
+		editingParameter = false
+		return
+	}
+	switch selectedMenu {
+	case 0, 1: // Meter Range, Peak Hold
+		editingParameter = true
+	case 2: // Back
+		currentState = StateSettings
+		selectedMenu = 1
+		menuScrollOffset = 0
+	}
+}
+
+func handleScheduleClick() {
+	if editingParameter {
+		editingParameter = false
+		return
+	}
+
+	switch selectedMenu {
+	case 0, 1, 2: // Hour, Minute, Duration - click to enter edit mode
+		editingParameter = true
+	case 3: // Arm/Disarm toggle
+		scheduleArmed = !scheduleArmed
+		if scheduleArmed {
+			scheduleFiredDate = "" // allow it to fire today even if it already fired earlier today before being disarmed and re-armed
+			log.Printf("Recording scheduled for %02d:%02d (duration %dm, 0=manual stop)", scheduleHour, scheduleMinute, scheduleDuration)
+		} else {
+			log.Printf("Scheduled recording disarmed")
+		}
+	case 4: // Exit
+		currentState = StateSettings
+		selectedMenu = 4
 		menuScrollOffset = 0
 	}
 }
@@ -332,17 +1127,35 @@ func handleSystemOptionsClick() {
 	}
 }
 
+// handleWifiClick drives the WiFi access-point submenu (StateWifi). WiFi
+// config is intentionally thin on the OLED - there's no keyboard - so the SSID
+// and password are set from the web dashboard; this screen only toggles the AP
+// on/off (persisted as the startup state) and jumps to the QR view.
+func handleWifiClick() {
+	switch selectedMenu {
+	case 0: // Enable/disable the AP
+		setWifiEnabled(!wifiEnabled)
+		log.Printf("wifi: AP toggled %v via OLED (SSID %q)", wifiEnabled, wifiSSID)
+	case 1: // Show the join QR code
+		currentState = StateWifiQR
+	case 2: // Back to settings
+		currentState = StateSettings
+		selectedMenu = 12
+		menuScrollOffset = 0
+	}
+}
+
 func handleConfirmClick() {
 	if confirmOption == ConfirmYes {
 		switch menuMode {
 		case DeleteConfirm:
 			deleteAllRecordings()
 		case FormatConfirm:
-			formatUSB()
+			enqueueSystemOp(opFormatUSB)
 		case ShutdownConfirm:
-			exec.Command("sudo", "shutdown", "-h", "now").Run()
+			enqueueSystemOp(opShutdown)
 		case RestartConfirm:
-			exec.Command("sudo", "reboot").Run()
+			enqueueSystemOp(opRestart)
 		case InfernoRestartConfirm:
 			restartInfernoServer()
 		}
@@ -351,110 +1164,409 @@ func handleConfirmClick() {
 }
 
 // Network monitoring loop to start/restart Inferno server when eth0 comes up
+// Inferno lifecycle is fully owned by infernoWorker, the only goroutine that
+// ever mutates infernoCmd/fifoPath/infernoState mid-operation. Everything
+// else only ever enqueues a request and returns immediately.
+//
+// Actually stopping or starting the subprocess means signaling it and
+// waiting for it to exit, or creating a FIFO and spawning cargo - work that
+// can take an unbounded amount of time (longer if the process ignores
+// SIGTERM). That used to run directly under the single app-wide mutex that
+// render() and every button/encoder callback also need, which froze the
+// entire UI - display stopped updating, buttons stopped responding - for as
+// long as the stop/start took. Routing it through a dedicated worker keeps
+// that blocking work off the UI-facing mutex, and serializes start/stop/
+// restart so concurrent requests (e.g. rapid sample-rate changes) can't
+// race on the shared state.
+type infernoCommand int
+
+const (
+	infernoCmdStart infernoCommand = iota
+	infernoCmdStop
+	infernoCmdRestart
+)
+
+type infernoRequest struct {
+	cmd  infernoCommand
+	done chan struct{} // closed when this request finishes; nil for fire-and-forget
+}
+
+var infernoReqCh = make(chan infernoRequest, 8)
+
+// enqueueInferno sends a fire-and-forget request. The buffer is large
+// enough that a full channel only happens if the worker is stuck, in which
+// case dropping is preferable to blocking the caller - which typically
+// holds the app mutex.
+func enqueueInferno(cmd infernoCommand) {
+	select {
+	case infernoReqCh <- infernoRequest{cmd: cmd}:
+	default:
+		log.Printf("Inferno command queue full, dropping request")
+	}
+}
+
+// stopInfernoAndWait enqueues a stop and blocks until it completes. Used
+// only during shutdown, where cleanup must actually finish before the
+// process exits.
+func stopInfernoAndWait() {
+	done := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdStop, done: done}
+	<-done
+}
+
+func infernoWorker() {
+	for req := range infernoReqCh {
+		switch req.cmd {
+		case infernoCmdStop:
+			// Exempt from the recording guard below: this only ever comes
+			// from stopInfernoAndWait during shutdown, by which point
+			// gracefulShutdown has already stopped ffmpeg.
+			doStopInferno()
+
+		case infernoCmdStart, infernoCmdRestart:
+			mutex.Lock()
+			recording := isRecording
+			mutex.Unlock()
+
+			if recording && req.cmd == infernoCmdRestart {
+				// A restart was enqueued (e.g. by checkInfernoRestart) but
+				// a recording started before the worker got to it. Tearing
+				// down Inferno now would kill the FIFO's writer out from
+				// under ffmpeg mid-recording: ffmpeg sees EOF and quietly
+				// finalizes a truncated file, but nothing clears
+				// isRecording, so the UI keeps showing "● REC" with the
+				// timer still running while no more audio is being
+				// captured. Defer instead - stopRecording() re-enqueues
+				// this restart once it's safe.
+				log.Printf("Deferring Inferno restart: recording in progress")
+				break
+			}
+
+			if req.cmd == infernoCmdRestart {
+				doStopInferno()
+				time.Sleep(1 * time.Second) // give the old process a moment to fully release the audio device
+				if !hwManager.IsNetworkAvailable() {
+					break
+				}
+			}
+			doStartInferno()
+
+			// Coalesce: settings may have changed again while this request
+			// sat in the queue or while the (slow) stop/start was in
+			// flight. Keep restarting until the running server actually
+			// matches current settings, instead of leaving Inferno running
+			// at a stale rate/channel count while the status bar - and any
+			// new recording's filename - claim otherwise. Same recording
+			// guard as above applies here.
+			for {
+				mutex.Lock()
+				recording := isRecording
+				mismatch := infernoState == InfernoRunning &&
+					(sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount)
+				mutex.Unlock()
+				if recording || !mismatch {
+					break
+				}
+				doStopInferno()
+				time.Sleep(1 * time.Second)
+				doStartInferno()
+			}
+		}
+
+		if req.done != nil {
+			close(req.done)
+		}
+	}
+}
+
+// scheduleLoop polls once a second for an armed schedule reaching its
+// target HH:MM and starts a recording, then (if a duration was set) stops it
+// again after that many minutes. One-shot by design: firing disarms the
+// schedule, so a day is never silently re-triggered without the user
+// re-arming it. scheduledStopAt is local to this loop - only scheduleLoop
+// itself ever needs to track a pending auto-stop deadline.
+func scheduleLoop() {
+	var scheduledStopAt time.Time
+	wasInTargetMinute := false
+
+	for {
+		time.Sleep(1 * time.Second)
+
+		mutex.Lock()
+		now := time.Now()
+		today := now.Format("20060102")
+		inTargetMinute := now.Hour() == scheduleHour && now.Minute() == scheduleMinute
+
+		// Clear any deadline left over from a recording that's no longer
+		// running (e.g. manually stopped early) before it can later reach
+		// forward in time and stop an unrelated recording that happens to
+		// still be active when the old deadline arrives.
+		if !isRecording {
+			scheduledStopAt = time.Time{}
+		}
+
+		if scheduleArmed && currentState == StateIdle && !isRecording &&
+			inTargetMinute && scheduleFiredDate != today {
+			scheduleFiredDate = today
+			scheduleArmed = false
+			if infernoState == InfernoRunning {
+				log.Printf("Scheduled recording starting")
+				startRecording()
+				if scheduleDuration > 0 {
+					scheduledStopAt = now.Add(time.Duration(scheduleDuration) * time.Minute)
+				}
+			} else {
+				log.Printf("Scheduled recording skipped: Inferno server not running")
+			}
+		} else if scheduleArmed && wasInTargetMinute && !inTargetMinute && scheduleFiredDate != today {
+			// The target HH:MM came and went without firing (device was
+			// busy recording/playing/mid-menu) - disarm rather than
+			// silently rolling over to fire unexpectedly tomorrow, matching
+			// the documented one-shot/re-arm-it-yourself behavior instead
+			// of leaving a schedule the user never re-confirmed lying in
+			// wait for 24 hours.
+			log.Printf("Scheduled recording missed its %02d:%02d window (device was busy), disarming", scheduleHour, scheduleMinute)
+			scheduleArmed = false
+		}
+		wasInTargetMinute = inTargetMinute
+
+		if isRecording && !scheduledStopAt.IsZero() && now.After(scheduledStopAt) {
+			log.Printf("Scheduled recording duration elapsed, stopping")
+			stopRecording()
+			scheduledStopAt = time.Time{}
+		}
+		mutex.Unlock()
+	}
+}
+
 func networkMonitorLoop() {
 	for {
 		mutex.Lock()
 		networkUp := hwManager.IsNetworkAvailable()
-		
+
 		if networkUp && !networkWasUp {
 			// Network just came up, start Inferno if not running
 			if infernoState != InfernoRunning {
 				log.Printf("Network available, starting Inferno server")
-				startInfernoServer()
+				enqueueInferno(infernoCmdStart)
 			}
 		} else if !networkUp && networkWasUp {
 			// Network went down
 			log.Printf("Network unavailable")
 		}
-		
+
 		networkWasUp = networkUp
 		mutex.Unlock()
-		
+
 		time.Sleep(5 * time.Second) // Check every 5 seconds
 	}
 }
 
-// Check if Inferno server needs to be restarted due to setting changes
+// Check if Inferno server needs to be restarted due to setting changes.
+// Callers (adjustSampleRate, adjustChannelCount) are always invoked from
+// onEncoderRotate, which already holds mutex; enqueueInferno only sends on
+// a buffered channel, so this stays fast.
 func checkInfernoRestart() {
-	mutex.Lock()
-	defer mutex.Unlock()
-	
 	currentSampleRate := sampleRates[sampleRateIdx]
 	if (currentSampleRate != lastSampleRate || channelCount != lastChannelCount) && infernoState == InfernoRunning {
 		log.Printf("Settings changed, restarting Inferno server")
-		stopInfernoServer()
-		startInfernoServer()
+		enqueueInferno(infernoCmdRestart)
 	}
 }
 
-// Start the Inferno Audio over IP server
-func startInfernoServer() {
+// doStartInferno starts the Inferno Audio over IP server. Must only be
+// called from infernoWorker - it manages its own locking in short critical
+// sections rather than expecting the caller to hold mutex for the whole
+// call, since creating the FIFO and starting the subprocess can take a
+// while and must not block render() or input handling.
+func doStartInferno() {
+	mutex.Lock()
 	if infernoState == InfernoRunning || infernoState == InfernoStarting {
+		mutex.Unlock()
 		return
 	}
-	
+
 	infernoState = InfernoStarting
 	sampleRate := sampleRates[sampleRateIdx]
-	
+	channels := channelCount
+	name := deviceName
+
 	// Create a persistent FIFO for Inferno output
 	timestamp := time.Now().Format("20060102_150405")
-	baseFileName := fmt.Sprintf("inferno_%s_ch%d_%dkHz.raw", timestamp, channelCount, sampleRate/1000)
-	fifoPath = fmt.Sprintf("%s/%s", RawPath, baseFileName)
-	
+	baseFileName := fmt.Sprintf("inferno_%s_ch%d_%dkHz.raw", timestamp, channels, sampleRate/1000)
+	path := fmt.Sprintf("%s/%s", RawPath, baseFileName)
+	mutex.Unlock()
+
 	// Ensure directories exist
 	os.MkdirAll(RawPath, 0755)
-	
+
 	// Remove old FIFO if exists
-	os.Remove(fifoPath)
-	
+	os.Remove(path)
+
 	// Create new FIFO
-	if err := syscall.Mkfifo(fifoPath, 0666); err != nil {
-		log.Printf("Failed to create Inferno FIFO %s: %v", fifoPath, err)
+	if err := syscall.Mkfifo(path, 0666); err != nil {
+		log.Printf("Failed to create Inferno FIFO %s: %v", path, err)
+		mutex.Lock()
 		infernoState = InfernoFailed
+		mutex.Unlock()
 		return
 	}
-	
-	// Start Inferno server
-	infernoCmd = exec.Command("sh", "-c", 
-		fmt.Sprintf("cd inferno && INFERNO_SAMPLE_RATE=%d cargo run -- -c %d -o ../%s", 
-			sampleRate, channelCount, fifoPath))
-	
-	if err := infernoCmd.Start(); err != nil {
+
+	// The Inferno server is built once during installation (setup.sh runs
+	// `cargo build --release`), so at runtime we start the prebuilt binary
+	// directly instead of invoking cargo - starting cargo at runtime made
+	// every restart spend the compile/link time again and, worse, blocked on
+	// cargo run while the (absent during build) FIFO was unavailable, which
+	// is what the recording-start guard in infernoWorker is about. See the
+	// inferno template README (setup.sh writes it) for the CLI contract this
+	// binary has to satisfy: -c <channels> -o <output_fifo> and
+	// INFERNO_SAMPLE_RATE/INFERNO_NAME env vars.
+	//
+	// Running the actual binary (not a shell) means the PID is the inferno
+	// process itself. Setpgid still puts it in its own process group so a
+	// reaping signal reaches any grandchild it daemonizes.
+	//
+	// Config (sample rate, device name) is passed via cmd.Env, never the
+	// argument vector - deviceName is user-settable from the web dashboard,
+	// and env vars set this way are never shell-parsed, so it can't be used
+	// for command injection even with shell metacharacters in the name.
+	binary := InfernoBinary
+	if _, err := os.Stat(binary); err != nil {
+		log.Printf("Cannot start Inferno server: built binary %s not found (%v) - run setup.sh to build it", binary, err)
+		mutex.Lock()
+		infernoState = InfernoFailed
+		mutex.Unlock()
+		os.Remove(path)
+		return
+	}
+
+	cmd := exec.Command(binary, "-c", fmt.Sprintf("%d", channels), "-o", path)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("INFERNO_SAMPLE_RATE=%d", sampleRate),
+		"INFERNO_NAME="+name,
+	)
+
+	if err := cmd.Start(); err != nil {
 		log.Printf("Failed to start Inferno server: %v", err)
-		os.Remove(fifoPath)
+		os.Remove(path)
+		mutex.Lock()
 		infernoState = InfernoFailed
+		mutex.Unlock()
 		return
 	}
-	
+
+	mutex.Lock()
+	infernoCmd = cmd
+	fifoPath = path
 	infernoState = InfernoRunning
 	lastSampleRate = sampleRate
-	lastChannelCount = channelCount
-	log.Printf("Inferno server started with %dkHz, %d channels", sampleRate/1000, channelCount)
+	lastChannelCount = channels
+	// Input monitoring should be on from the moment the unit boots, not only
+	// once the user turns the knob into the idle-browse view - so as soon as
+	// the Inferno server is up, start the lightweight FIFO reader that feeds
+	// the live VU meters. startMonitor is expected to run under the app
+	// mutex (same as every other caller) and guards itself against
+	// recording/demo/duplicate sessions, so this never steps on a take.
+	if !isRecording && !demoMode {
+		startMonitor()
+		if monitoring {
+			autoMonitor = true
+		}
+	}
+	mutex.Unlock()
+	log.Printf("Inferno server started with %dkHz, %d channels", sampleRate/1000, channels)
 }
 
-// Stop the Inferno server
-func stopInfernoServer() {
-	if infernoCmd != nil && infernoCmd.Process != nil {
-		infernoCmd.Process.Signal(syscall.SIGTERM)
-		infernoCmd.Wait()
-		infernoCmd = nil
-	}
-	
-	if fifoPath != "" {
-		os.Remove(fifoPath)
-		fifoPath = ""
-	}
-	
+// doStopInferno stops the Inferno server. Must only be called from
+// infernoWorker (see doStartInferno). Captures what it needs under lock,
+// then releases it before signaling and waiting on the subprocess, which
+// can take an unbounded amount of time if it doesn't respond to SIGTERM
+// promptly.
+func doStopInferno() {
+	mutex.Lock()
+	cmd := infernoCmd
+	path := fifoPath
+	infernoCmd = nil
+	fifoPath = ""
 	infernoState = InfernoStopped
+	mutex.Unlock()
+
+	if cmd != nil && cmd.Process != nil {
+		// Signal the whole process group (see Setpgid comment in
+		// doStartInferno) so the inferno binary and any grandchild it
+		// spawned actually get SIGTERM instead of being orphaned, then wait
+		// with a timeout and escalate to SIGKILL if it won't die - a hung
+		// server must never stall infernoWorker (and through
+		// stopInfernoAndWait, gracefulShutdown) forever.
+		syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+
+		waitCh := make(chan struct{})
+		go func() {
+			cmd.Wait()
+			close(waitCh)
+		}()
+		select {
+		case <-waitCh:
+		case <-time.After(5 * time.Second):
+			log.Printf("Inferno server did not exit after SIGTERM, sending SIGKILL")
+			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			<-waitCh
+		}
+	}
+
+	if path != "" {
+		os.Remove(path)
+	}
+
 	log.Printf("Inferno server stopped")
 }
 
-// Restart the Inferno server
+// Restart the Inferno server. Called from handleConfirmClick under mutex;
+// enqueueInferno only sends on a buffered channel, so this stays fast.
 func restartInfernoServer() {
-	stopInfernoServer()
-	time.Sleep(1 * time.Second) // Give it a moment
-	if hwManager.IsNetworkAvailable() {
-		startInfernoServer()
+	enqueueInferno(infernoCmdRestart)
+}
+
+// systemOp and systemOpCh serialize the slow, destructive system operations
+// (USB format, shutdown, restart) onto a dedicated worker instead of running
+// them under the UI mutex. formatUSB in particular blocks for the length of a
+// mkfs.vfat plus a settle sleep - running that under the app mutex froze
+// render()/input the same way pre-worker Inferno stop/start used to (that
+// freeze is exactly what infernoWorker was added to eliminate). The sudo
+// calls also need a worker: on a real Pi NOPASSWD sudo is configured by
+// setup.sh, but if it isn't, sudo blocks on a password prompt with no TTY -
+// which must never hang the UI-facing mutex.
+type systemOp int
+
+const (
+	opFormatUSB systemOp = iota
+	opShutdown
+	opRestart
+)
+
+var systemOpCh = make(chan systemOp, 4)
+
+func enqueueSystemOp(op systemOp) {
+	select {
+	case systemOpCh <- op:
+	default:
+		log.Printf("system op: channel full, dropping %d", op)
+	}
+}
+
+func systemOpWorker() {
+	for op := range systemOpCh {
+		switch op {
+		case opFormatUSB:
+			formatUSB()
+		case opShutdown:
+			log.Println("Shutting down system via menu")
+			exec.Command("sudo", "shutdown", "-h", "now").Run()
+		case opRestart:
+			log.Println("Restarting system via menu")
+			exec.Command("sudo", "reboot").Run()
+		}
 	}
 }
 
@@ -463,59 +1575,546 @@ func startRecording() {
 		log.Printf("Cannot start recording: Inferno server not running")
 		return
 	}
-	
+
+	// A named FIFO only supports one real reader at a time - concurrent
+	// readers would split audio frames between them and corrupt both
+	// streams. stopMonitor is fire-and-forget (SIGTERM, no wait - see its
+	// own comment), so there's a brief sub-100ms window where the outgoing
+	// monitor ffmpeg's read can still race the new recording ffmpeg's for
+	// the FIFO's first few frames; accepted as a minor startup blip rather
+	// than building a fully synchronous handoff.
+	if monitoring {
+		stopMonitor()
+	}
+	demoMode = false
+
 	recordStart = time.Now()
 	timestamp := recordStart.Format("20060102_150405")
 	sampleRate := sampleRates[sampleRateIdx]
-	recordingFile = fmt.Sprintf("%s/recording_%s_ch%d_%dkHz.wav",
-		RecordPath, timestamp, channelCount, sampleRate/1000)
+	ext := strings.ToLower(formatNames[recordFormat])
+	recordingFile = filepath.Join(recordingSubdir(recordStart),
+		fmt.Sprintf("recording_%s_ch%d_%dkHz.%s", timestamp, channelCount, sampleRate/1000, ext))
 
 	// Create recording directory
-	os.MkdirAll(RecordPath, 0755)
+	os.MkdirAll(filepath.Dir(recordingFile), 0755)
 
-	// Start FFmpeg to convert raw stream from existing Inferno FIFO to final output
-	ffmpegCmd = exec.Command("ffmpeg", 
-		"-nostdin", "-fflags", "nobuffer", 
-		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRate), 
-		"-ac", fmt.Sprintf("%d", channelCount), 
-		"-i", fifoPath, 
-		"-c:a", "pcm_s24le", recordingFile)
-	
-	err := ffmpegCmd.Start()
+	// Start FFmpeg to convert raw stream from existing Inferno FIFO to final
+	// output. "-fflags nobuffer" was previously here, but on this ffmpeg
+	// (7.x) it makes reading s32le from a FIFO produce a WAV with zero
+	// audio frames every time (verified against a real FIFO fed by a
+	// background writer: identical command differing only in that flag
+	// produced a 102-byte empty file with it, a correct multi-second file
+	// without it) - every recording would have been silent.
+	args := []string{
+		"-nostdin",
+		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRate),
+		"-ac", fmt.Sprintf("%d", channelCount),
+		"-i", fifoPath,
+	}
+	switch recordFormat {
+	case FormatFLAC:
+		args = append(args, "-c:a", "flac", "-sample_fmt", "s32", "-bits_per_raw_sample", "24")
+	case FormatMP3:
+		args = append(args, "-c:a", "libmp3lame", "-b:a", "320k")
+	default: // FormatWAV
+		args = append(args, "-c:a", "pcm_s24le")
+	}
+
+	// ffmpeg's -metadata maps onto whatever tag mechanism the target
+	// container actually uses (WAV LIST/INFO chunk, FLAC Vorbis comments,
+	// MP3 ID3v2) - no per-format code needed here, though not every key
+	// round-trips on every muxer: verified "date" and "comment" survive on
+	// all three, but WAV's INFO chunk only maps a fixed field set and
+	// silently drops arbitrary keys like "software". "date" is always
+	// written for provenance; "comment" only when a tag preset is selected
+	// (see tagPresets - there's no text-entry UI on this encoder-only
+	// hardware for free-form annotations).
+	args = append(args, "-metadata", "date="+recordStart.Format(time.RFC3339))
+	if tag := tagPresets[tagPresetIdx]; tag != "" {
+		args = append(args, "-metadata", "comment="+tag)
+	}
+
+	// astats+ametadata=print is a pass-through filter chain - it reads
+	// samples and prints level stats without altering them (verified
+	// against a real FIFO: file duration/size identical with and without
+	// it) - piped to this process's own stdout (file=-) rather than mixed
+	// into ffmpeg's stderr logging, so the parsing goroutine below only
+	// ever sees clean "key=value" lines.
+	args = append(args, "-af", "astats=metadata=1:reset=1,ametadata=print:file=-")
+
+	args = append(args, recordingFile)
+
+	cmd := exec.Command("ffmpeg", args...)
+
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		log.Printf("Failed to attach FFmpeg stdout: %v", err)
+		return
+	}
+
+	if err := cmd.Start(); err != nil {
 		log.Printf("Failed to start FFmpeg: %v", err)
 		return
 	}
 
+	ffmpegCmd = cmd
 	isRecording = true
 	currentState = StateRecording
+	meterPeakDB = meterSilence
+	meterRMSDB = meterSilence
+	meterChannelPeak = make([]float64, channelCount)
+	meterChannelRMS = make([]float64, channelCount)
+	for i := range meterChannelPeak {
+		meterChannelPeak[i] = meterSilence
+		meterChannelRMS[i] = meterSilence
+	}
+	done := make(chan struct{})
+	recordingDone = done
+
+	go meterReader(stdout)
+
+	// Deliberately NOT waiting for meterReader to see stdout EOF before
+	// calling cmd.Wait() below, even though the exec docs call concurrent
+	// Wait()+pipe-reads incorrect: tried exactly that gating (a meterDone
+	// channel closed by meterReader, received before Wait()) and it
+	// deadlocked in testing - if anything downstream of ffmpeg's own exit
+	// holds the stdout fd open a moment longer (an orphaned child process
+	// inheriting it, e.g.), the pipe never EOFs, meterReader never returns,
+	// and stopRecording's cleanup - along with graceful shutdown - hangs
+	// forever. Calling Wait() unconditionally is what actually reclaims the
+	// process; losing the last frame or two of level data to the pipe
+	// closing under the reader is a real but harmless cost by comparison.
+	//
+	// cmd.Wait must only ever be called once, and this goroutine is its
+	// sole owner - whether the recording ends because ffmpeg hit EOF on its
+	// own or because stopRecording sent SIGTERM, this is what reaps the
+	// process and flips state back to idle. Mirrors startPlayback's
+	// playbackDone pattern: stopRecording() previously called Wait()
+	// directly while holding the app mutex, which was fine when the only
+	// caller was the physical Stop button, but handleAPIRecordStop (the
+	// remote-control HTTP handler) now calls stopRecording() too, and
+	// blocking the mutex on ffmpeg's exit from an HTTP request would freeze
+	// render() and every button/encoder callback for as long as that took.
+	go func() {
+		cmd.Wait()
+		mutex.Lock()
+		if ffmpegCmd == cmd {
+			ffmpegCmd = nil
+			isRecording = false
+			meterPeakDB = meterSilence
+			meterRMSDB = meterSilence
+			meterChannelPeak = nil
+			meterChannelRMS = nil
+			if currentState == StateRecording {
+				currentState = StateIdle
+			}
+			// A settings-triggered restart may have been deferred by
+			// infernoWorker while this recording was in progress (see the
+			// recording guard there). Now that it's safe, let it proceed
+			// instead of leaving Inferno running at a stale rate/channel
+			// count indefinitely.
+			if infernoState == InfernoRunning &&
+				(sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount) {
+				enqueueInferno(infernoCmdRestart)
+			} else {
+				// No deferred restart in flight - bring the always-on input
+				// monitor back up now that the take has ended.
+				maybeResumeInputMonitorLocked()
+			}
+		}
+		mutex.Unlock()
+		close(done)
+	}()
 }
 
+// meterChannelLineRe matches astats' per-channel ametadata lines, e.g.
+// "lavfi.astats.3.Peak_level=-6.020600" for channel 3 - distinct from the
+// "lavfi.astats.Overall.*" lines, which stay a plain prefix check below
+// since they don't need a captured index.
+var meterChannelLineRe = regexp.MustCompile(`^lavfi\.astats\.(\d+)\.(Peak|RMS)_level=(.+)$`)
+
+// sanitizeMeterDB clamps a parsed astats level to a JSON-safe value. ffmpeg's
+// astats reports -inf (Go parses "-inf" to -Inf with no error) for a silent
+// block, and encoding/json refuses to marshal +/-Inf and NaN - which would
+// otherwise empty out every /api/meter and /ws/meter payload the moment the
+// input goes silent. Map anything non-finite back to the silence sentinel so
+// the websocket meter keeps flowing.
+func sanitizeMeterDB(v float64) float64 {
+	if math.IsInf(v, 0) || math.IsNaN(v) {
+		return meterSilence
+	}
+	return v
+}
+
+// meterReader parses astats/ametadata's "key=value" lines off the recording
+// ffmpeg's stdout (see the -af comment in startRecording) into the
+// package-level meter vars. Exits on its own once ffmpeg closes stdout
+// (process exit) - no separate stop signal needed.
+func meterReader(stdout io.Reader) {
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "lavfi.astats.Overall.Peak_level="):
+			if v, err := strconv.ParseFloat(strings.TrimPrefix(line, "lavfi.astats.Overall.Peak_level="), 64); err == nil {
+				mutex.Lock()
+				meterPeakDB = sanitizeMeterDB(v)
+				mutex.Unlock()
+			}
+		case strings.HasPrefix(line, "lavfi.astats.Overall.RMS_level="):
+			if v, err := strconv.ParseFloat(strings.TrimPrefix(line, "lavfi.astats.Overall.RMS_level="), 64); err == nil {
+				mutex.Lock()
+				meterRMSDB = sanitizeMeterDB(v)
+				mutex.Unlock()
+			}
+		default:
+			if m := meterChannelLineRe.FindStringSubmatch(line); m != nil {
+				idx, _ := strconv.Atoi(m[1])
+				v, err := strconv.ParseFloat(m[3], 64)
+				if err != nil {
+					continue
+				}
+				mutex.Lock()
+				dest := meterChannelPeak
+				if m[2] == "RMS" {
+					dest = meterChannelRMS
+				}
+				if idx >= 1 && idx <= len(dest) {
+					dest[idx-1] = sanitizeMeterDB(v)
+				}
+				mutex.Unlock()
+			}
+		}
+	}
+}
+
+// stopRecording signals ffmpeg to stop and returns immediately without
+// waiting for it to exit - the goroutine started by startRecording owns
+// cmd.Wait() and does the actual state cleanup once ffmpeg exits, so a
+// second Wait() here would race it (see startRecording's comment).
 func stopRecording() {
-	// Only stop FFmpeg, leave Inferno server running
 	if ffmpegCmd != nil && ffmpegCmd.Process != nil {
 		ffmpegCmd.Process.Signal(syscall.SIGTERM)
-		ffmpegCmd.Wait()
-		ffmpegCmd = nil
+	}
+}
+
+// startMonitor runs a lightweight ffmpeg reader on the Inferno FIFO purely
+// for level metering - no output file, no encode - so the same per-channel
+// VU meters used during recording (see meterReader) can show live input
+// levels beforehand. Mutually exclusive with an actual recording: see
+// startRecording's comment on why a FIFO can't have two real readers.
+func startMonitor() {
+	if infernoState != InfernoRunning || isRecording || monitoring {
+		return
+	}
+	demoMode = false
+
+	cmd := exec.Command("ffmpeg", "-nostdin",
+		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRates[sampleRateIdx]),
+		"-ac", fmt.Sprintf("%d", channelCount),
+		"-i", fifoPath,
+		"-af", "astats=metadata=1:reset=1,ametadata=print:file=-",
+		"-f", "null", "-")
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		log.Printf("Failed to attach monitor ffmpeg stdout: %v", err)
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start monitor ffmpeg: %v", err)
+		return
 	}
 
-	isRecording = false
-	currentState = StateIdle
+	monitorCmd = cmd
+	monitoring = true
+	meterChannelPeak = make([]float64, channelCount)
+	meterChannelRMS = make([]float64, channelCount)
+	for i := range meterChannelPeak {
+		meterChannelPeak[i] = meterSilence
+		meterChannelRMS[i] = meterSilence
+	}
+	done := make(chan struct{})
+	monitorDone = done
+
+	go meterReader(stdout)
+
+	// Same fire-and-forget-Wait() pattern as startRecording, for the same
+	// reason: this goroutine is the sole owner of cmd.Wait() and is what
+	// actually reaps the process and clears the meter state, whether the
+	// monitor was stopped explicitly or preempted by a real recording.
+	go func() {
+		cmd.Wait()
+		mutex.Lock()
+		if monitorCmd == cmd {
+			monitorCmd = nil
+			monitoring = false
+			meterPeakDB = meterSilence
+			meterRMSDB = meterSilence
+			meterChannelPeak = nil
+			meterChannelRMS = nil
+		}
+		mutex.Unlock()
+		close(done)
+	}()
+}
+
+// stopMonitor signals the monitor ffmpeg to stop without waiting for it to
+// exit - see stopRecording's comment for why (blocking here would freeze
+// the app mutex on ffmpeg's exit).
+func stopMonitor() {
+	if monitorCmd != nil && monitorCmd.Process != nil {
+		monitorCmd.Process.Signal(syscall.SIGTERM)
+	}
+}
+
+// startDemo/stopDemo/demoLoop drive a synthetic, no-audio-hardware-required
+// VU display for showing off the UI (dashboard reels/VFD/meter bridge, and
+// eventually the OLED's own VU pages) without Inferno or a real input
+// signal. demoKind only changes how the dashboard labels it ("recording"
+// vs "playback") - the generated levels are identical either way.
+func startDemo(kind string) {
+	if isRecording || monitoring || demoMode {
+		return
+	}
+	demoMode = true
+	demoKind = kind
+	demoStart = time.Now()
+	meterChannelPeak = make([]float64, channelCount)
+	meterChannelRMS = make([]float64, channelCount)
+}
+
+func stopDemo() {
+	demoMode = false
+	meterPeakDB = meterSilence
+	meterRMSDB = meterSilence
+	meterChannelPeak = nil
+	meterChannelRMS = nil
+}
+
+// demoLoop generates a gently wandering, per-channel-phase-offset signal
+// (sine-based rather than random, so it's smooth and repeatable rather than
+// jittery) whenever demoMode is active. Runs for the app's lifetime; a
+// real recording or monitor session always wins and clears demoMode (see
+// startRecording/startMonitor), so this never fights over the meter vars
+// with an actual audio path.
+func demoLoop() {
+	ticker := time.NewTicker(150 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		mutex.Lock()
+		if demoMode {
+			t := time.Since(demoStart).Seconds()
+			if len(meterChannelPeak) != channelCount {
+				meterChannelPeak = make([]float64, channelCount)
+				meterChannelRMS = make([]float64, channelCount)
+			}
+			for i := range meterChannelPeak {
+				phase := float64(i) * 0.7
+				rms := -16 + 10*math.Sin(t*0.6+phase) + 3*math.Sin(t*2.3+phase*1.7)
+				peak := rms + 4 + 2*math.Sin(t*4.1+phase*0.3)
+				if peak > -1 {
+					peak = -1
+				}
+				meterChannelRMS[i] = rms
+				meterChannelPeak[i] = peak
+			}
+			meterRMSDB = meterChannelRMS[0]
+			meterPeakDB = meterChannelPeak[0]
+		}
+		mutex.Unlock()
+	}
+}
+
+// recordingSubdir returns the per-day subfolder (under RecordPath) that a
+// recording starting at t should live in, e.g. /rec/2026-08-30. Grouping by
+// capture date keeps the flat /rec directory from growing without bound and
+// makes the Copy Files list scannable by day instead of one huge list.
+func recordingSubdir(t time.Time) string {
+	return filepath.Join(RecordPath, t.Format("2006-01-02"))
+}
+
+// recordingFiles lists all finished recordings across every supported output
+// format (WAV/FLAC/MP3) and every location they can live. Recordings are
+// written into a per-day subfolder under RecordPath (e.g. /rec/2026-08-30/) so
+// the storage stays browsable at scale, but legacy flat files at the top level
+// are still picked up. Copy/Delete/Play/download all route through here, so
+// the layout is an implementation detail they never see - files are matched by
+// their leaf name everywhere downstream.
+func recordingFiles() []string {
+	seen := map[string]bool{}
+	var files []string
+	for _, ext := range []string{"wav", "flac", "mp3"} {
+		patterns := []string{
+			filepath.Join(RecordPath, "*."+ext),
+			filepath.Join(RecordPath, "*", "*."+ext),
+		}
+		for _, pat := range patterns {
+			matches, err := filepath.Glob(pat)
+			if err != nil {
+				continue
+			}
+			for _, m := range matches {
+				if !seen[m] {
+					seen[m] = true
+					files = append(files, m)
+				}
+			}
+		}
+	}
+	return files
+}
+
+// latestRecording returns the most recently created recording, relying on
+// the fixed-width YYYYMMDD_HHMMSS timestamp in the filename sorting
+// chronologically regardless of extension.
+func latestRecording() string {
+	files := recordingFiles()
+	if len(files) == 0 {
+		return ""
+	}
+	sort.Strings(files)
+	return files[len(files)-1]
+}
+
+// startPlayback plays the most recent recording through the default ALSA
+// device via ffmpeg, which already understands every RecordFormat container
+// this app can produce - no separate decoder per format needed.
+func startPlayback() {
+	file := latestRecording()
+	if file == "" {
+		log.Printf("No recordings to play")
+		return
+	}
+
+	// Playback switches the dashboard OLED/WebUI out of input-monitoring
+	// into output-monitoring mode: stand the FIFO input monitor down (it's
+	// no longer what the meters should be showing) and signal that the
+	// playback output is the source. This is purely a metering-mode flip -
+	// it touches only the input-monitor ffmpeg, never the ALSA playback
+	// process, so it can't degrade output responsiveness.
+	if monitoring {
+		stopMonitor()
+	}
+	autoMonitor = false
+	monitoringOutput = true
+	playbackPausedElapsed = 0
+
+	cmd := exec.Command("ffmpeg", "-nostdin", "-i", file, "-f", "alsa", "default")
+	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start playback: %v", err)
+		monitoringOutput = false
+		return
+	}
+
+	playbackCmd = cmd
+	playbackFile = file
+	playbackStart = time.Now()
+	currentState = StatePlaying
+	done := make(chan struct{})
+	playbackDone = done
+
+	// cmd.Wait must only ever be called once, and this goroutine is its sole
+	// owner - whether playback finishes naturally (EOF) or is interrupted by
+	// stopPlayback/gracefulShutdown sending SIGTERM, this is what reaps the
+	// process and flips the state back to idle.
+	go func() {
+		cmd.Wait()
+		mutex.Lock()
+		if playbackCmd == cmd {
+			playbackCmd = nil
+			monitoringOutput = false
+			playbackPausedElapsed = 0
+			if currentState == StatePlaying || currentState == StatePaused {
+				currentState = StateIdle
+			}
+		}
+		// Back to idle and the input monitor is expected to be a persistent,
+		// always-on thing (started at startup), so bring it back up.
+		maybeResumeInputMonitorLocked()
+		mutex.Unlock()
+		close(done)
+	}()
+}
+
+// pausePlayback freezes the playing ffmpeg in place with SIGSTOP (the whole
+// process stops: no output, no position advance) and flips the UI into the
+// paused state. It doesn't reap the process - the goroutine started by
+// startPlayback remains the sole owner of cmd.Wait().
+func pausePlayback() {
+	if currentState != StatePlaying || playbackCmd == nil || playbackCmd.Process == nil {
+		return
+	}
+	playbackPausedElapsed = time.Since(playbackStart)
+	playbackCmd.Process.Signal(syscall.SIGSTOP)
+	currentState = StatePaused
+	log.Printf("Playback paused")
+}
+
+// resumePlayback unpauses a paused ffmpeg with SIGCONT and returns the UI to
+// the playing state.
+func resumePlayback() {
+	if currentState != StatePaused || playbackCmd == nil || playbackCmd.Process == nil {
+		return
+	}
+	playbackCmd.Process.Signal(syscall.SIGCONT)
+	// The wall-clock start is now stale (it includes the paused gap), so
+	// slide it forward by that gap to keep the elapsed readout accurate.
+	playbackStart = playbackStart.Add(time.Since(playbackStart) - playbackPausedElapsed)
+	playbackPausedElapsed = 0
+	currentState = StatePlaying
+	log.Printf("Playback resumed")
+}
+
+// maybeResumeInputMonitorLocked must be called with mutex held. It restores
+// the always-on input monitor that a recording or playback stood down, as
+// long as we're back at a quiet idle with the Inferno server up - so
+// metering returns automatically rather than staying dark after a take ends
+// or a track plays through.
+func maybeResumeInputMonitorLocked() {
+	if monitoring || isRecording || demoMode {
+		return
+	}
+	if currentState != StateIdle && currentState != StateIdleBrowse {
+		return
+	}
+	if infernoState != InfernoRunning {
+		return
+	}
+	startMonitor()
+	if monitoring {
+		autoMonitor = true
+	}
+}
+
+// stopPlayback signals playback to stop and returns immediately without
+// waiting for the process to exit - the goroutine started by startPlayback
+// owns cmd.Wait() and does the actual state cleanup once ffmpeg exits, so a
+// second Wait() here would race it.
+func stopPlayback() {
+	monitoringOutput = false
+	playbackPausedElapsed = 0
+	if playbackCmd != nil && playbackCmd.Process != nil {
+		playbackCmd.Process.Signal(syscall.SIGTERM)
+	}
 }
 
 func loadFilesToCopy() {
 	allFiles = []string{}
 	filesToCopy = make(map[string]bool)
 
-	files, err := filepath.Glob(filepath.Join(RecordPath, "*.wav"))
-	if err != nil {
-		return
-	}
-
-	for _, file := range files {
-		basename := filepath.Base(file)
-		allFiles = append(allFiles, basename)
-		filesToCopy[basename] = true
+	// Store recordings as paths relative to RecordPath (e.g.
+	// "2026-08-30/recording_...wav") so the Copy Files selection can show the
+	// per-day folder and startCopyOperation can recreate the same subfolder
+	// structure on the USB stick, keeping a busy /rec's contents organized
+	// when backed up.
+	for _, path := range recordingFiles() {
+		rel, err := filepath.Rel(RecordPath, path)
+		if err != nil {
+			rel = filepath.Base(path)
+		}
+		allFiles = append(allFiles, rel)
+		filesToCopy[rel] = true
 	}
 
 	sort.Strings(allFiles)
@@ -558,7 +2157,6 @@ func startCopyOperation() {
 			if err != nil {
 				log.Printf("Failed to copy %s: %v", file, err)
 			}
-
 			mutex.Lock()
 			copyProgress = int(float64(i+1) / float64(len(selectedFiles)) * 100)
 			mutex.Unlock()
@@ -571,36 +2169,112 @@ func startCopyOperation() {
 	}()
 }
 
+// copyFile streams src to dst rather than reading it fully into memory:
+// multi-channel high-sample-rate recordings can reach many GB (e.g. 128ch at
+// 192kHz/32-bit is ~98MB/s), which would exhaust RAM with os.ReadFile.
 func copyFile(src, dst string) error {
-	input, err := os.ReadFile(src)
+	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(dst, input, 0644)
+	defer in.Close()
+
+	// Recreate the recording's subfolder (e.g. /media/usb/2026-08-30/) on
+	// the USB stick so a copied library stays organized by day.
+	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
+		return err
+	}
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 func deleteAllRecordings() {
-	files, err := filepath.Glob(filepath.Join(RecordPath, "*.wav"))
-	if err != nil {
-		return
-	}
-	for _, file := range files {
+	for _, file := range recordingFiles() {
 		os.Remove(file)
 	}
 }
 
 func formatUSB() {
 	if !usbMounted {
+		log.Printf("Cannot format USB: not mounted")
 		return
 	}
-	exec.Command("sudo", "umount", USBMountPoint).Run()
-	exec.Command("sudo", "mkfs.vfat", "-F", "32", "/dev/sda1").Run()
+
+	device, err := usbDevicePath()
+	if err != nil {
+		log.Printf("Cannot format USB: %v", err)
+		return
+	}
+
+	// umount, then wipe and create a FAT32 filesystem. If NOPASSWD sudo is
+	// configured (setup.sh does this), these run unattended; otherwise the
+	// password prompt would block - hence this running on systemOpWorker, not
+	// the UI mutex.
+	if out, err := exec.Command("sudo", "umount", USBMountPoint).CombinedOutput(); err != nil {
+		log.Printf("format USB: umount failed: %v: %s", err, out)
+		return
+	}
+	if out, err := exec.Command("sudo", "mkfs.vfat", "-F", "32", device).CombinedOutput(); err != nil {
+		log.Printf("format USB: mkfs failed: %v: %s", err, out)
+		return
+	}
 	time.Sleep(2 * time.Second)
+
+	// Remount so the stick is usable (and correctly detected as mounted)
+	// again - previously this never remounted, yet detectUSB only checked
+	// that the mountpoint directory existed, so the app kept believing USB
+	// was mounted and the next "copy to USB" wrote plain files into the empty
+	// mountpoint dir on the SD card's root filesystem.
+	if err := os.MkdirAll(USBMountPoint, 0755); err != nil {
+		log.Printf("format USB: mkdir mountpoint failed: %v", err)
+	}
+	if out, err := exec.Command("sudo", "mount", device, USBMountPoint).CombinedOutput(); err != nil {
+		log.Printf("format USB: remount failed: %v: %s", err, out)
+		return
+	}
+	log.Printf("USB drive formatted (FAT32) and remounted")
+}
+
+// usbDevicePath looks up the block device currently mounted at USBMountPoint.
+// formatUSB previously hardcoded /dev/sda1, which would format the wrong
+// disk (or even a boot/root drive) on any system where the USB stick isn't
+// enumerated as the first device.
+func usbDevicePath() (string, error) {
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == USBMountPoint {
+			return fields[0], nil
+		}
+	}
+	return "", fmt.Errorf("no device mounted at %s", USBMountPoint)
 }
 
 func detectUSB() {
 	for {
-		if _, err := os.Stat(USBMountPoint); err == nil {
+		// Mount-aware: previously this only checked that the mountpoint
+		// directory existed - which is always true (and stays true after a
+		// format that never remounted) - so the app could believe USB was
+		// mounted when nothing was actually there, then copy files onto the
+		// SD card. Now USB counts as mounted only if the mountpoint is a real
+		// mount (present in /proc/mounts).
+		mounted := false
+		if _, err := usbDevicePath(); err == nil {
+			mounted = true
+		}
+		if mounted {
 			mutex.Lock()
 			usbMounted = true
 			usbSize = getUSBSize()
@@ -656,6 +2330,11 @@ func render() {
 	mutex.Lock()
 	defer mutex.Unlock()
 
+	hwManager.LEDs.Record.Set(isRecording)
+	hwManager.LEDs.Status.Set(infernoState == InfernoRunning)
+
+	pushWaveformSample()
+
 	hwManager.ClearDisplay()
 
 	// Always render status bar first
@@ -664,10 +2343,18 @@ func render() {
 	switch currentState {
 	case StateIdle:
 		renderIdleScreen()
+	case StateIdleBrowse:
+		renderIdleBrowse()
 	case StateRecording:
 		renderRecordingScreen()
+	case StatePlaying:
+		renderPlayingScreen()
+	case StatePaused:
+		renderPlayingScreen()
 	case StateSettings:
 		renderSettingsMenu()
+	case StateSchedule:
+		renderScheduleMenu()
 	case StateCopyFiles:
 		renderCopyFilesMenu()
 	case StateCopying:
@@ -676,6 +2363,16 @@ func render() {
 		renderSystemOptionsMenu()
 	case StateNetworkInfo:
 		renderNetworkInfo()
+	case StateRemoteInfo:
+		renderRemoteInfo()
+	case StateWifi:
+		renderWifiMenu()
+	case StateWifiQR:
+		renderWifiQRScreen()
+	case StateAudio:
+		renderAudioMenu()
+	case StateMetering:
+		renderMeteringMenu()
 	case StateConfirm:
 		renderConfirmDialog()
 	}
@@ -686,7 +2383,14 @@ func render() {
 func renderStatusBar() {
 	sampleRate := sampleRates[sampleRateIdx]
 	// Use FiraCode ligatures: >= <= != === !== -> <- =>
-	formatStr := fmt.Sprintf("WAV %dbit %dkHz %dch", BitsPerSample, sampleRate/1000, channelCount)
+	// MP3 is lossy at a fixed target bitrate, so "bit depth" doesn't apply
+	// the way it does for WAV/FLAC's lossless PCM-derived output.
+	var formatStr string
+	if recordFormat == FormatMP3 {
+		formatStr = fmt.Sprintf("MP3 320k %dkHz %dch", sampleRate/1000, channelCount)
+	} else {
+		formatStr = fmt.Sprintf("%s %dbit %dkHz %dch", formatNames[recordFormat], BitsPerSample, sampleRate/1000, channelCount)
+	}
 
 	// Right side - USB status with enhanced typography
 	rightSide := ""
@@ -706,63 +2410,413 @@ func renderIdleScreen() {
 	// Use context-aware rendering for standby state
 	hwManager.DrawCenteredText("~ Standby ~", "idle", 32)
 
+	// If a record was just refused for lack of space (see onButtonPress),
+	// surface an explicit flashing warning instead of the usual remaining-time
+	// readout so the operator knows why the button did nothing.
+	if time.Now().Before(diskWarnUntil) {
+		blinkOn := time.Now().UnixMilli()/500%2 == 0
+		if blinkOn {
+			hwManager.SwitchToContext("selected")
+			hwManager.DrawCenteredText("LOW DISK <30m", "selected", 48)
+			hwManager.DrawCenteredText("cannot record", "details", 58)
+		}
+		return
+	}
+
 	// Time remaining with enhanced formatting using FiraCode features
 	remaining := estimateRemainingTime()
 	storage := getRemainingStorage()
-	// Use mathematical symbols and arrows for better typography
-	timeText := fmt.Sprintf("⏱ %s (%s) available", formatDuration(remaining), storage)
+	timeText := fmt.Sprintf("%s (%s) available", formatDuration(remaining), storage)
 	hwManager.DrawCenteredText(timeText, "details", 48)
+
+	hwManager.DrawCenteredText("Rotate for input levels", "details", 58)
+}
+
+// idleVUChannelsPerPage caps how many channels' worth of meters fit
+// legibly across the 256px-wide panel at once (see renderIdleVUPage) -
+// wider bars with room for a channel-number label read better on a small
+// OLED than cramming every channel into one page.
+const idleVUChannelsPerPage = 6
+
+// idleVUPageCount is how many VU-meter pages idle-browse needs to cover
+// every recording channel; onEncoderRotate's StateIdleBrowse case pages
+// through these before wrapping into the network/token page.
+func idleVUPageCount() int {
+	pages := (channelCount + idleVUChannelsPerPage - 1) / idleVUChannelsPerPage
+	if pages < 1 {
+		pages = 1
+	}
+	return pages
+}
+
+// vuRangeOptions are the selectable VU-meter floor presets (Settings ->
+// Meter Range); 0dBFS is always the top of the scale.
+var vuRangeOptions = []float64{-48, -60, -72, -90, -120}
+
+// peakHoldOptions are the selectable peak-hold durations (Settings -> Peak
+// Hold) before decayPeakHold starts falling a channel's held peak back
+// toward its instantaneous level; 0 means no hold at all. A ~3s default is
+// the de-facto standard: ITU-R BS.1771 mandates at least 150ms, Pro Tools
+// defaults to 3s, Logic offers 2/4/6s and broadcast practice is 3-5s.
+var peakHoldOptions = []time.Duration{0, 500 * time.Millisecond, 1 * time.Second, 2 * time.Second, 3 * time.Second, 5 * time.Second}
+
+func adjustVURange(direction int) {
+	vuRangeIdx = ((vuRangeIdx+direction)%len(vuRangeOptions) + len(vuRangeOptions)) % len(vuRangeOptions)
+	settingChanged()
+}
+
+func adjustPeakHold(direction int) {
+	peakHoldIdx = ((peakHoldIdx+direction)%len(peakHoldOptions) + len(peakHoldOptions)) % len(peakHoldOptions)
+	settingChanged()
+}
+
+func peakHoldLabel() string {
+	d := peakHoldOptions[peakHoldIdx]
+	if d == 0 {
+		return "Off"
+	}
+	return d.String()
+}
+
+// idleVUCurve is the standard audio-meter log taper shared by the OLED and
+// WebUI meters (see remote.go's client-side VU_CURVE): more of the scale's
+// display height given to the top of the range than the bottom, rather
+// than a plain linear mapping. Expressed as {fraction of the configured
+// range from floor (0.0) to 0dBFS (1.0), display %} pairs so the same
+// curve shape applies whatever floor Settings -> Meter Range currently
+// selects - see idleVUPct.
+var idleVUCurve = [][2]float64{
+	{0, 0}, {0.1667, 7}, {0.3333, 15}, {0.4444, 22}, {0.5556, 30}, {0.6667, 40},
+	{0.7333, 48}, {0.8, 58}, {0.8667, 70}, {0.9, 78}, {0.9333, 85}, {0.9667, 92}, {1, 100},
+}
+
+func idleVUPct(db float64) float64 {
+	floor := vuRangeOptions[vuRangeIdx]
+	frac := (db - floor) / (0 - floor)
+	if frac <= 0 {
+		return idleVUCurve[0][1]
+	}
+	if frac >= 1 {
+		return 100
+	}
+	for i := 1; i < len(idleVUCurve); i++ {
+		if frac <= idleVUCurve[i][0] {
+			lo, hi := idleVUCurve[i-1], idleVUCurve[i]
+			t := (frac - lo[0]) / (hi[0] - lo[0])
+			return lo[1] + t*(hi[1]-lo[1])
+		}
+	}
+	return 100
+}
+
+// decayPeakHold applies peak-hold ballistics to meterChannelPeakHeld: a
+// fresh instantaneous peak from meterReader/demoLoop always wins
+// immediately, but a falling level holds at its peak for
+// peakHoldOptions[peakHoldIdx] before decaying back down at a fixed
+// ~20dB/s rate - the classic "peak lamp" behavior on a real meter, rather
+// than the raw astats value jumping around every reset window. Ticked from
+// peakHoldLoop every 100ms; callers must hold mutex.
+func decayPeakHold() {
+	n := len(meterChannelPeak)
+	if n == 0 {
+		meterChannelPeakHeld = nil
+		peakHeldSetAt = nil
+		return
+	}
+	if len(meterChannelPeakHeld) != n {
+		meterChannelPeakHeld = append([]float64(nil), meterChannelPeak...)
+		peakHeldSetAt = make([]time.Time, n)
+		now := time.Now()
+		for i := range peakHeldSetAt {
+			peakHeldSetAt[i] = now
+		}
+		return
+	}
+
+	now := time.Now()
+	hold := peakHoldOptions[peakHoldIdx]
+	for i, instant := range meterChannelPeak {
+		if instant >= meterChannelPeakHeld[i] {
+			meterChannelPeakHeld[i] = instant
+			peakHeldSetAt[i] = now
+			continue
+		}
+		if hold == 0 || now.Sub(peakHeldSetAt[i]) > hold {
+			meterChannelPeakHeld[i] -= 2.0 // 20dB/s at this loop's 100ms tick
+			if meterChannelPeakHeld[i] < instant {
+				meterChannelPeakHeld[i] = instant
+			}
+		}
+	}
+}
+
+// peakHoldLoop runs decayPeakHold for the app's lifetime, independent of
+// whether new astats samples are currently arriving - a real recording's
+// peaks only update every astats reset window, but the display-facing
+// held value needs to keep decaying smoothly in between those updates too.
+func peakHoldLoop() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		mutex.Lock()
+		decayPeakHold()
+		mutex.Unlock()
+	}
+}
+
+// renderIdleBrowse dispatches to a VU-meter page or, once past the last
+// one, the network/token page - see onEncoderRotate's StateIdleBrowse case
+// for how idleBrowsePage cycles between them.
+func renderIdleBrowse() {
+	vuPages := idleVUPageCount()
+	switch {
+	case idleBrowsePage < vuPages:
+		renderIdleVUPage(idleBrowsePage)
+	case idleBrowsePage == vuPages:
+		renderIdleWaveformPage()
+	default:
+		renderIdleInfoPage()
+	}
+}
+
+// waveformCap bounds how many samples the scrolling waveform history keeps
+// - one per render() tick (see pushWaveformSample), sized to just cover the
+// panel's width so old samples fall off the left edge as new ones arrive
+// on the right, like a real level-history scope trace.
+const waveformCap = DisplayWidth - 4
+
+var waveformHistory []float64
+
+// pushWaveformSample appends the current loudest channel's instantaneous
+// peak (or the overall meterPeakDB if no per-channel data exists, e.g.
+// while idle-browse hasn't started a monitor) to the waveform history.
+// Called from render() every tick regardless of which screen is showing,
+// so the trace is already populated by the time someone pages to it rather
+// than starting blank.
+func pushWaveformSample() {
+	level := meterPeakDB
+	for _, v := range meterChannelPeak {
+		if v > level {
+			level = v
+		}
+	}
+	waveformHistory = append(waveformHistory, level)
+	if len(waveformHistory) > waveformCap {
+		waveformHistory = waveformHistory[len(waveformHistory)-waveformCap:]
+	}
+}
+
+// renderIdleWaveformPage draws the waveform history as a classic
+// symmetric-around-center amplitude trace (like an audio editor's
+// waveform), using the same log taper as the VU meters (idleVUPct) so a
+// loud transient reads the same height here as it would as a VU deflection.
+func renderIdleWaveformPage() {
+	hwManager.SwitchToContext("details")
+	hwManager.DrawText(2, 22, "Waveform")
+
+	const top, bottom = 28, 54
+	mid := (top + bottom) / 2
+	halfH := (bottom - top) / 2
+
+	hwManager.DrawBox(2, mid, waveformCap, 1, 4) // center baseline
+
+	x := 2
+	for _, db := range waveformHistory {
+		h := int(idleVUPct(db) / 100 * float64(halfH))
+		if h > 0 {
+			hwManager.FillBox(x, mid-h, 1, 2*h+1, 12)
+		}
+		x++
+	}
+
+	hwManager.DrawText(2, 58, "Hold to return")
+}
+
+// renderIdleVUPage draws one page of up to idleVUChannelsPerPage input
+// level meters, each as a vertical bar (RMS fill plus a peak-hold cap
+// line) with a shared dB scale - explicitly including -12 and -40 markers
+// - up the left edge. Entering idle-browse (see onEncoderRotate's StateIdle
+// case) starts an input monitor if nothing else is already feeding
+// meterChannelPeak/RMS, so these show live levels even before recording.
+func renderIdleVUPage(page int) {
+	pages := idleVUPageCount()
+	// y=22 is the established safe first-content line elsewhere in this
+	// file (see renderNetworkInfo etc.) - the status bar occupies the rows
+	// above it, and drawing any earlier overlaps its text.
+	hwManager.SwitchToContext("details")
+	hwManager.DrawText(2, 22, fmt.Sprintf("Levels %d/%d", page+1, pages))
+
+	const top, bottom = 30, 54
+	const scaleW = 18
+	barAreaX := scaleW
+	barAreaW := DisplayWidth - barAreaX - 2
+
+	// Ticks scale with the configured floor (Settings -> Meter Range)
+	// rather than fixed values, always at 0, floor, and two points between.
+	floor := vuRangeOptions[vuRangeIdx]
+	for _, db := range []float64{0, -12, floor / 2, floor} {
+		y := bottom - int(idleVUPct(db)/100*float64(bottom-top))
+		hwManager.DrawText(0, y+3, fmt.Sprintf("%d", int(db)))
+		hwManager.DrawBox(scaleW-4, y, 4, 1, 10)
+	}
+
+	start := page * idleVUChannelsPerPage
+	end := start + idleVUChannelsPerPage
+	if end > channelCount {
+		end = channelCount
+	}
+	n := end - start
+	if n < 1 {
+		n = 1
+	}
+	barW := barAreaW / n
+	w := barW - 3
+	if w < 6 {
+		w = 6
+	}
+
+	for i := 0; i < n; i++ {
+		ch := start + i
+		x := barAreaX + i*barW
+		rms, peak := meterSilence, meterSilence
+		if ch < len(meterChannelRMS) {
+			rms = meterChannelRMS[ch]
+		}
+		if ch < len(meterChannelPeakHeld) {
+			peak = meterChannelPeakHeld[ch]
+		}
+
+		hwManager.DrawBox(x, top, w, bottom-top, 6)
+		filledH := int(idleVUPct(rms) / 100 * float64(bottom-top))
+		if filledH > 1 {
+			hwManager.FillBox(x+1, bottom-filledH, w-2, filledH-1, 13)
+		}
+		peakY := bottom - int(idleVUPct(peak)/100*float64(bottom-top))
+		hwManager.DrawBox(x+1, peakY, w-2, 1, 15)
+
+		label := fmt.Sprintf("%d", ch+1)
+		tw := hwManager.GetTextWidth(label)
+		hwManager.DrawText(x+(w-tw)/2, 58, label)
+	}
+}
+
+// renderIdleInfoPage is the page after the last VU meter: the same network
+// details Settings -> Network Info shows, plus the remote-control access
+// token (see remoteAccessInfo) for anyone who wants to hop on the WebUI
+// after checking input levels here.
+func renderIdleInfoPage() {
+	// No separate header - see renderSettingsMenu for why: 256x64 doesn't
+	// have room for a title row above content without colliding with the
+	// status bar, so details start right at the established safe line.
+	details := hwManager.GetDetailedNetworkInfo()
+	y := 22
+	for i, d := range details {
+		if i >= 2 {
+			break
+		}
+		hwManager.DrawCenteredText(d, "details", y)
+		y += 10
+	}
+
+	hwManager.DrawCenteredText("Token: "+formatToken(remoteToken), "selected", y+4)
+	hwManager.DrawCenteredText("Click or hold to return", "details", 58)
 }
 
 func renderRecordingScreen() {
 	elapsed := time.Since(recordStart)
 	remaining := estimateRemainingTime()
 	storage := getRemainingStorage()
-	filename := ""
-
-	if recordingFile != "" {
-		filename = filepath.Base(recordingFile)
-	}
 
 	// Use FiraCode's context-aware recording display with enhanced typography
 	elapsedStr := formatDuration(elapsed)
 	remainingStr := fmt.Sprintf("%s (%s)", formatDuration(remaining), storage)
 
-	hwManager.DrawRecordingStatus(elapsedStr, remainingStr, filename)
+	// When less than diskWarnMinutes of space remains at the current rate,
+	// flash the two-line display on/off every half-second so a long take can't
+	// quietly run out of room. On the blink phase the recording readout is
+	// cleared and replaced by a "LOW DISK" tag (see below), so operators can
+	// see the warning without losing the take.
+	if lowDisk() && time.Now().UnixMilli()/500%2 == 1 {
+		hwManager.ClearDisplay()
+	}
+
+	// The third row shows the level meter rather than the filename while
+	// recording - "am I getting signal" matters more during a live take
+	// than the exact filename, and there's no vertical room on a 64px
+	// display for a fourth line. The filename is still discoverable via
+	// Copy Files, and is deterministic from the timestamp/settings already
+	// shown elsewhere.
+	hwManager.DrawRecordingStatus(elapsedStr, remainingStr, formatMeter())
+
+	if lowDisk() && time.Now().UnixMilli()/500%2 == 1 {
+		// Overlay a flashing "LOW DISK" tag on the blink phase so the warning
+		// is legible rather than the whole screen just turning off.
+		hwManager.SwitchToContext("selected")
+		hwManager.DrawText(8, 22, "LOW DISK")
+	}
+}
+
+// formatMeter renders meterPeakDB/meterRMSDB (updated by meterReader off the
+// recording ffmpeg's astats output - see startRecording) as a compact
+// dB readout. Callers must hold mutex.
+func formatMeter() string {
+	if meterPeakDB <= meterSilence {
+		return "Peak: -- RMS: --"
+	}
+	return fmt.Sprintf("Peak: %.1fdB  RMS: %.1fdB", meterPeakDB, meterRMSDB)
+}
+
+func renderPlayingScreen() {
+	elapsed := playbackPausedElapsed
+	if currentState == StatePlaying {
+		elapsed = time.Since(playbackStart)
+	}
+	filename := ""
+	if playbackFile != "" {
+		filename = filepath.Base(playbackFile)
+	}
+	if currentState == StatePaused {
+		hwManager.DrawPlaybackStatus(formatDuration(elapsed), filename+"  [PAUSED]")
+		return
+	}
+	hwManager.DrawPlaybackStatus(formatDuration(elapsed), filename)
 }
 
 func renderSettingsMenu() {
-	// Use FiraCode header context for the title
-	hwManager.DrawCenteredText("⚙ Settings", "header", 20)
+	// No separate header: at 256x64 there isn't room for a title row above a
+	// scrollable list without it colliding with either the status bar above
+	// or the first item below, so the list starts right under the status bar.
 
-	// Menu items using FiraCode MenuItem rendering
-	sampleRate := sampleRates[sampleRateIdx]
-	sampleRateText := fmt.Sprintf("%dkHz", sampleRate/1000)
-
-	// Use arrow ligatures and enhanced typography
+	// Menu items using FiraCode MenuItem rendering. The top level carries
+	// only sub-menu entries and actions; every parameter lives one level down
+	// (Audio / Metering / WiFi) so the screen stays to a couple of focused
+	// pages instead of a long scroll of ten-odd rows.
 	allItems := []hardware.MenuItem{
-		{Label: "Sample Rate →", Value: sampleRateText},
-		{Label: "Channel Count →", Value: fmt.Sprintf("%d", channelCount)},
+		{Label: "Audio →", Value: fmt.Sprintf("%s %dch", formatNames[recordFormat], channelCount)},
+		{Label: "Metering →", Value: fmt.Sprintf("%ddB", int(vuRangeOptions[vuRangeIdx]))},
+		{Label: "Schedule Recording →", Value: scheduleStatusText()},
 		{Label: "Copy Files →", Value: ""},
 		{Label: "System Options →", Value: ""},
 		{Label: "Network Info →", Value: ""},
+		{Label: "Remote Access →", Value: ""},
 		{Label: "Restart Inferno", Value: getInfernoStatusText()},
+		{Label: "WiFi →", Value: map[bool]string{true: "on", false: "off"}[wifiEnabled]},
 		{Label: "Exit", Value: ""},
 	}
 
 	// Calculate scrolling parameters
 	totalItems := len(allItems)
-	maxVisibleItems := 6
-	
+	maxVisibleItems := 4 // matches what actually fits below the status bar at this font size
+
 	// Update scroll offset based on selected item
 	if selectedMenu < menuScrollOffset {
 		menuScrollOffset = selectedMenu
-	} else if selectedMenu >= menuScrollOffset + maxVisibleItems {
+	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
 		menuScrollOffset = selectedMenu - maxVisibleItems + 1
 	}
 
 	// Ensure scroll offset doesn't go past the end
-	if menuScrollOffset > totalItems - maxVisibleItems {
+	if menuScrollOffset > totalItems-maxVisibleItems {
 		menuScrollOffset = totalItems - maxVisibleItems
 	}
 	if menuScrollOffset < 0 {
@@ -780,8 +2834,8 @@ func renderSettingsMenu() {
 	visibleSelectedIndex := selectedMenu - menuScrollOffset
 
 	// Draw visible items
-	y := 32
-	fontHeight := 12
+	y := 22
+	fontHeight := 13
 
 	for i, item := range visibleItems {
 		// Switch to emphasis font for selected items
@@ -797,7 +2851,15 @@ func renderSettingsMenu() {
 
 		prefix := "  "
 		if i == visibleSelectedIndex {
-			prefix = "> "
+			// "»" (editing this row's value now, rotate to adjust) vs ">"
+			// (navigation cursor, rotate to move) - the two modes rotate
+			// does very different things in, so the row needs to say which
+			// one is active rather than leaving it to be discovered by trial.
+			if editingParameter {
+				prefix = "» "
+			} else {
+				prefix = "> "
+			}
 		}
 
 		// Draw label
@@ -806,11 +2868,18 @@ func renderSettingsMenu() {
 
 		// Draw right-aligned value if present
 		if item.Value != "" {
+			// Extra right margin (32, not 16) vs. the scroll-indicator
+			// column: with 5 of these 11 items carrying a value, any of
+			// them can land as the top visible row when scrolled (offsets
+			// 1-4 all start on a value-bearing row), so - same fix and same
+			// reasoning as renderScheduleMenu - the up arrow at (240,22)
+			// needs guaranteed clearance rather than relying on empty-value
+			// rows happening to end up there.
 			valueWidth := hwManager.GetTextWidth(item.Value)
-			hwManager.DrawText(256-valueWidth-16, y, item.Value)
+			hwManager.DrawText(256-valueWidth-32, y, item.Value)
 		}
 
-		y += fontHeight + 2
+		y += fontHeight
 	}
 
 	// Draw scroll indicators if needed
@@ -818,11 +2887,116 @@ func renderSettingsMenu() {
 		hwManager.SwitchToContext("details")
 		// Up arrow if we can scroll up
 		if menuScrollOffset > 0 {
-			hwManager.DrawText(240, 32, "↑")
+			hwManager.DrawText(240, 22, "↑")
 		}
 		// Down arrow if we can scroll down
-		if menuScrollOffset + maxVisibleItems < totalItems {
-			hwManager.DrawText(240, 52, "↓")
+		if menuScrollOffset+maxVisibleItems < totalItems {
+			hwManager.DrawText(240, 61, "↓")
+		}
+	}
+}
+
+// tagStatusText is the Settings-menu row value for "Tag".
+func tagStatusText() string {
+	if tagPresets[tagPresetIdx] == "" {
+		return "None"
+	}
+	return tagPresets[tagPresetIdx]
+}
+
+// scheduleStatusText is the Settings-menu row value for "Schedule Recording".
+func scheduleStatusText() string {
+	if scheduleArmed {
+		return fmt.Sprintf("%02d:%02d", scheduleHour, scheduleMinute)
+	}
+	return "Off"
+}
+
+func renderScheduleMenu() {
+	// No separate header - see renderSettingsMenu for why.
+	armLabel := "Arm Schedule"
+	if scheduleArmed {
+		armLabel = "Disarm Schedule"
+	}
+	durationText := "Manual stop"
+	if scheduleDuration > 0 {
+		durationText = fmt.Sprintf("%dm", scheduleDuration)
+	}
+	statusText := "Not armed"
+	if scheduleArmed {
+		statusText = "Armed"
+	}
+
+	items := []hardware.MenuItem{
+		{Label: "Hour →", Value: fmt.Sprintf("%02d", scheduleHour)},
+		{Label: "Minute →", Value: fmt.Sprintf("%02d", scheduleMinute)},
+		{Label: "Duration →", Value: durationText},
+		{Label: armLabel, Value: statusText},
+		{Label: "← Exit", Value: ""},
+	}
+
+	totalItems := len(items)
+	maxVisibleItems := 4
+
+	if selectedMenu < menuScrollOffset {
+		menuScrollOffset = selectedMenu
+	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
+		menuScrollOffset = selectedMenu - maxVisibleItems + 1
+	}
+	if menuScrollOffset > totalItems-maxVisibleItems {
+		menuScrollOffset = totalItems - maxVisibleItems
+	}
+	if menuScrollOffset < 0 {
+		menuScrollOffset = 0
+	}
+
+	endIdx := menuScrollOffset + maxVisibleItems
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+	visibleItems := items[menuScrollOffset:endIdx]
+	visibleSelectedIndex := selectedMenu - menuScrollOffset
+
+	y := 22
+	fontHeight := 13
+	for i, item := range visibleItems {
+		if i == visibleSelectedIndex {
+			hwManager.SwitchToContext("selected")
+		} else {
+			hwManager.SwitchToContext("menu")
+		}
+
+		prefix := "  "
+		if i == visibleSelectedIndex {
+			if editingParameter && visibleSelectedIndex <= 2 { // Hour/Minute/Duration are the only editable rows here
+				prefix = "» "
+			} else {
+				prefix = "> "
+			}
+		}
+		hwManager.DrawText(8, y, prefix+item.Label)
+
+		if item.Value != "" {
+			// Extra right margin (32 vs the 16 renderSettingsMenu/
+			// renderSystemOptionsMenu use) vs. the standard scroll-indicator
+			// column: unlike those menus, every row here has a value, so the
+			// value-less-row coincidence that keeps their up arrow clear of
+			// text doesn't hold - Minute's "00" would otherwise sit directly
+			// under the up arrow whenever this 5-item list is scrolled down.
+			valueWidth := hwManager.GetTextWidth(item.Value)
+			hwManager.DrawText(256-valueWidth-32, y, item.Value)
+		}
+
+		y += fontHeight
+	}
+
+	if totalItems > maxVisibleItems {
+		hwManager.SwitchToContext("details")
+		if menuScrollOffset > 0 {
+			hwManager.DrawText(240, 22, "↑")
+		}
+		if menuScrollOffset+maxVisibleItems < totalItems {
+			hwManager.DrawText(240, 61, "↓")
 		}
 	}
 }
@@ -841,11 +3015,9 @@ func getInfernoStatusText() string {
 	}
 }
 
-
-
 func renderCopyFilesMenu() {
-	// Use FiraCode header with USB symbol
-	hwManager.DrawCenteredText("📁 → USB Copy", "header", 20)
+	// No separate header - see renderSettingsMenu for why: at 256x64 there's
+	// no room for a title row without it colliding with the list below it.
 
 	// Create fixed menu items
 	fixedMenuItems := []hardware.MenuItem{
@@ -855,19 +3027,19 @@ func renderCopyFilesMenu() {
 	}
 
 	// Calculate scrolling parameters for file list
-	maxVisibleFiles := 2 // Max file items that fit on screen after header and fixed items
+	maxVisibleFiles := 1 // matches what actually fits below the 3 fixed items at this font size
 	totalItems := len(fixedMenuItems) + len(allFiles)
 	fixedItemsCount := len(fixedMenuItems)
 
 	// Update scroll offset based on selected item
 	if selectedMenu < menuScrollOffset {
 		menuScrollOffset = selectedMenu
-	} else if selectedMenu >= menuScrollOffset + fixedItemsCount + maxVisibleFiles {
+	} else if selectedMenu >= menuScrollOffset+fixedItemsCount+maxVisibleFiles {
 		menuScrollOffset = selectedMenu - fixedItemsCount - maxVisibleFiles + 1
 	}
 
 	// Ensure scroll offset doesn't go past the end
-	if menuScrollOffset > totalItems - fixedItemsCount - maxVisibleFiles {
+	if menuScrollOffset > totalItems-fixedItemsCount-maxVisibleFiles {
 		menuScrollOffset = totalItems - fixedItemsCount - maxVisibleFiles
 	}
 	if menuScrollOffset < 0 {
@@ -875,7 +3047,7 @@ func renderCopyFilesMenu() {
 	}
 
 	// Draw fixed menu items first
-	y := 32
+	y := 22
 	fontHeight := hwManager.GetFontHeight()
 
 	for i, item := range fixedMenuItems {
@@ -898,7 +3070,7 @@ func renderCopyFilesMenu() {
 			hwManager.DrawText(256-valueWidth-16, y, item.Value)
 		}
 
-		y += fontHeight + 2
+		y += fontHeight
 	}
 
 	// Draw visible file items with scrolling
@@ -948,7 +3120,7 @@ func renderCopyFilesMenu() {
 		}
 
 		hwManager.DrawText(8, y, fmt.Sprintf("%s%s %s", prefix, checkbox, displayName))
-		y += fontHeight + 2
+		y += fontHeight
 	}
 
 	// Draw scroll indicators if needed
@@ -956,49 +3128,322 @@ func renderCopyFilesMenu() {
 		hwManager.SwitchToContext("details")
 		// Up arrow if we can scroll up
 		if fileStartIdx > 0 {
-			hwManager.DrawText(240, 48, "↑")
+			hwManager.DrawText(240, 50, "↑")
 		}
 		// Down arrow if we can scroll down
 		if endIdx < len(allFiles) {
-			hwManager.DrawText(240, 58, "↓")
+			hwManager.DrawText(240, 63, "↓")
 		}
 	}
 }
 
 func renderCopyProgress() {
 	// Use FiraCode progress bar with enhanced typography
-	title := "📁 → USB Copying..."
-	details := "Hold encoder 3s to cancel"
+	title := "Copying to USB..."
 
 	// Calculate estimated remaining time
-	remainingText := "⏱ Calculating..."
+	remainingText := "Calculating..."
 	if copyProgress > 0 {
 		// Simple estimation based on current progress
-		remainingText = "⏱ ~02:34 remaining"
+		remainingText = "~02:34 remaining"
 	}
 
-	// Use context-aware progress bar rendering
-	hwManager.DrawProgressBar(title, float64(copyProgress), remainingText)
+	// Folded into one line - a 64px display has no room for the bar,
+	// percentage, remaining time, and a cancel hint as four separate rows.
+	details := remainingText + " - hold 3s to cancel"
 
-	// Add cancel instruction at bottom
-	hwManager.DrawCenteredText(details, "details", 58)
+	hwManager.DrawProgressBar(title, float64(copyProgress), details)
 }
 
-func renderSystemOptionsMenu() {
-	// Use FiraCode header with system icon
-	hwManager.DrawCenteredText("⚡ System Options", "header", 20)
-
-	// Menu items with enhanced icons and typography
+// renderWifiMenu draws the WiFi access-point submenu (StateWifi): a tiny
+// three-row list - Enable AP (on/off toggle), Show QR, Back. Reuses the
+// same scrolling/menu logic pattern as renderSettingsMenu.
+func renderWifiMenu() {
 	items := []hardware.MenuItem{
-		{Label: "🗑 Delete All Recordings", Value: ""},
-		{Label: "💾 Format USB Drive", Value: ""},
-		{Label: "🔌 Shutdown System", Value: ""},
-		{Label: "🔄 Restart System", Value: ""},
+		{Label: "WiFi AP →", Value: map[bool]string{true: "on", false: "off"}[wifiEnabled]},
+		{Label: "WiFi QR →", Value: ""},
+		{Label: "← Back", Value: ""},
+	}
+	totalItems := len(items)
+	maxVisibleItems := 4
+
+	if selectedMenu < menuScrollOffset {
+		menuScrollOffset = selectedMenu
+	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
+		menuScrollOffset = selectedMenu - maxVisibleItems + 1
+	}
+	if menuScrollOffset > totalItems-maxVisibleItems {
+		menuScrollOffset = totalItems - maxVisibleItems
+	}
+	if menuScrollOffset < 0 {
+		menuScrollOffset = 0
+	}
+
+	endIdx := menuScrollOffset + maxVisibleItems
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+	visibleItems := items[menuScrollOffset:endIdx]
+	visibleSelectedIndex := selectedMenu - menuScrollOffset
+
+	y := 22
+	fontHeight := 13
+
+	for i, item := range visibleItems {
+		if i == visibleSelectedIndex {
+			if err := hwManager.SwitchToContext("selected"); err != nil {
+				return
+			}
+		} else {
+			if err := hwManager.SwitchToContext("menu"); err != nil {
+				return
+			}
+		}
+
+		prefix := "  "
+		if i == visibleSelectedIndex {
+			prefix = "> "
+		}
+
+		labelText := prefix + item.Label
+		hwManager.DrawText(8, y, labelText)
+
+		if item.Value != "" {
+			valueWidth := hwManager.GetTextWidth(item.Value)
+			hwManager.DrawText(256-valueWidth-32, y, item.Value)
+		}
+		y += fontHeight
+	}
+
+	if totalItems > maxVisibleItems {
+		hwManager.SwitchToContext("details")
+		if menuScrollOffset > 0 {
+			hwManager.DrawText(240, 22, "↑")
+		}
+		if menuScrollOffset+maxVisibleItems < totalItems {
+			hwManager.DrawText(240, 61, "↓")
+		}
+	}
+}
+
+// renderAudioMenu draws the Audio submenu (StateAudio): Sample Rate, Channel
+// Count, Format, Tag, Back. Reuses the same scrolling/menu logic pattern as
+// renderWifiMenu, with the editing-cursor prefix from renderSettingsMenu.
+func renderAudioMenu() {
+	items := []hardware.MenuItem{
+		{Label: "Sample Rate →", Value: fmt.Sprintf("%dkHz", sampleRates[sampleRateIdx]/1000)},
+		{Label: "Channel Count →", Value: fmt.Sprintf("%d", channelCount)},
+		{Label: "Format →", Value: formatNames[recordFormat]},
+		{Label: "Tag →", Value: tagStatusText()},
+		{Label: "← Back", Value: ""},
+	}
+	totalItems := len(items)
+	maxVisibleItems := 4
+
+	if selectedMenu < menuScrollOffset {
+		menuScrollOffset = selectedMenu
+	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
+		menuScrollOffset = selectedMenu - maxVisibleItems + 1
+	}
+	if menuScrollOffset > totalItems-maxVisibleItems {
+		menuScrollOffset = totalItems - maxVisibleItems
+	}
+	if menuScrollOffset < 0 {
+		menuScrollOffset = 0
+	}
+
+	endIdx := menuScrollOffset + maxVisibleItems
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+	visibleItems := items[menuScrollOffset:endIdx]
+	visibleSelectedIndex := selectedMenu - menuScrollOffset
+
+	y := 22
+	fontHeight := 13
+
+	for i, item := range visibleItems {
+		if i == visibleSelectedIndex {
+			if err := hwManager.SwitchToContext("selected"); err != nil {
+				return
+			}
+		} else {
+			if err := hwManager.SwitchToContext("menu"); err != nil {
+				return
+			}
+		}
+
+		prefix := "  "
+		if i == visibleSelectedIndex {
+			// "»" (editing this row's value now, rotate to adjust) vs ">"
+			// (navigation cursor, rotate to move) - the two modes rotate
+			// does very different things in, so the row needs to say which
+			// one is active rather than leaving it to be discovered by trial.
+			if editingParameter {
+				prefix = "» "
+			} else {
+				prefix = "> "
+			}
+		}
+
+		labelText := prefix + item.Label
+		hwManager.DrawText(8, y, labelText)
+
+		if item.Value != "" {
+			valueWidth := hwManager.GetTextWidth(item.Value)
+			hwManager.DrawText(256-valueWidth-32, y, item.Value)
+		}
+		y += fontHeight
+	}
+
+	if totalItems > maxVisibleItems {
+		hwManager.SwitchToContext("details")
+		if menuScrollOffset > 0 {
+			hwManager.DrawText(240, 22, "↑")
+		}
+		if menuScrollOffset+maxVisibleItems < totalItems {
+			hwManager.DrawText(240, 61, "↓")
+		}
+	}
+}
+
+// renderMeteringMenu draws the Metering submenu (StateMetering): Meter Range,
+// Peak Hold, Back. Reuses the same scrolling/menu logic pattern as
+// renderWifiMenu, with the editing-cursor prefix from renderSettingsMenu.
+func renderMeteringMenu() {
+	items := []hardware.MenuItem{
+		{Label: "Meter Range →", Value: fmt.Sprintf("%ddB", int(vuRangeOptions[vuRangeIdx]))},
+		{Label: "Peak Hold →", Value: peakHoldLabel()},
+		{Label: "← Back", Value: ""},
+	}
+	totalItems := len(items)
+	maxVisibleItems := 4
+
+	if selectedMenu < menuScrollOffset {
+		menuScrollOffset = selectedMenu
+	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
+		menuScrollOffset = selectedMenu - maxVisibleItems + 1
+	}
+	if menuScrollOffset > totalItems-maxVisibleItems {
+		menuScrollOffset = totalItems - maxVisibleItems
+	}
+	if menuScrollOffset < 0 {
+		menuScrollOffset = 0
+	}
+
+	endIdx := menuScrollOffset + maxVisibleItems
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+	visibleItems := items[menuScrollOffset:endIdx]
+	visibleSelectedIndex := selectedMenu - menuScrollOffset
+
+	y := 22
+	fontHeight := 13
+
+	for i, item := range visibleItems {
+		if i == visibleSelectedIndex {
+			if err := hwManager.SwitchToContext("selected"); err != nil {
+				return
+			}
+		} else {
+			if err := hwManager.SwitchToContext("menu"); err != nil {
+				return
+			}
+		}
+
+		prefix := "  "
+		if i == visibleSelectedIndex {
+			// "»" (editing this row's value now, rotate to adjust) vs ">"
+			// (navigation cursor, rotate to move) - the two modes rotate
+			// does very different things in, so the row needs to say which
+			// one is active rather than leaving it to be discovered by trial.
+			if editingParameter {
+				prefix = "» "
+			} else {
+				prefix = "> "
+			}
+		}
+
+		labelText := prefix + item.Label
+		hwManager.DrawText(8, y, labelText)
+
+		if item.Value != "" {
+			valueWidth := hwManager.GetTextWidth(item.Value)
+			hwManager.DrawText(256-valueWidth-32, y, item.Value)
+		}
+		y += fontHeight
+	}
+
+	if totalItems > maxVisibleItems {
+		hwManager.SwitchToContext("details")
+		if menuScrollOffset > 0 {
+			hwManager.DrawText(240, 22, "↑")
+		}
+		if menuScrollOffset+maxVisibleItems < totalItems {
+			hwManager.DrawText(240, 61, "↓")
+		}
+	}
+}
+
+func renderSystemOptionsMenu() { // No separate header - see renderSettingsMenu for why. 5 items don't all
+	// fit at once either, so this scrolls the same way Settings does.
+	items := []hardware.MenuItem{
+		{Label: "Delete All Recordings", Value: ""},
+		{Label: "Format USB Drive", Value: ""},
+		{Label: "Shutdown System", Value: ""},
+		{Label: "Restart System", Value: ""},
 		{Label: "← Exit", Value: ""},
 	}
 
-	// Use context-aware menu rendering
-	hwManager.DrawMenuItems(items, selectedMenu)
+	totalItems := len(items)
+	maxVisibleItems := 4
+
+	if selectedMenu < menuScrollOffset {
+		menuScrollOffset = selectedMenu
+	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
+		menuScrollOffset = selectedMenu - maxVisibleItems + 1
+	}
+	if menuScrollOffset > totalItems-maxVisibleItems {
+		menuScrollOffset = totalItems - maxVisibleItems
+	}
+	if menuScrollOffset < 0 {
+		menuScrollOffset = 0
+	}
+
+	endIdx := menuScrollOffset + maxVisibleItems
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+	visibleItems := items[menuScrollOffset:endIdx]
+	visibleSelectedIndex := selectedMenu - menuScrollOffset
+
+	y := 22
+	fontHeight := 13
+	for i, item := range visibleItems {
+		if i == visibleSelectedIndex {
+			hwManager.SwitchToContext("selected")
+		} else {
+			hwManager.SwitchToContext("menu")
+		}
+
+		prefix := "  "
+		if i == visibleSelectedIndex {
+			prefix = "> "
+		}
+		hwManager.DrawText(8, y, prefix+item.Label)
+		y += fontHeight
+	}
+
+	if totalItems > maxVisibleItems {
+		hwManager.SwitchToContext("details")
+		if menuScrollOffset > 0 {
+			hwManager.DrawText(240, 22, "↑")
+		}
+		if menuScrollOffset+maxVisibleItems < totalItems {
+			hwManager.DrawText(240, 61, "↓")
+		}
+	}
 }
 
 func renderConfirmDialog() {
@@ -1006,23 +3451,23 @@ func renderConfirmDialog() {
 
 	switch menuMode {
 	case DeleteConfirm:
-		title = "⚠ CONFIRM DELETE"
+		title = "CONFIRM DELETE"
 		message1 = "Delete ALL recordings?"
 		message2 = "This action cannot be undone!"
 	case FormatConfirm:
-		title = "⚠ CONFIRM FORMAT"
+		title = "CONFIRM FORMAT"
 		message1 = "Format USB drive?"
 		message2 = "All data will be lost!"
 	case ShutdownConfirm:
-		title = "🔌 SHUTDOWN"
+		title = "SHUTDOWN"
 		message1 = "Power off the system?"
 		message2 = ""
 	case RestartConfirm:
-		title = "🔄 RESTART"
+		title = "RESTART"
 		message1 = "Restart the system?"
 		message2 = ""
 	case InfernoRestartConfirm:
-		title = "🔥 RESTART INFERNO"
+		title = "RESTART INFERNO"
 		message1 = "Restart Inferno server?"
 		message2 = "Will reconnect audio stream"
 	}
@@ -1037,37 +3482,52 @@ func renderConfirmDialog() {
 }
 
 func renderNetworkInfo() {
-	// Use FiraCode header with network icon
-	hwManager.DrawCenteredText("🌐 Network Information", "header", 16)
-
-	// Get detailed network information
+	// No separate header - see renderSettingsMenu for why.
 	networkDetails := hwManager.GetDetailedNetworkInfo()
 
-	// Display network information
-	y := 28
-	maxLines := 4 // Limit to fit on screen
+	y := 22
+	maxLines := 3 // Limit to fit above the footer line
 	for i, detail := range networkDetails {
 		if i >= maxLines {
 			break
 		}
 
-		// Use different contexts for different types of info
+		// Use different contexts for different types of info. "selected"
+		// (bold but same point size as neighbors) highlights the connected
+		// status without the layout jump "emphasis" causes at its 16pt size.
 		context := "details"
 		if i == 0 { // Interface name
 			context = "menu"
 		} else if strings.Contains(detail, "Status:") {
 			if strings.Contains(detail, "Connected") {
-				context = "emphasis"
+				context = "selected"
 			} else {
 				context = "details"
 			}
 		}
 
 		hwManager.DrawCenteredText(detail, context, y)
-		y += 10
+		y += 11
 	}
 
 	// Add back instruction
+	hwManager.DrawCenteredText("Hold encoder to return", "details", 58)
+}
+
+func renderRemoteInfo() {
+	// No separate header - see renderSettingsMenu for why.
+	lines := remoteAccessInfo()
+
+	y := 22
+	for i, line := range lines {
+		context := "details"
+		if i == 0 {
+			context = "menu"
+		}
+		hwManager.DrawCenteredText(line, context, y)
+		y += 11
+	}
+
 	hwManager.DrawCenteredText("Hold encoder to return", "details", 58)
 }
 
@@ -1080,10 +3540,42 @@ func formatDuration(d time.Duration) string {
 }
 
 func estimateRemainingTime() time.Duration {
-	sampleRate := sampleRates[sampleRateIdx]
-	bytesPerSec := float64(sampleRate * channelCount * BitsPerSample / 8)
 	free := getFreeSpace()
+	bytesPerSec := recordingBytesPerSecond()
+	if bytesPerSec <= 0 {
+		return 0
+	}
 	return time.Duration(float64(free)/bytesPerSec) * time.Second
+}
+
+// lowDisk reports whether the current storage can't sustain more than
+// diskWarnMinutes of recording at the currently configured rate. An estimate
+// of 0 (unavailable/unwritable storage) is deliberately not treated as "low" -
+// that would spam warnings; the recording path already fails cleanly if the
+// FIFO/disk isn't there.
+const diskWarnMinutes = 30
+
+func lowDisk() bool {
+	r := estimateRemainingTime()
+	return r > 0 && r < diskWarnMinutes*time.Minute
+}
+
+// recordingBytesPerSecond estimates on-disk output rate for the current
+// format. WAV/FLAC are derived from the raw PCM rate; FLAC is lossless but
+// variable-rate, so ~55% of raw PCM is used as a representative average for
+// real-world program material rather than claiming false precision. MP3 is
+// fixed-bitrate CBR, independent of sample rate or channel count.
+func recordingBytesPerSecond() float64 {
+	sampleRate := sampleRates[sampleRateIdx]
+	switch recordFormat {
+	case FormatMP3:
+		return 320000.0 / 8.0
+	case FormatFLAC:
+		raw := float64(sampleRate * channelCount * OutputBitsPerSample / 8)
+		return raw * 0.55
+	default: // FormatWAV
+		return float64(sampleRate * channelCount * OutputBitsPerSample / 8)
+	}
 }
 
 func getRemainingStorage() string {

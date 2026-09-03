@@ -1,0 +1,2311 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"html/template"
+	"log"
+	"math"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/skip2/go-qrcode"
+	"golang.org/x/net/websocket"
+
+	"pi9696/hardware"
+)
+
+// remoteToken gates every route except /login. It's generated fresh at each
+// process startup (never persisted to disk) and shown on the OLED via
+// Settings -> Remote Access, so reading it requires physical/console access
+// to the device - the same trust model as the rest of this app's local-only
+// controls, just extended to the LAN.
+//
+// It's short (8 chars from a 32-symbol alphabet, ~40 bits of entropy)
+// because it has to fit on a 256px-wide OLED line and be typeable from a
+// phone; loginLimiter's lockout is what keeps that from being brute-forceable
+// over the network in practice, not the raw length. Displayed (OLED, login
+// page) as two groups of 4 for readability - see formatToken.
+var remoteToken string
+
+const (
+	remoteTokenLength   = 8
+	remoteTokenAlphabet = "23456789ABCDEFGHJKMNPQRSTUVWXYZ" // Crockford-style, no 0/O/1/I/L - avoids exactly the characters most likely to be misread on a small OLED
+)
+
+func generateRemoteToken() string {
+	b := make([]byte, remoteTokenLength)
+	if _, err := rand.Read(b); err != nil {
+		log.Fatalf("Failed to generate remote control token: %v", err)
+	}
+	out := make([]byte, len(b))
+	for i, c := range b {
+		out[i] = remoteTokenAlphabet[int(c)%len(remoteTokenAlphabet)]
+	}
+	return string(out)
+}
+
+// formatToken renders a token as two groups of 4 for readability, e.g.
+// "K7M2QX9F" -> "K7M2 QX9F". Display-only - the raw unseparated string is
+// what's actually stored/compared.
+func formatToken(t string) string {
+	if len(t) != remoteTokenLength {
+		return t
+	}
+	return t[:4] + " " + t[4:]
+}
+
+// normalizeToken strips whatever separator a user typed between the two
+// groups, so "K7M2 QX9F", "K7M2-QX9F", and "K7M2QX9F" all compare equal.
+func normalizeToken(s string) string {
+	return strings.NewReplacer(" ", "", "-", "").Replace(s)
+}
+
+const remoteSessionCookie = "pi9696_session"
+
+// loginLimiter blunts online guessing of the short token: 5 failed attempts
+// from an IP locks that IP out for a minute. Deliberately separate from the
+// app's UI mutex - this only ever guards its own map, never app state.
+type loginLimiter struct {
+	mu       sync.Mutex
+	failures map[string]int
+	lockedAt map[string]time.Time
+}
+
+func newLoginLimiter() *loginLimiter {
+	return &loginLimiter{failures: make(map[string]int), lockedAt: make(map[string]time.Time)}
+}
+
+func (l *loginLimiter) allowed(ip string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if until, ok := l.lockedAt[ip]; ok {
+		if time.Since(until) < 60*time.Second {
+			return false
+		}
+		delete(l.lockedAt, ip)
+		delete(l.failures, ip)
+	}
+	return true
+}
+
+func (l *loginLimiter) recordFailure(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.failures[ip]++
+	if l.failures[ip] >= 5 {
+		l.lockedAt[ip] = time.Now()
+	}
+}
+
+func (l *loginLimiter) recordSuccess(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	delete(l.failures, ip)
+	delete(l.lockedAt, ip)
+}
+
+var loginLimit = newLoginLimiter()
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+
+// validSession does a constant-time comparison to avoid leaking the token
+// via response-timing side channels.
+func validSession(r *http.Request) bool {
+	c, err := r.Cookie(remoteSessionCookie)
+	if err != nil {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(remoteToken)) == 1
+}
+
+func requireAuth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !validSession(r) {
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// pi9696LogoSVG is a small inline vector wordmark shared by the login and
+// dashboard pages - a chrome-gradient italic wordmark with speed-line
+// flourishes and thin accent bars, styled after 1980s corporate logotypes
+// (Tandy/Compaq/NBC-era). An inline SVG needs no raster asset shipped or
+// fetched, which matters on a device that has to work with no internet
+// access, and it scales cleanly from the login page's large mark down to
+// the dashboard header's small one.
+const pi9696LogoSVG = `<svg class="logo-svg" viewBox="0 0 320 110" xmlns="http://www.w3.org/2000/svg">
+<defs>
+<linearGradient id="chrome" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#eafcff"/><stop offset="30%" stop-color="#00d9ff"/>
+<stop offset="70%" stop-color="#0066ff"/><stop offset="100%" stop-color="#021a33"/>
+</linearGradient>
+<linearGradient id="bar" x1="0" y1="0" x2="1" y2="0">
+<stop offset="0%" stop-color="#0066ff" stop-opacity="0"/><stop offset="50%" stop-color="#00d9ff"/>
+<stop offset="100%" stop-color="#0066ff" stop-opacity="0"/>
+</linearGradient>
+</defs>
+<g stroke="#123a52" stroke-width="1.5" opacity="0.7">
+<line x1="4" y1="96" x2="70" y2="80"/><line x1="4" y1="104" x2="86" y2="88"/>
+<line x1="316" y1="96" x2="250" y2="80"/><line x1="316" y1="104" x2="234" y2="88"/>
+</g>
+<rect x="30" y="24" width="260" height="2" fill="url(#bar)"/>
+<text x="160" y="72" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="52" font-weight="900" font-style="italic" fill="url(#chrome)" textLength="260" lengthAdjust="spacingAndGlyphs">PI9696</text>
+<rect x="30" y="82" width="260" height="2" fill="url(#bar)"/>
+<text x="160" y="102" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="10" fill="#5b8aa8" textLength="260" lengthAdjust="spacingAndGlyphs">MULTITRACK RECORDER</text>
+</svg>`
+
+// pi9696IconSVG is the PWA/home-screen icon - a square mark reusing the
+// dashboard's reel-hub motif (see the .reel SVGs in dashboardTmpl) rather
+// than inventing a second visual language just for the icon. Served as-is
+// (image/svg+xml): every modern mobile browser that supports "Add to Home
+// Screen" for a PWA accepts an SVG manifest icon, so no PNG rasterizer
+// dependency is needed.
+const pi9696IconSVG = `<svg viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg">
+<defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+<stop offset="0%" stop-color="#00d9ff"/><stop offset="100%" stop-color="#0066ff"/>
+</linearGradient></defs>
+<rect width="192" height="192" rx="34" fill="#020509"/>
+<circle cx="96" cy="96" r="74" fill="none" stroke="url(#g)" stroke-width="6"/>
+<g fill="none" stroke="url(#g)" stroke-width="6">
+<path d="M96 96 L68 40 Q96 24 124 40 Z" transform="rotate(0 96 96)"/>
+<path d="M96 96 L68 40 Q96 24 124 40 Z" transform="rotate(120 96 96)"/>
+<path d="M96 96 L68 40 Q96 24 124 40 Z" transform="rotate(240 96 96)"/>
+</g>
+<circle cx="96" cy="96" r="17" fill="url(#g)"/>
+</svg>`
+
+func handleIcon(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "image/svg+xml")
+	fmt.Fprint(w, pi9696IconSVG)
+}
+
+// manifestTmpl embeds the current device name so an installed home-screen
+// icon reflects a renamed unit without a rebuild. start_url ("/") requires
+// auth like every other route - opening the installed app when the session
+// cookie has expired just lands on /login, same as any bookmark would.
+var manifestTmpl = template.Must(template.New("manifest").Parse(`{
+  "name": "{{.DeviceName}} Remote",
+  "short_name": "{{.DeviceName}}",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#020509",
+  "theme_color": "#00d9ff",
+  "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
+}`))
+
+func handleManifest(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	name := deviceName
+	mutex.Unlock()
+	w.Header().Set("Content-Type", "application/manifest+json")
+	manifestTmpl.Execute(w, struct{ DeviceName string }{name})
+}
+
+type loginPageData struct {
+	Error, DeviceName string
+	Logo              template.HTML
+}
+
+var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
+<html><head><title>{{.DeviceName}} Remote</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at center,#0a1a2e,#020509 75%);color:#cfeeff;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
+.logo-svg{width:480px;max-width:85vw;display:block}
+form{background:#0a1526;padding:2em 3em;border-radius:10px;border:1px solid #0f3a5c;box-shadow:0 0 30px rgba(0,180,255,0.15);text-align:center}
+.token-row{display:flex;align-items:center;justify-content:center;gap:0.4em;margin-bottom:1em}
+.token-row input{font-family:inherit;font-size:1.3em;width:1.4em;padding:0.4em 0;background:#08192b;color:#cfeeff;border:1px solid #0f3a5c;border-radius:4px;text-align:center;text-transform:uppercase}
+.token-row input:focus{outline:none;border-color:#00d9ff;box-shadow:0 0 8px #00d9ff}
+.token-row .dash{color:#5b8aa8;font-size:1.3em}
+button{font-family:inherit;font-size:1.1em;padding:0.5em 1.2em;background:#08192b;color:#00d9ff;border:1px solid #0f3a5c;border-radius:4px;cursor:pointer}
+button:hover{border-color:#00d9ff;box-shadow:0 0 8px #00d9ff}
+.err{color:#ff3355}
+.hint{color:#5b8aa8;font-size:0.85em;margin-top:1em}
+
+@media (max-width: 480px) {
+  form{padding:1.5em 1.2em}
+  .token-row{gap:0.25em}
+  .token-row input{width:1.1em;font-size:1.1em}
+}
+</style></head>
+<body>
+{{.Logo}}
+<form method="POST" action="/login" id="loginForm">
+{{if .Error}}<p class="err">{{.Error}}</p>{{end}}
+<div class="token-row" id="tokenRow">
+<input maxlength="1" autofocus autocomplete="off">
+<input maxlength="1" autocomplete="off">
+<input maxlength="1" autocomplete="off">
+<input maxlength="1" autocomplete="off">
+<span class="dash">-</span>
+<input maxlength="1" autocomplete="off">
+<input maxlength="1" autocomplete="off">
+<input maxlength="1" autocomplete="off">
+<input maxlength="1" autocomplete="off">
+</div>
+<input type="hidden" name="token" id="tokenValue">
+<button type="submit">Enter</button>
+<p class="hint">8-character code shown on the OLED (Settings &rarr; Remote Access)</p>
+</form>
+<script>
+// One box per character, auto-advancing focus, joined into the hidden
+// "token" field the existing /login handler already expects (it strips
+// separators itself via normalizeToken, so the dash here is display-only).
+var boxes = document.querySelectorAll('#tokenRow input');
+boxes.forEach(function(box, i) {
+  box.addEventListener('input', function() {
+    box.value = box.value.toUpperCase();
+    if (box.value && i < boxes.length - 1) boxes[i + 1].focus();
+  });
+  box.addEventListener('keydown', function(e) {
+    if (e.key === 'Backspace' && !box.value && i > 0) boxes[i - 1].focus();
+  });
+  box.addEventListener('paste', function(e) {
+    e.preventDefault();
+    var chars = (e.clipboardData.getData('text') || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase().split('');
+    for (var j = 0; j < chars.length && i + j < boxes.length; j++) boxes[i + j].value = chars[j];
+    boxes[Math.min(i + chars.length, boxes.length - 1)].focus();
+  });
+});
+document.getElementById('loginForm').addEventListener('submit', function() {
+  document.getElementById('tokenValue').value = Array.from(boxes).map(function(b) { return b.value; }).join('');
+});
+</script>
+</body></html>`))
+
+func handleLoginGet(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	name := deviceName
+	mutex.Unlock()
+	loginPageTmpl.Execute(w, loginPageData{DeviceName: name, Logo: template.HTML(pi9696LogoSVG)})
+}
+
+func handleLoginPost(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	name := deviceName
+	mutex.Unlock()
+	ip := clientIP(r)
+	if !loginLimit.allowed(ip) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		loginPageTmpl.Execute(w, loginPageData{Error: "Too many attempts, wait a minute", DeviceName: name, Logo: template.HTML(pi9696LogoSVG)})
+		return
+	}
+
+	submitted := normalizeToken(r.FormValue("token"))
+	if subtle.ConstantTimeCompare([]byte(submitted), []byte(remoteToken)) != 1 {
+		loginLimit.recordFailure(ip)
+		w.WriteHeader(http.StatusUnauthorized)
+		loginPageTmpl.Execute(w, loginPageData{Error: "Invalid token", DeviceName: name, Logo: template.HTML(pi9696LogoSVG)})
+		return
+	}
+
+	loginLimit.recordSuccess(ip)
+	http.SetCookie(w, &http.Cookie{
+		Name:     remoteSessionCookie,
+		Value:    remoteToken,
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+		// No Secure flag: this server is plain HTTP (see PROJECT_STATUS.md's
+		// remote-control notes for why, and what that means for LAN
+		// eavesdropping risk).
+		MaxAge: 3600 * 12,
+	})
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, &http.Cookie{Name: remoteSessionCookie, Path: "/", MaxAge: -1})
+	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+type dashboardData struct {
+	DeviceName           string
+	Logo                 template.HTML
+	VURangeFragment      template.HTML
+	PeakHoldFragment     template.HTML
+	SampleRateFragment   template.HTML
+	ChannelCountFragment template.HTML
+	FormatFragment       template.HTML
+	TagFragment          template.HTML
+	TransportFragment    template.HTML
+	WifiEnabled          bool
+	WifiSSID             string
+	WifiPassword         string
+	WifiQRFragment       template.HTML
+	TransportIcon        bool
+}
+
+// optionsView is the shared shape behind the Meter Range/Peak Hold select
+// fragments - both the initial dashboard render and their own htmx POST
+// handlers execute the same fragment templates against this, so there's
+// exactly one place that builds their markup (see vuRangeFragmentTmpl/
+// peakHoldFragmentTmpl).
+type optionsView struct {
+	Options []string
+	Idx     int
+}
+
+func vuRangeOptionsView() optionsView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	opts := make([]string, len(vuRangeOptions))
+	for i, v := range vuRangeOptions {
+		opts[i] = fmt.Sprintf("%d", int(v))
+	}
+	return optionsView{Options: opts, Idx: vuRangeIdx}
+}
+
+func peakHoldOptionsView() optionsView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	opts := make([]string, len(peakHoldOptions))
+	for i, d := range peakHoldOptions {
+		if d == 0 {
+			opts[i] = "Off"
+		} else {
+			opts[i] = d.String()
+		}
+	}
+	return optionsView{Options: opts, Idx: peakHoldIdx}
+}
+
+func sampleRateOptionsView() optionsView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	opts := make([]string, len(sampleRates))
+	for i, r := range sampleRates {
+		opts[i] = fmt.Sprintf("%dkHz", r/1000)
+	}
+	return optionsView{Options: opts, Idx: sampleRateIdx}
+}
+
+// currentChannelCountView carries the data the channel-count setting needs:
+// a direct numeric input (1..MaxChannelCount) rather than a dropdown, since
+// the legal range is wide and every value is valid.
+type channelCountView struct {
+	Count int
+	Max   int
+}
+
+func currentChannelCountView() channelCountView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return channelCountView{Count: channelCount, Max: MaxChannelCount}
+}
+
+func formatOptionsView() optionsView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	opts := make([]string, len(formatNames))
+	copy(opts, formatNames)
+	return optionsView{Options: opts, Idx: int(recordFormat)}
+}
+
+func tagOptionsView() optionsView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	opts := make([]string, len(tagPresets))
+	for i, t := range tagPresets {
+		if t == "" {
+			opts[i] = "None"
+		} else {
+			opts[i] = t
+		}
+	}
+	return optionsView{Options: opts, Idx: tagPresetIdx}
+}
+
+var vuRangeFragmentTmpl = template.Must(template.New("vurange").Parse(`<div id="vurange" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/vu-range" hx-target="#vurange" hx-swap="outerHTML">
+<label>Meter Range</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}dBFS</option>{{end}}
+</select>
+</form>
+</div>
+</div>`))
+
+var peakHoldFragmentTmpl = template.Must(template.New("peakhold").Parse(`<div id="peakhold" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/peak-hold" hx-target="#peakhold" hx-swap="outerHTML">
+<label>Peak Hold</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
+</select>
+</form>
+</div>
+</div>`))
+
+var sampleRateFragmentTmpl = template.Must(template.New("samplerate").Parse(`<div id="samplerate" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/sample-rate" hx-target="#samplerate" hx-swap="outerHTML">
+<label>Sample Rate</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
+</select>
+</form>
+</div>
+</div>`))
+
+var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/channels" hx-target="#channelcount" hx-swap="outerHTML">
+<label for="channelsInput">Channels</label>
+<input id="channelsInput" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
+<span class="hint">1–{{.Max}}</span>
+</form>
+</div>
+</div>`))
+
+var formatFragmentTmpl = template.Must(template.New("format").Parse(`<div id="format" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/format" hx-target="#format" hx-swap="outerHTML">
+<label>Format</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
+</select>
+</form>
+</div>
+</div>`))
+
+var tagFragmentTmpl = template.Must(template.New("tag").Parse(`<div id="tag" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/tag" hx-target="#tag" hx-swap="outerHTML">
+<label>Tag</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
+</select>
+</form>
+</div>
+</div>`))
+
+// transportFragmentTmpl switches the main transport buttons between icon
+// SVG glyphs and text labels (see the ICON/TEXT setting). A full fragment,
+// so the settings modal stays consistent with the other setting rows.
+var transportFragmentTmpl = template.Must(template.New("transport").Parse(`<div id="transportmode" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/transport-mode" hx-target="#transportmode" hx-swap="outerHTML">
+<label>Transport Buttons</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+<option value="0" {{if eq .Idx 0}}selected{{end}}>Icon</option>
+<option value="1" {{if eq .Idx 1}}selected{{end}}>Text</option>
+</select>
+</form>
+</div>
+</div>`))
+
+func transportOptionsView() optionsView {
+	idx := 0
+	if transportMode == "text" {
+		idx = 1
+	}
+	return optionsView{Options: []string{"Icon", "Text"}, Idx: idx}
+}
+
+func handleAPISettingsTransportMode(w http.ResponseWriter, r *http.Request) {
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+		mutex.Lock()
+		if idx == 0 {
+			transportMode = "icon"
+		} else if idx == 1 {
+			transportMode = "text"
+		} else {
+			mutex.Unlock()
+			transportFragmentTmpl.Execute(w, transportOptionsView())
+			return
+		}
+		settingChanged()
+		mutex.Unlock()
+	}
+	transportFragmentTmpl.Execute(w, transportOptionsView())
+}
+
+// wifiQRView carries the data needed to render the WiFi join QR code in the
+// dashboard settings modal. The QR is generated via skip2/go-qrcode into a
+// base64 PNG so it can be embedded directly in the HTML without extra
+// endpoints.
+type wifiQRView struct {
+	Enabled  bool
+	SSID     string
+	Password string
+	QRBase64 string
+}
+
+var wifiQRFragmentTmpl = template.Must(template.New("wifiqr").Parse(`
+<div id="wifiqr">
+{{if .Enabled}}
+<div class="wifi-qr-row">
+  <div class="wifi-qr-info">
+    <p><strong>SSID:</strong> {{.SSID}}</p>
+    <p><strong>Password:</strong> {{.Password}}</p>
+  </div>
+  <div class="wifi-qr-img">
+    <img src="data:image/png;base64,{{.QRBase64}}" alt="WiFi QR Code" title="Scan to join">
+  </div>
+</div>
+{{else}}
+<p class="dim">WiFi AP is off. Enable it below to start broadcasting.</p>
+{{end}}
+</div>
+`))
+
+func handleAPISettingsVURange(w http.ResponseWriter, r *http.Request) {
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+		mutex.Lock()
+		if idx >= 0 && idx < len(vuRangeOptions) {
+			vuRangeIdx = idx
+			settingChanged()
+		}
+		mutex.Unlock()
+	}
+	vuRangeFragmentTmpl.Execute(w, vuRangeOptionsView())
+}
+
+func handleAPISettingsPeakHold(w http.ResponseWriter, r *http.Request) {
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+		mutex.Lock()
+		if idx >= 0 && idx < len(peakHoldOptions) {
+			peakHoldIdx = idx
+			settingChanged()
+		}
+		mutex.Unlock()
+	}
+	peakHoldFragmentTmpl.Execute(w, peakHoldOptionsView())
+}
+
+func handleAPISettingsSampleRate(w http.ResponseWriter, r *http.Request) {
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+		mutex.Lock()
+		if idx >= 0 && idx < len(sampleRates) {
+			sampleRateIdx = idx
+			checkInfernoRestart()
+			settingChanged()
+		}
+		mutex.Unlock()
+	}
+	sampleRateFragmentTmpl.Execute(w, sampleRateOptionsView())
+}
+
+func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
+	if n, err := strconv.Atoi(r.FormValue("count")); err == nil {
+		mutex.Lock()
+		if n >= 1 && n <= MaxChannelCount {
+			channelCount = n
+			// A format's channel ceiling (FLAC ~8, MP3 2) may now be exceeded
+			// by widening the channel count; fall back to the next more
+			// permissive format rather than keeping a combination ffmpeg
+			// can't encode - mirroring the front-panel encoder path.
+			for recordFormat != FormatWAV && channelCount > maxChannelsForFormat(recordFormat) {
+				old := recordFormat
+				recordFormat--
+				log.Printf("Channel count %d exceeds %s limit, falling back to %s", channelCount, formatNames[old], formatNames[recordFormat])
+			}
+			// Relaunch Inferno with the new channel count if it's running
+			// (the worker's restart path re-starts monitoring too), so the
+			// running instance - and with it the live VU count - always
+			// matches what the settings page shows.
+			checkInfernoRestart()
+			settingChanged()
+		}
+		mutex.Unlock()
+	}
+	channelCountFragmentTmpl.Execute(w, currentChannelCountView())
+}
+
+func handleAPISettingsFormat(w http.ResponseWriter, r *http.Request) {
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+		mutex.Lock()
+		if idx >= 0 && idx < len(formatNames) {
+			recordFormat = RecordFormat(idx)
+			if channelCount > maxChannelsForFormat(recordFormat) {
+				channelCount = maxChannelsForFormat(recordFormat)
+			}
+			checkInfernoRestart()
+			settingChanged()
+		}
+		mutex.Unlock()
+	}
+	formatFragmentTmpl.Execute(w, formatOptionsView())
+}
+
+func handleAPISettingsTag(w http.ResponseWriter, r *http.Request) {
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+		mutex.Lock()
+		if idx >= 0 && idx < len(tagPresets) {
+			tagPresetIdx = idx
+			settingChanged()
+		}
+		mutex.Unlock()
+	}
+	tagFragmentTmpl.Execute(w, tagOptionsView())
+}
+
+// handleAPISettingsWiFi updates the WiFi access point configuration from the
+// web dashboard (SSID, password, enabled toggle). Requires authentication.
+func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
+	ssid := strings.TrimSpace(r.FormValue("ssid"))
+	pass := r.FormValue("password")
+	enabled := r.FormValue("enabled") == "on"
+
+	if ssid == "" {
+		http.Error(w, "SSID required", http.StatusBadRequest)
+		return
+	}
+	if len(pass) < 8 {
+		http.Error(w, "Password must be at least 8 characters", http.StatusBadRequest)
+		return
+	}
+
+	mutex.Lock()
+	wifiSSID = ssid
+	wifiPassword = pass
+	wifiEnabled = enabled
+	persistConfig()
+	mutex.Unlock()
+
+	// Re-apply the AP configuration (hostapd restart)
+	go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
+
+	// Return updated fragment with new QR code
+	var qrBuf bytes.Buffer
+	var qrBase64 string
+	if enabled {
+		if code, err := qrcode.New(fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", ssid, pass), qrcode.Medium); err == nil {
+			png, _ := code.PNG(256)
+			qrBase64 = base64.StdEncoding.EncodeToString(png)
+		}
+	}
+	wifiQRFragmentTmpl.Execute(&qrBuf, wifiQRView{enabled, ssid, pass, qrBase64})
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(qrBuf.Bytes())
+}
+
+// The dashboard's header ("deck") mirrors the physical front panel left to
+// right - logo, OLED, rotary encoder, transport buttons - reusing the exact
+// same onEncoderRotate/onEncoderClick/onButtonPress functions physical
+// hardware calls, so every existing guard (recording/playback mutual
+// exclusion, confirmation dialogs) applies identically. No standalone
+// "hold" button: on the real unit that's a long-press of the same encoder
+// button, not a separate control, so it has no web equivalent either.
+// Status/config/recordings (read-only info) sit in the three-column body;
+// the reel transport follows it and the level meters stay pinned to the footer.
+var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE html>
+<html><head><title>{{.DeviceName}} Remote</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/icon.svg">
+<meta name="theme-color" content="#00d9ff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script src="/static/htmx.min.js"></script>
+<style>
+:root{--glow:#00d9ff;--panel:#0a1526;--border:#0f3a5c;--text:#cfeeff;--dim:#5b8aa8;--rec:#ff3355;--idle:#2bffb0;--orange:#ff8c1a;--meter-h:120px}
+*{box-sizing:border-box}
+body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,#0a1a2e,#020509 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
+h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 0.8em}
+a{color:var(--glow)}
+input{font-family:inherit;background:#08192b;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
+button{font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:#08192b;color:var(--glow);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
+button:hover{border-color:var(--glow);box-shadow:0 0 8px var(--glow)}
+button:active{background:#0f2a44}
+button:disabled{opacity:0.35;cursor:default;box-shadow:none}
+.rec{color:var(--rec);font-weight:bold;text-shadow:0 0 8px var(--rec)}
+.idle{color:var(--idle)}
+table{border-collapse:collapse;width:100%;font-size:0.82em}
+td,th{padding:0.3em 0.5em;border-bottom:1px solid var(--border)}
+th{color:var(--dim);text-transform:uppercase;font-size:0.72em;letter-spacing:0.08em;text-align:left}
+
+/* Panels get HUD corner brackets - the recurring "sci-fi readout" motif
+   tying the three columns together. */
+.panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1em 1.2em;box-shadow:0 0 20px rgba(0,180,255,0.08),inset 0 0 30px rgba(0,180,255,0.03)}
+.panel::before,.panel::after{content:'';position:absolute;width:14px;height:14px;border:2px solid var(--glow);opacity:0.55}
+.panel::before{top:-1px;left:-1px;border-right:none;border-bottom:none}
+.panel::after{bottom:-1px;right:-1px;border-left:none;border-top:none}
+.left{text-align:left}
+.center{text-align:center}
+.right{text-align:right}
+.right table{text-align:right}
+.right td:first-child{text-align:left;color:var(--dim)}
+
+/* Header deck: [logo] [OLED] [rotary] [transport], matching the physical
+   front panel's left-to-right layout. Settings/logout sit apart, top right,
+   since they're not physical-panel controls.
+   Every component here is sized fluidly (clamp()/vw) so as the viewport
+   narrows the whole deck shrinks in BOTH width and height together on one
+   row - no overflow, no horizontal scroll - instead of only dropping to a
+   small size at one fixed breakpoint. */
+header.deck{position:relative;display:flex;align-items:center;justify-content:center;gap:clamp(0.3em,1.2vw,1.6em);flex-wrap:nowrap;padding:clamp(0.6em,1.2vw,1.2em) clamp(0.5em,2.5vw,5.5em);border-bottom:1px solid var(--border);margin-bottom:1.5em}
+.deck-logo .logo-svg{width:clamp(0px,11vw,255px)}
+.oled-frame{background:#000;border:2px solid var(--border);border-radius:6px;padding:clamp(3px,0.6vw,8px);display:inline-block;box-shadow:0 0 25px rgba(0,180,255,0.15)}
+.oled-frame img{width:clamp(170px,32vw,440px);height:auto;aspect-ratio:4/1;image-rendering:pixelated;display:block}
+.encoder-row{display:flex;align-items:center;gap:clamp(0.2em,0.5vw,0.5em)}
+.encoder-row button{font-size:clamp(0.7em,1.5vw,1.3em);width:clamp(1.3em,2.6vw,2.3em);padding:0.2em 0}
+.encoder-row .click{border-radius:50%;width:clamp(1.3em,2.6vw,2.3em);height:clamp(1.3em,2.6vw,2.3em);padding:0}
+/* Transport buttons: equal-sized icon squares, 60% of the OLED frame's
+   110px rendered height (see .oled-frame img above). Both dimensions shrink
+   with the viewport so the row always fits. */
+.transport-row{display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
+.transport-row button{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;display:flex;align-items:center;justify-content:center}
+.transport-row button svg{width:clamp(14px,2.2vw,30px);height:clamp(14px,2.2vw,30px)}
+.transport-row .record{border-color:var(--rec)}
+.transport-row .record svg{fill:var(--rec)}
+.transport-row .stop svg{fill:var(--glow)}
+.transport-row .play{border-color:var(--idle)}
+.transport-row .play svg{fill:var(--idle)}
+/* The PLAY transport doubles as PAUSE while a track is running (see
+   renderTransportRow) - two bars instead of the play triangle. */
+.transport-row .play.pause svg{fill:var(--glow);stroke:var(--glow)}
+.transport-row .play.pause{border-color:var(--orange)}
+/* Text mode: the same transport keys but labelled instead of icon glyphs.
+   Buttons stretch to fit and the label takes the accent colour the icon had. */
+.transport-row.text button{width:auto;min-width:clamp(2em,3.2vw,3.4em);font-size:clamp(0.55em,0.95vw,0.85em);letter-spacing:0.08em;padding:0 0.3em}
+.transport-row.text .record{color:var(--rec)}
+.transport-row.text .stop{color:var(--glow)}
+.transport-row.text .play{color:var(--idle)}
+.transport-row.text .play.pause{color:var(--orange)}
+.header-actions{position:absolute;top:0.8em;right:clamp(0.5em,2vw,1.5em);display:flex;gap:0.5em}
+/* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
+   - the base button{} rule above only targets <button>, so colors/border
+   are repeated here rather than relied on from that selector. */
+.icon-btn{width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:#08192b;color:var(--glow);border:1px solid var(--border);cursor:pointer;text-decoration:none}
+.icon-btn svg{width:clamp(14px,1.8vw,18px);height:clamp(14px,1.8vw,18px);stroke:var(--glow)}
+.icon-btn:hover{border-color:var(--orange)}
+.icon-btn:hover svg{stroke:var(--orange)}
+
+.grid{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:1.2em;max-width:1400px;margin:0 auto}
+
+/* Modals: the settings sheet and the stop-recording confirmation. */
+.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(2,6,10,0.75);z-index:200;align-items:center;justify-content:center}
+.modal-backdrop.open{display:flex}
+.modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:0 0 30px rgba(0,180,255,0.2);min-width:20em}
+.modal h2{border:none;margin:0}
+.modal-close{background:none;border:none;color:var(--dim);font-size:1.4em;line-height:1;cursor:pointer;padding:0.2em;border-radius:6px}
+.modal-close:hover{color:var(--glow)}
+/* Stop-recording confirmation (touch devices - see stopModal in the body).
+   Large hit targets for a fat-finger confirm/cancel. */
+.modal--confirm{padding:1.4em 1.8em;position:relative}
+.stop-prompt{color:var(--dim);margin:1.2em 0}
+.stop-actions{display:flex;gap:0.8em;justify-content:flex-end}
+.stop-actions button{min-width:7em;padding:0.8em 1em}
+.modal--confirm .modal-close{position:absolute;top:0.9em;right:0.9em}
+
+/* Settings modal: a sheet with a fixed header bar and a scrollable body, so
+   a long setting list never runs past the viewport edge. Setting families are
+   grouped under section titles and laid out on a responsive 2-column grid. */
+.modal--settings{width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column}
+.modal--settings .modal-head{display:flex;align-items:center;justify-content:space-between;gap:1em;padding:1.1em 1.4em;border-bottom:1px solid var(--border)}
+.modal--settings .modal-body{padding:0.9em 1.4em 1.4em;overflow-y:auto}
+.settings-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.7em;padding:1em 0 0.4em}
+/* The first group sits right under the header bar, which already provides
+   top padding - drop the leading gap there so the sheet's vertical rhythm is
+   even instead of stacking every group with an identical extra top pad. */
+.modal-body>.settings-group:first-child{padding-top:0}
+.settings-group-title{grid-column:1/-1;margin:0 0 0.2em;font-size:0.7em;letter-spacing:0.2em;text-transform:uppercase;color:var(--glow);border-bottom:1px solid var(--border);padding-bottom:0.4em}
+.setting-row{display:flex;align-items:center;gap:0.8em;background:#08162a;border:1px solid var(--border);border-radius:8px;padding:0.55em 0.8em}
+.setting-row:hover{border-color:#1b5380}
+.setting-row form{display:flex;align-items:center;gap:0.8em;flex:1;width:100%}
+.setting-row label{flex:1;color:var(--dim);font-size:0.82em;letter-spacing:0.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.setting-row select{font-family:inherit;background:#020509;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.42em 0.7em;min-width:9em;cursor:pointer}
+.setting-row input[type="text"],.setting-row input[type="password"],.setting-row input[type="number"]{flex:1;min-width:0;background:#020509;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.45em 0.7em}
+.setting-row input[type="number"]{flex:none;width:6em;font-family:inherit}
+.setting-row .hint{flex:none;font-size:0.78em;color:var(--dim);letter-spacing:0.05em}
+.setting-row--switch input[type="checkbox"]{width:1.3em;height:1.3em;accent-color:var(--glow);cursor:pointer}
+.btn-primary{background:transparent;color:var(--glow);border:1px solid var(--glow);border-radius:6px;font-size:0.82em;letter-spacing:0.06em;padding:0.45em 1em;cursor:pointer}
+.btn-primary:hover{background:rgba(0,217,255,0.12);box-shadow:0 0 10px rgba(0,217,255,0.4)}
+/* Paired SSID/Password row: two labelled fields sit side by side within one
+   setting card. */
+.setting-row--pair{gap:0.8em 1.2em;flex-wrap:wrap}
+.setting-row--pair .field{flex:1 1 42%;display:flex;align-items:center;gap:0.6em;min-width:0}
+.setting-row--pair .field label{flex:none;width:auto;max-width:8em}
+.setting-row--pair .field input{flex:1;min-width:0}
+/* SciFi toggle switch for the WiFi access-point: a squared HUD-style rail
+   with a chamfered thumb whose diode lights up when the link goes live,
+   plus an ONLINE/OFFLINE status readout that swaps as the switch flips. */
+.sci-switch{position:relative;display:inline-flex;align-items:center;gap:0.7em;flex:none;cursor:pointer}
+.sci-switch input{position:absolute;opacity:0;width:0;height:0}
+.sci-switch-track{position:relative;display:block;width:4.4em;height:1.9em;padding:2px;background:#02050a;border:1px solid var(--border);border-radius:3px;box-shadow:inset 0 0 12px rgba(0,180,255,0.08);transition:border-color 0.15s,box-shadow 0.15s}
+.sci-thumb{display:block;width:1.45em;height:1.45em;background:#0d2b4a;border:1px solid var(--border);border-radius:2px;transform:translateX(0);transition:transform 0.18s ease,background 0.18s,border-color 0.18s;position:relative}
+.sci-thumb::before{content:'';position:absolute;inset:3px;background:#071426;border-radius:1px}
+.sci-thumb::after{content:'';position:absolute;left:50%;top:50%;width:4px;height:4px;border-radius:50%;background:#fff;opacity:0.35;transform:translate(-50%,-50%);box-shadow:0 0 5px #fff;transition:opacity 0.18s,background 0.18s,box-shadow 0.18s}
+.sci-switch input:checked + .sci-switch-track{border-color:var(--glow);box-shadow:inset 0 0 12px rgba(0,217,255,0.22),0 0 10px rgba(0,217,255,0.25)}
+.sci-switch input:checked + .sci-switch-track .sci-thumb{transform:translateX(2.45em);background:#0e3a5c;border-color:var(--glow)}
+.sci-switch input:checked + .sci-switch-track .sci-thumb::before{background:#062036}
+.sci-switch input:checked + .sci-switch-track .sci-thumb::after{background:var(--glow);box-shadow:0 0 6px var(--glow);opacity:1}
+.sci-switch input:focus-visible + .sci-switch-track{outline:1px solid var(--glow);outline-offset:2px}
+.switch-readout{font-size:0.82em;letter-spacing:0.08em;position:relative;min-width:5em;text-align:center;color:#2c4a66}
+.switch-readout::after{content:attr(data-off)}
+.sci-switch input:checked ~ .switch-readout{color:var(--glow);text-shadow:0 0 6px rgba(0,217,255,0.6)}
+.sci-switch input:checked ~ .switch-readout::after{content:attr(data-on)}
+
+/* The rack-mount reel-to-reel transport lives in the normal document flow
+   right below the three-column grid and scrolls with the page. The level
+   meters are NOT here - they live in the pinned, collapsible footer (see
+   .meter-footer) so they stay in view while you drive the controls. */
+/* transport-deck lives INSIDE the "Transport Status" panel, so it's a plain
+   fluid container - the panel itself provides the HUD frame and corner
+   brackets, and the .r2r reel SVG below it is the live visual state of the
+   transport (reels spin when running, tape path glows, head shows time). */
+.transport-deck{width:100%;margin:0 0 0.6em;padding:0}
+/* Scale the SVG to fit the card in both dimensions: width:auto-driven by the
+   container (100%) and the intrinsic 820x265 aspect-ratio, capped with
+   max-width so on large screens (where the widened centre column can exceed
+   the deck's natural size) it shrinks *proportionally* instead of being
+   clamped by a separate max-height - a max-height alongside width:100% +
+   aspect-ratio would let the two constraints fight and distort the reels.
+   height:auto keeps width -> height from the aspect-ratio, never fighting it. */
+.r2r{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
+.r2r .plate{fill:url(#deckBg)}
+.r2r .plate-bezel{fill:none;stroke:#1b5380;stroke-width:2}
+.r2r .plate-screw{fill:#0a1628;stroke:#1b5380;stroke-width:1}
+.r2r .deck-grid{fill:none;stroke:#133050;stroke-width:1}
+.r2r .deck-corner{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.45}
+/* Reels: a near-black engineering-grade flange disc (gradient so the face
+   reads as machined metal rather than flat), with a thin trim ring that
+   lights up as the reel spins, faint tape windings and a bright hub. Only
+   the inner spindle group (.reel-spin) rotates so the winding looks like
+   it's turning while the plate and take-off point stay put. */
+.r2r .reel-disc{fill:url(#reelFace);stroke:#1b5380;stroke-width:2.5}
+.r2r .reel-ring{fill:none;stroke:#143a5c;stroke-width:1}
+.r2r .reel-g.spinning .reel-ring{stroke:rgba(0,217,255,0.5);filter:drop-shadow(0 0 4px rgba(0,217,255,0.6))}
+.r2r .reel-wind{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.22}
+.r2r .reel-hub{fill:var(--glow);opacity:0.9}
+.r2r .reel-center{fill:#051020}
+.r2r .reel-spoke{fill:#10294a;stroke:var(--glow);stroke-width:1.2;opacity:0.7}
+.r2r .reel-spin{transform-box:fill-box;transform-origin:center}
+.r2r .reel-g.spinning .reel-spin{animation:spin 2.2s linear infinite}
+.r2r .reel-g#reelL.spinning .reel-spin{animation-direction:reverse}
+@keyframes spin{to{transform:rotate(360deg)}}
+/* The tape path: angled runs from each reel down to the head block plus the
+   straight run across the head gap. A darker under-shadow gives the glowing
+   tape depth; one stroked path carries the travelling pulse (dash animation)
+   from supply reel, over the head, to the take-up reel exactly like real
+   tape. */
+.r2r .tape-shadow{fill:none;stroke:#062033;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.6}
+.r2r .tape{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.85}
+.r2r .tape.active{stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite}
+@keyframes tapeflow{to{stroke-dashoffset:-36}}
+/* Guide idlers: dark spindle wells with a tiny lit bore so the tape path
+   reads as engineering hardware instead of plain dots. */
+.r2r .guide{fill:#0a1830;stroke:#1b5380;stroke-width:2}
+.r2r .guide-in{fill:#071222;stroke:#16456e;stroke-width:1.5}
+.r2r .guide-bore{fill:rgba(0,217,255,0.4);filter:drop-shadow(0 0 3px rgba(0,217,255,0.6))}
+/* The read/write head block: a chamfered angular castle rising out of the
+   tape gap, with glowing trim rails on its mounting cheeks, the red centre
+   gap line and the large 7-segment digital time counter in its display
+   window. The centre gap line turns recording-red while a take is running
+   (.r2r.rec). */
+.r2r .head-plate{fill:url(#headFace);stroke:#1b5380;stroke-width:1.5}
+.r2r .head-edge{fill:none;stroke:rgba(0,217,255,0.35);stroke-width:1}
+.r2r .head-gap{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;opacity:0.55}
+.r2r.rec .head-gap{stroke:var(--rec);opacity:0.95;filter:drop-shadow(0 0 5px rgba(255,51,85,0.8))}
+.r2r .head-window{fill:#02060d;stroke:#1d5c8f;stroke-width:1.5}
+/* Bottom HUD band: a thin status rail with system lamps and micro labels,
+   matching the larger panel HUD motif (corner brackets + glow). */
+.r2r .hud-band{fill:none;stroke:#1b5380;stroke-width:1}
+.r2r .hud-lamp{fill:#11304a}
+.r2r .hud-lamp.on{fill:var(--idle);filter:drop-shadow(0 0 3px var(--idle))}
+.r2r .hud-lamp.rec{fill:var(--rec);filter:drop-shadow(0 0 3px var(--rec))}
+.r2r #linkLamp{fill:rgba(0,217,255,0.55)}
+.r2r .hud-text{fill:var(--dim);font-size:9px;letter-spacing:0.22em;font-family:"Consolas",monospace}
+/* The lit 7-segment time display. Every segment is an SVG line (see the
+   buildSeg7 JS); the dim .s7 shows all segments faintly so the display
+   reads as a proper 7-segment counter even for unlit digits. The whole display
+   is skewed to the right for an italic, forward-leaning readout. */
+#seg7{font-style:italic}
+#seg7 .s7{stroke:rgba(0,180,255,0.10);stroke-width:2.5;stroke-linecap:round}
+#seg7 .s7.on{stroke:var(--glow);filter:drop-shadow(0 0 5px rgba(0,217,255,0.9))}
+#seg7 .s7-dot{fill:rgba(0,180,255,0.10)}
+#seg7 .s7-dot.on{fill:var(--glow);filter:drop-shadow(0 0 5px rgba(0,217,255,0.9))}
+
+/* Pinned meter footer: always visible at the bottom of the viewport so the
+   VU levels stay on screen while you operate the transport, with a slim
+   header bar that collapses/expands the meter bank on demand. */
+.meter-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);backdrop-filter:blur(2px)}
+.meter-bar{display:flex;align-items:center;gap:1em;padding:0.3em 1.2em;border-bottom:1px solid var(--border)}
+.meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--dim);text-transform:uppercase}
+.meter-badge{font-size:0.62em;letter-spacing:0.12em;color:var(--glow);border:1px solid var(--border);border-radius:10px;padding:0.05em 0.6em}
+.meter-caret{width:1.9em;height:1.9em;border-radius:50%;margin-left:auto}
+.meter-body{padding:0.7em 1em;transition:max-height 0.25s ease,opacity 0.25s ease,padding 0.25s ease;max-height:220px;overflow:hidden}
+.meter-footer.collapsed .meter-body{max-height:0;padding-top:0;padding-bottom:0;opacity:0}
+/* The meter bank itself - a shared dB-FS scale (standard audio-meter log
+   taper, see VU_CURVE/vuPct in the script) beside one meter per channel. */
+.meter-bridge{display:flex;align-items:stretch;justify-content:center;gap:0.8em;max-width:1300px;margin:0 auto;background:#050c16;border:1px solid var(--border);border-radius:10px;padding:0.7em 1em;box-shadow:inset 0 0 24px rgba(0,180,255,0.06)}
+/* The dB scale column and every meter track share the exact same inner
+   height so a given dB reading lands on the same pixel row in each. The
+   scale uses a transparent 1px border (see below) so its content box equals
+   the tracks' full height. */
+.db-scale{position:relative;height:var(--meter-h);width:2.6em;flex:none;border:1px solid transparent}
+.db-scale span{position:absolute;left:0;right:0.3em;text-align:right;transform:translateY(50%);font-size:0.6em;color:var(--dim);font-weight:bold}
+.db-scale span::after{content:'';position:absolute;right:0;top:50%;width:100%;height:1px;background:rgba(0,217,255,0.25);transform:translateY(50%)}
+.ch-meters{display:flex;justify-content:center;gap:0.6em;overflow-x:auto;padding-bottom:2px}
+.ch-meter{display:flex;flex-direction:column;align-items:center;gap:0.25em;flex:none}
+/* No real border on the track: the fill's height% and the scale labels' % are
+   then resolved against the same full --meter-h box, so the top of the fill
+   touches exactly the same row as the matching dB tick text beside it. A
+   ring is drawn via box-shadow instead so the darker background still reads
+   as a channel well. */
+.vu-track{position:relative;width:14px;height:var(--meter-h);background:#020509;box-shadow:inset 0 0 0 1px var(--border);border-radius:2px}
+/* -18dBFS (58% up the scale, see VU_CURVE) is where the fill switches
+   from green to the yellow->red graduation running the rest of the way to
+   0dBFS. */
+.vu-fill{position:absolute;bottom:0;left:1px;right:1px;height:0%;background:linear-gradient(to top,#0aff9d 0%,#0aff9d 58%,#ffe400 58%,#ff2a2a 100%);box-shadow:0 0 8px rgba(0,255,180,0.35)}
+.vu-peak{position:absolute;left:1px;right:1px;height:2px;background:#fff;box-shadow:0 0 6px #fff}
+.ch-label{font-size:0.6em;color:var(--dim);letter-spacing:0.04em}
+
+/* Mobile: stack the three-column grid, let the fixed OLED frame shrink to
+   the viewport instead of overflowing it, and give the header/footer more
+   vertical room now that their contents wrap onto more lines. */
+/* Mobile: the header already scales fluidly with vw widths (see the clamp()
+   rules above), so here we only need to clear the fixed decorations that
+   would crowd out the OLED and controls on a phone: hide the logo and the
+   meter footer badge, tighten gutters, and collapse the status columns to a
+   single column. The OLED, encoder, and transport keep shrinking with the
+   viewport so the single-row deck never overflows. */
+@media (max-width: 800px) {
+  body{padding:0 0.4em 200px}
+  header.deck{flex-wrap:nowrap;gap:clamp(0.3em,1.5vw,0.5em);padding:0.8em clamp(0.4em,2vw,3.2em) 0.8em 0.8em;justify-content:center}
+  .header-actions{top:0.6em;right:0.6em}
+  .deck-logo{display:none}
+  .oled-frame img{width:min(190px,40vw);height:auto;aspect-ratio:4/1}
+  .grid{grid-template-columns:1fr}
+  .transport-deck{padding:0}
+  .meter-title{font-size:0.6em}
+  .meter-badge{display:none}
+  .meter-body{padding:0.6em 0.5em}
+}
+
+body.meters-collapsed{padding-bottom:4em}
+
+@media (prefers-reduced-motion: reduce) {
+  .r2r .reel-g.spinning .reel-spin,
+  .r2r .tape.active,
+  .meter-body{animation:none;transition:none}
+}
+
+/* WiFi settings panel */
+.wifi-qr-row{display:flex;align-items:center;gap:1em;flex-wrap:wrap}
+.wifi-qr-info p{margin:0.2em 0;font-size:0.85em}
+.wifi-qr-img img{width:180px;height:180px;image-rendering:pixelated;border:1px solid var(--border);border-radius:4px}
+</style></head>
+<body>
+
+<header class="deck">
+  <div class="deck-logo">{{.Logo}}</div>
+  <div class="oled-frame"><img id="oled" src="/api/display.png" alt="OLED display"></div>
+  <div class="encoder-row">
+    <button hx-post="/api/input/encoder/left">&#9664;</button>
+    <button class="click" hx-post="/api/input/encoder/click">&#9679;</button>
+    <button hx-post="/api/input/encoder/right">&#9654;</button>
+  </div>
+  <div class="transport-row" id="transportRow"></div>
+  <div class="header-actions">
+    <button class="icon-btn" id="settingsBtn" type="button" title="Settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+    </button>
+    <a class="icon-btn" href="/logout" title="Log out">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 17l5-5-5-5M21 12H9M12 19H5a2 2 0 01-2-2V7a2 2 0 012-2h7"/></svg>
+    </a>
+  </div>
+</header>
+
+<div class="grid">
+
+  <div class="panel left">
+    <h2>Recordings</h2>
+    <div id="recordings" hx-get="/api/recordings" hx-trigger="load, every 15s" hx-swap="innerHTML">Loading...</div>
+  </div>
+
+  <div class="panel center">
+    <h2>Transport Status</h2>
+    <div class="transport-deck">
+      <svg class="r2r" viewBox="0 0 820 265" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="transportTitle transportDesc">
+        <title id="transportTitle">Reel-to-reel transport</title>
+        <desc id="transportDesc">Two tape reels connected by an angled tape path and a read/write head time display.</desc>
+        <defs>
+          <linearGradient id="deckBg" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#10233b"/>
+            <stop offset="55%" stop-color="#0a1628"/>
+            <stop offset="100%" stop-color="#081120"/>
+          </linearGradient>
+          <linearGradient id="reelFace" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#142f4d"/>
+            <stop offset="50%" stop-color="#0b1d32"/>
+            <stop offset="100%" stop-color="#0f2c49"/>
+          </linearGradient>
+          <linearGradient id="headFace" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#142f4d"/>
+            <stop offset="100%" stop-color="#0a1a30"/>
+          </linearGradient>
+        </defs>
+
+        <rect class="plate" x="2" y="2" width="816" height="261" rx="10"/>
+        <rect class="plate-bezel" x="2" y="2" width="816" height="261" rx="10"/>
+
+        <g class="deck-grid">
+          <path d="M40 26 H780 M40 248 H780"/>
+          <path d="M90 26 V248 M730 26 V248" opacity="0.5"/>
+        </g>
+
+        <circle class="plate-screw" cx="18" cy="18" r="4"/>
+        <circle class="plate-screw" cx="802" cy="18" r="4"/>
+        <circle class="plate-screw" cx="18" cy="247" r="4"/>
+        <circle class="plate-screw" cx="802" cy="247" r="4"/>
+
+        <g class="reel-g" id="reelL">
+          <circle class="reel-ring" cx="170" cy="105" r="61"/>
+          <circle class="reel-disc" cx="170" cy="105" r="58"/>
+          <g class="reel-spin">
+            <path class="reel-wind" d="M170 105 m0 -54 a54 54 0 0 1 0 108 a54 54 0 0 1 0 -108"/>
+            <path class="reel-wind" d="M170 105 m0 -46 a46 46 0 0 1 0 92 a46 46 0 0 1 0 -92"/>
+            <path class="reel-wind" d="M170 105 m0 -38 a38 38 0 0 1 0 76 a38 38 0 0 1 0 -76"/>
+            <path class="reel-wind" d="M170 105 m0 -30 a30 30 0 0 1 0 60 a30 30 0 0 1 0 -60"/>
+            <path class="reel-spoke" d="M170 105 L161 64 Q170 59 179 64 Z"/>
+            <path class="reel-spoke" d="M170 105 L161 64 Q170 59 179 64 Z" transform="rotate(120 170 105)"/>
+            <path class="reel-spoke" d="M170 105 L161 64 Q170 59 179 64 Z" transform="rotate(240 170 105)"/>
+            <circle class="reel-hub" cx="170" cy="105" r="13"/>
+            <circle class="reel-center" cx="170" cy="105" r="5"/>
+          </g>
+        </g>
+        <g class="reel-g" id="reelR">
+          <circle class="reel-ring" cx="650" cy="105" r="61"/>
+          <circle class="reel-disc" cx="650" cy="105" r="58"/>
+          <g class="reel-spin">
+            <path class="reel-wind" d="M650 105 m0 -54 a54 54 0 0 1 0 108 a54 54 0 0 1 0 -108"/>
+            <path class="reel-wind" d="M650 105 m0 -46 a46 46 0 0 1 0 92 a46 46 0 0 1 0 -92"/>
+            <path class="reel-wind" d="M650 105 m0 -38 a38 38 0 0 1 0 76 a38 38 0 0 1 0 -76"/>
+            <path class="reel-wind" d="M650 105 m0 -30 a30 30 0 0 1 0 60 a30 30 0 0 1 0 -60"/>
+            <path class="reel-spoke" d="M650 105 L641 64 Q650 59 659 64 Z"/>
+            <path class="reel-spoke" d="M650 105 L641 64 Q650 59 659 64 Z" transform="rotate(120 650 105)"/>
+            <path class="reel-spoke" d="M650 105 L641 64 Q650 59 659 64 Z" transform="rotate(240 650 105)"/>
+            <circle class="reel-hub" cx="650" cy="105" r="13"/>
+            <circle class="reel-center" cx="650" cy="105" r="5"/>
+          </g>
+        </g>
+
+        <circle class="guide" cx="210" cy="150" r="7"/>
+        <circle class="guide" cx="610" cy="150" r="7"/>
+        <circle class="guide" cx="330" cy="194" r="7"/>
+        <circle class="guide" cx="490" cy="194" r="7"/>
+        <circle class="guide-in" cx="118" cy="200" r="10"/>
+        <circle class="guide-in" cx="702" cy="200" r="10"/>
+        <circle class="guide-bore" cx="118" cy="200" r="3"/>
+        <circle class="guide-bore" cx="702" cy="200" r="3"/>
+
+        <path class="tape-shadow" d="M210 152 L330 196 L490 196 L610 152"/>
+        <path class="tape" id="tapePath" d="M210 150 L330 194 L490 194 L610 150"/>
+
+        <g class="head">
+          <polygon class="head-plate" points="272,252 272,198 288,184 532,184 548,198 548,252"/>
+          <path class="head-edge" d="M284 198 V246 M536 198 V246"/>
+          <path class="head-gap" d="M402 194 L418 194"/>
+          <rect class="head-window" x="300" y="198" width="220" height="48" rx="3"/>
+          <g id="seg7" transform="translate(312,202) skewX(-10) scale(2.12)"></g>
+        </g>
+
+        <g class="hud">
+          <path class="hud-band" d="M40 251 H780"/>
+          <circle class="hud-lamp" id="sysLamp" cx="54" cy="257" r="2.5"/>
+          <text class="hud-text" x="66" y="260">SYS</text>
+          <text class="hud-text" x="352" y="260">TRANSPORT</text>
+          <text class="hud-text" x="620" y="260">INFERNO-LINK</text>
+          <circle class="hud-lamp" id="linkLamp" cx="706" cy="257" r="2.5"/>
+        </g>
+
+        <path class="deck-corner" d="M14 30 V14 H30"/>
+        <path class="deck-corner" d="M806 14 H790 V30"/>
+        <path class="deck-corner" d="M14 235 V251 H30"/>
+        <path class="deck-corner" d="M806 251 V235 H790"/>
+      </svg>
+    </div>
+    <div id="status" hx-get="/api/status" hx-trigger="load, every 2s" hx-swap="innerHTML">Loading...</div>
+  </div>
+
+  <div class="panel right">
+    <h2>Status</h2>
+    <div id="config" hx-get="/api/config" hx-trigger="load, every 3s" hx-swap="innerHTML">Loading...</div>
+  </div>
+
+</div>
+
+<footer class="meter-footer" id="meterFooter">
+  <div class="meter-bar">
+    <span class="meter-title">Level meters</span>
+    <span class="meter-badge" id="meterBadge">--</span>
+    <button class="icon-btn meter-caret" id="meterToggle" type="button" title="Collapse/expand meters" aria-label="Collapse or expand level meters" aria-controls="meterBody" aria-expanded="true">
+      <svg id="meterCaretSvg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+    </button>
+  </div>
+  <div class="meter-body" id="meterBody">
+    <div class="meter-bridge">
+      <div class="db-scale" id="dbScale"></div>
+      <div class="ch-meters" id="chMeters"></div>
+    </div>
+  </div>
+</footer>
+
+<div class="modal-backdrop" id="settingsModal">
+  <div class="modal modal--settings">
+    <div class="modal-head">
+      <h2>Unit Settings</h2>
+      <button class="modal-close" id="settingsClose" type="button" aria-label="Close settings">&times;</button>
+    </div>
+    <div class="modal-body">
+      <section class="settings-group">
+        <h3 class="settings-group-title">Device</h3>
+        <div id="devicename" class="setting-cell">
+          <div class="setting-row">
+            <form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML">
+              <label for="deviceNameInput">Unit Name</label>
+              <input id="deviceNameInput" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
+              <button type="submit" class="btn-primary">Save</button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">Audio</h3>
+        {{.SampleRateFragment}}
+        {{.ChannelCountFragment}}
+        {{.FormatFragment}}
+      </section>
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">Metering</h3>
+        {{.VURangeFragment}}
+        {{.PeakHoldFragment}}
+      </section>
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">Metadata</h3>
+        {{.TagFragment}}
+      </section>
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">Transport</h3>
+        {{.TransportFragment}}
+      </section>
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">Network</h3>
+        <div id="wifi-settings">
+          {{.WifiQRFragment}}
+          <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML">
+            <div class="setting-row setting-row--pair">
+              <span class="field">
+                <label for="wifiSsid">SSID</label>
+                <input id="wifiSsid" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
+              </span>
+              <span class="field">
+                <label for="wifiPass">Password</label>
+                <input id="wifiPass" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
+              </span>
+            </div>
+            <div class="setting-row setting-row--switch">
+              <label for="wifiEnabled">Access Point</label>
+              <label class="sci-switch" for="wifiEnabled">
+                <input id="wifiEnabled" name="enabled" type="checkbox" {{if .WifiEnabled}}checked{{end}}>
+                <span class="sci-switch-track"><span class="sci-thumb"></span></span>
+                <span class="switch-readout" data-on="ONLINE" data-off="OFFLINE"></span>
+              </label>
+            </div>
+            <button type="submit" class="btn-primary">Save WiFi</button>
+          </form>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<div class="modal-backdrop" id="stopModal">
+  <div class="modal modal--confirm">
+    <button class="modal-close" id="stopModalClose" type="button" aria-label="Close">&times;</button>
+    <h2>Stop Recording?</h2>
+    <p class="stop-prompt">The current take is still being written. Stop it now?</p>
+    <div class="stop-actions">
+      <button id="stopConfirm" class="rec" type="button">Stop</button>
+      <button id="stopCancel" type="button">Keep recording</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Vanilla JS, not htmx: htmx swaps HTML fragments, and refreshing an <img>
+// is just "give it a new src" - a cache-busting query param on a plain
+// interval is simpler than contorting hx-swap to do the same thing.
+// 500ms rather than 300ms: EncodePNG now serves a supersampled 1024x256
+// frame (see webRenderScale in display_ttf.go) instead of a 256x64 one, and
+// this poll shares eth0 with Inferno's audio-over-IP traffic.
+setInterval(function() {
+  document.getElementById('oled').src = '/api/display.png?t=' + Date.now();
+}, 500);
+
+var settingsBtn = document.getElementById('settingsBtn');
+var settingsModal = document.getElementById('settingsModal');
+settingsBtn.addEventListener('click', function() { settingsModal.classList.add('open'); });
+document.getElementById('settingsClose').addEventListener('click', function() { settingsModal.classList.remove('open'); });
+settingsModal.addEventListener('click', function(e) { if (e.target === settingsModal) settingsModal.classList.remove('open'); });
+
+// Transport buttons are drawn by JS so they can switch between ICON and TEXT
+// mode (Settings -> Transport Buttons) and, for the PLAY key, between a play
+// triangle and a pause glyph while a track runs. ICON_MODE is seeded from the
+// server (persisted setting); transportState is kept in sync by applyMeter.
+var ICON_MODE = {{.TransportIcon}};
+var transportState = { playing: false, paused: false };
+function playGlyph()  { return '<svg viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg>'; }
+function pauseGlyph() { return '<svg viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3.4" height="11"/><rect x="9.1" y="2.5" width="3.4" height="11"/></svg>'; }
+function transportBtn(cls, post, title, label) {
+  return '<button class="' + cls + '" hx-post="' + post + '" title="' + title + '">' + label + '</button>';
+}
+function renderTransportRow() {
+  var row = document.getElementById('transportRow');
+  var pause = transportState.playing || transportState.paused;
+  var title = transportState.paused ? 'Resume' : (transportState.playing ? 'Pause' : 'Play');
+  var html = '';
+  if (ICON_MODE) {
+    html += transportBtn('record', '/api/input/button/record', 'Record', '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>');
+    html += '<button class="stop" data-stop title="Stop"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10"/></svg></button>';
+    html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? pauseGlyph() : playGlyph());
+  } else {
+    html += transportBtn('record', '/api/input/button/record', 'Record', 'REC');
+    html += '<button class="stop" data-stop title="Stop">STOP</button>';
+    html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? 'II' : '>');
+  }
+  row.className = 'transport-row' + (ICON_MODE ? '' : ' text');
+  row.innerHTML = html;
+  // These controls are recreated after htmx's initial DOM scan whenever the
+  // play/pause state or button style changes, so explicitly process the new
+  // hx-post nodes.
+  if (window.htmx) htmx.process(row);
+}
+renderTransportRow();
+
+// When the Transport Buttons setting changes in the settings modal, htmx
+// swaps the fragment - listen for that and re-seed ICON_MODE from the
+// select's own value (0=icon,1=text) so the header updates instantly.
+document.body.addEventListener('htmx:afterSwap', function(e) {
+  if (e.detail.target && e.detail.target.id === 'transportmode') {
+    var sel = e.detail.target.querySelector('select[name="idx"]');
+    if (sel) { ICON_MODE = (sel.value === '0'); renderTransportRow(); }
+  }
+});
+
+// Touch screens: stopping a take can be a fat-finger accident, so the STOP
+// transport and the status-panel Stop button first open a confirmation modal
+// instead of tearing the recording down immediately. Desktop (non-touch)
+// keeps the one-tap behaviour. The transport STOP is a plain button handled
+// here; the status-panel Stop (data-record-stop, an hx-post button) is only
+// intercepted on touch devices.
+var isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+var stopModal = document.getElementById('stopModal');
+var stopPending = null;
+function confirmStop(action) {
+  if (!isTouch) { action(); return; }
+  stopPending = action;
+  stopModal.classList.add('open');
+}
+document.getElementById('stopConfirm').addEventListener('click', function() {
+  stopModal.classList.remove('open');
+  if (stopPending) { var a = stopPending; stopPending = null; a(); }
+});
+document.getElementById('stopCancel').addEventListener('click', function() { stopModal.classList.remove('open'); stopPending = null; });
+document.getElementById('stopModalClose').addEventListener('click', function() { stopModal.classList.remove('open'); stopPending = null; });
+stopModal.addEventListener('click', function(e) { if (e.target === stopModal) { stopModal.classList.remove('open'); stopPending = null; } });
+// Capture this before htmx sees the status-panel stop button. Otherwise its
+// hx-post listener can submit the stop request before the touch confirmation
+// handler at the document bubble phase gets a chance to cancel it.
+document.addEventListener('click', function(e) {
+  var stopBtn = e.target.closest ? e.target.closest('[data-stop]') : null;
+  var recStopBtn = e.target.closest ? e.target.closest('[data-record-stop]') : null;
+  if (stopBtn) {
+    e.preventDefault();
+    e.stopPropagation();
+    confirmStop(function(){ fetch('/api/input/button/stop', { method: 'POST' }); });
+  } else if (recStopBtn && isTouch) {
+    e.preventDefault();
+    e.stopPropagation();
+    confirmStop(function(){ fetch('/api/record/stop', { method: 'POST' }); });
+  }
+}, true);
+
+// Standard audio-meter log taper: 0dBFS at the top, the configured floor
+// (see FLOOR below, updated from every meter message's floorDB - Settings
+// -> Meter Range) at the bottom, with more of the scale's height given to
+// the top of the range than the bottom. VU_CURVE is expressed as {fraction
+// of the range from floor (0) to 0dBFS (1), display %} pairs, mirroring
+// main.go's idleVUCurve exactly, so a config change on the OLED reshapes
+// this scale identically rather than the two drifting apart.
+var VU_CURVE = [[0, 0], [0.1667, 7], [0.3333, 15], [0.4444, 22], [0.5556, 30], [0.6667, 40], [0.7333, 48], [0.8, 58], [0.8667, 70], [0.9, 78], [0.9333, 85], [0.9667, 92], [1, 100]];
+var FLOOR = -90;
+function vuPct(db) {
+  var frac = (db - FLOOR) / (0 - FLOOR);
+  if (frac <= 0) return VU_CURVE[0][1];
+  if (frac >= 1) return 100;
+  for (var i = 1; i < VU_CURVE.length; i++) {
+    if (frac <= VU_CURVE[i][0]) {
+      var lo = VU_CURVE[i - 1], hi = VU_CURVE[i];
+      var t = (frac - lo[0]) / (hi[0] - lo[0]);
+      return lo[1] + t * (hi[1] - lo[1]);
+    }
+  }
+  return 100;
+}
+
+// rebuildDbScale redraws the tick labels whenever the configured floor
+// changes (including on first load) - ticks sit at the same curve
+// fractions used for VU_CURVE's own breakpoints, so every tick lines up
+// exactly with where that dB value's fill reaches.
+var dbScale = document.getElementById('dbScale');
+var scaleFloor = null;
+function rebuildDbScale(floor) {
+  if (floor === scaleFloor) return;
+  scaleFloor = floor;
+  dbScale.innerHTML = '';
+  [0, 0.1667, 0.3333, 0.5556, 0.8, 1].forEach(function(frac) {
+    var db = Math.round(floor + frac * (0 - floor));
+    var span = document.createElement('span');
+    span.style.bottom = (frac * 100) + '%';
+    span.textContent = db;
+    dbScale.appendChild(span);
+  });
+}
+
+// ---- 7-segment time display (inline SVG segments, italic via skewX) ----
+var svgNS = 'http://www.w3.org/2000/svg';
+// Segment endpoints per digit (each digit is 10x18, segments stroke-width 2, round caps)
+// a: top horiz, g: middle, d: bottom horiz, f: top-left vert, b: top-right vert, e: bot-left, c: bot-right
+var SEG = {
+  a: {x1:3, y1:2, x2:7, y2:2},
+  g: {x1:3, y1:9, x2:7, y2:9},
+  d: {x1:3, y1:16, x2:7, y2:16},
+  f: {x1:2, y1:3, x2:2, y2:7},
+  b: {x1:8, y1:3, x2:8, y2:7},
+  e: {x1:2, y1:10, x2:2, y2:14},
+  c: {x1:8, y1:10, x2:8, y2:14}
+};
+var SEG_ON = {
+  '0': 'abcfed', '1': 'bc', '2': 'abged', '3': 'abgcd', '4': 'fgbc', '5': 'afgcd', '6': 'afgedc', '7': 'abc',
+  '8': 'abcdefg', '9': 'abcfgd', ':': 'dots'
+};
+var seg7Root = document.getElementById('seg7');
+var lastSeg7 = '';
+
+function buildSeg7() {
+  if (!seg7Root) return;
+  seg7Root.innerHTML = '';
+  // 8 glyph positions: 6 digits + 2 colons (HH:MM:SS)
+  var x = 0;
+  for (var p = 0; p < 8; p++) {
+    var g = document.createElementNS(svgNS, 'g');
+    g.setAttribute('transform', 'translate(' + x + ',0)');
+    g.setAttribute('data-pos', p);
+    var isColon = (p === 2 || p === 5);
+    if (isColon) {
+      var dot1 = document.createElementNS(svgNS, 'circle');
+      dot1.setAttribute('cx', 5); dot1.setAttribute('cy', 4); dot1.setAttribute('r', 2);
+      dot1.className.baseVal = 's7-dot';
+      var dot2 = document.createElementNS(svgNS, 'circle');
+      dot2.setAttribute('cx', 5); dot2.setAttribute('cy', 14); dot2.setAttribute('r', 2);
+      dot2.className.baseVal = 's7-dot';
+      g.appendChild(dot1); g.appendChild(dot2);
+    } else {
+      var segs = 'abgfedc';
+      for (var si = 0; si < segs.length; si++) {
+        var s = segs[si];
+        var ln = document.createElementNS(svgNS, 'line');
+        ln.setAttribute('x1', SEG[s].x1); ln.setAttribute('y1', SEG[s].y1);
+        ln.setAttribute('x2', SEG[s].x2); ln.setAttribute('y2', SEG[s].y2);
+        ln.setAttribute('stroke-width', '2');
+        ln.setAttribute('stroke-linecap', 'round');
+        ln.className.baseVal = 's7';
+        ln.setAttribute('data-seg', s);
+        g.appendChild(ln);
+      }
+    }
+    seg7Root.appendChild(g);
+    x += isColon ? 10 : 12;
+  }
+}
+
+function setSeg7(str) {
+  if (!seg7Root) return;
+  var display = (typeof str === 'string' && /^\d{2}:\d{2}:\d{2}$/.test(str)) ? str : '00:00:00';
+  if (display === lastSeg7) return;
+  lastSeg7 = display;
+  var nodes = seg7Root.querySelectorAll('g[data-pos]');
+  var idx = 0;
+  for (var p = 0; p < display.length && idx < nodes.length; p++) {
+    var ch = display[p];
+    var isColon = (ch === ':');
+    var g = nodes[idx++];
+    if (isColon) {
+      var dots = g.querySelectorAll('.s7-dot');
+      dots.forEach(function(d) { d.classList.add('on'); });
+    } else {
+      var on = SEG_ON[ch] || '';
+      var lines = g.querySelectorAll('line.s7');
+      lines.forEach(function(l) {
+        var seg = l.getAttribute('data-seg');
+        l.classList.toggle('on', on.indexOf(seg) >= 0);
+      });
+    }
+  }
+}
+
+// Initialize seg7 on load. This avoids a blank/ghost-only head window before
+// the first WebSocket packet arrives.
+buildSeg7();
+setSeg7('00:00:00');
+
+// ---- Pinned meter footer collapse/expand ----
+var meterFooter = document.getElementById('meterFooter');
+var meterToggle = document.getElementById('meterToggle');
+var meterBody = document.getElementById('meterBody');
+var meterCaret = document.getElementById('meterCaretSvg');
+if (meterToggle && meterFooter && meterBody && meterCaret) {
+  var collapsed = localStorage.getItem('pi9696_meterCollapsed') === '1';
+  function applyCollapse() {
+    meterFooter.classList.toggle('collapsed', collapsed);
+    document.body.classList.toggle('meters-collapsed', collapsed);
+    meterCaret.style.transform = collapsed ? 'rotate(-90deg)' : '';
+    meterToggle.setAttribute('aria-expanded', !collapsed);
+  }
+  applyCollapse();
+  meterToggle.addEventListener('click', function() {
+    collapsed = !collapsed;
+    localStorage.setItem('pi9696_meterCollapsed', collapsed ? '1' : '0');
+    applyCollapse();
+  });
+}
+
+// Update meter badge (stereo/dual-mono indicator)
+var meterBadge = document.getElementById('meterBadge');
+
+var chMeters = document.getElementById('chMeters');
+var chCount = -1;
+function ensureChannels(n) {
+  if (n === chCount) return;
+  chMeters.innerHTML = '';
+  for (var i = 1; i <= n; i++) {
+    var el = document.createElement('div');
+    el.className = 'ch-meter';
+    el.innerHTML = '<div class="vu-track"><div class="vu-peak" data-i="' + i + '"></div><div class="vu-fill" data-i="' + i + '"></div></div><div class="ch-label">' + i + '</div>';
+    chMeters.appendChild(el);
+  }
+  chCount = n;
+}
+
+function applyMeter(m) {
+  FLOOR = m.floorDB;
+  rebuildDbScale(m.floorDB);
+
+  var paused = !!m.paused;
+  // Reels and the tape-path pulse stop moving while paused (frozen transport)
+  // but the head display still shows the frozen elapsed time rather than
+  // going blank.
+  var moving = m.recording || m.playing || m.demo;
+  var showing = m.recording || m.playing || paused || m.demo;
+  document.querySelectorAll('.reel-g').forEach(function(el) { el.classList.toggle('spinning', moving); });
+  document.getElementById('tapePath').classList.toggle('active', moving);
+  setSeg7(showing ? m.elapsed : null);
+
+  // Deck-level recording state: the head gap line and lamps go red while a
+  // take is running, the sys lamp glows green whenever the unit is moving.
+  var deck = document.querySelector('.r2r');
+  if (deck) deck.classList.toggle('rec', !!m.recording);
+  var sysLamp = document.getElementById('sysLamp');
+  if (sysLamp) {
+    sysLamp.classList.toggle('on', moving);
+    sysLamp.classList.toggle('rec', !!m.recording);
+  }
+
+  // Rebuild the transport row only when the play/pause state actually flips,
+  // so the play triangle toggles to a pause glyph exactly when the state does.
+  var next = { playing: !!m.playing, paused: paused };
+  if (next.playing !== transportState.playing || next.paused !== transportState.paused) {
+    transportState = next;
+    renderTransportRow();
+  }
+
+  var channels = Array.isArray(m.channels) ? m.channels : [];
+  ensureChannels(channels.length);
+  channels.forEach(function(c, idx) {
+    var i = idx + 1;
+    var fill = chMeters.querySelector('.vu-fill[data-i="' + i + '"]');
+    var peak = chMeters.querySelector('.vu-peak[data-i="' + i + '"]');
+    if (fill) fill.style.height = vuPct(c.rmsDB) + '%';
+    if (peak) peak.style.bottom = vuPct(c.peakDB) + '%';
+  });
+
+  // Meter footer badge: stereo/dual-mono indicator
+  if (meterBadge) {
+    meterBadge.textContent = channels.length === 2 ? 'STEREO' : (channels.length === 1 ? 'MONO' : channels.length + 'CH');
+  }
+}
+
+// WebSocket push instead of polling /api/meter: the server streams a
+// snapshot every 100ms (see handleWSMeter) over one persistent connection
+// rather than the dashboard opening a new HTTP request per tick. Falls
+// back to a slow poll only if the socket can't be opened at all (e.g. a
+// very old browser or a proxy stripping the Upgrade header) so the
+// dashboard still shows live-ish levels rather than going dark.
+var wsMeterWorking = false;
+function connectMeterSocket() {
+  var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  var ws = new WebSocket(proto + '//' + location.host + '/ws/meter');
+  ws.onmessage = function(ev) { wsMeterWorking = true; applyMeter(JSON.parse(ev.data)); };
+  ws.onclose = function() { wsMeterWorking = false; setTimeout(connectMeterSocket, 1000); };
+  ws.onerror = function() { ws.close(); };
+  setTimeout(function() {
+    if (!wsMeterWorking) pollMeterFallback();
+  }, 2000);
+}
+// pollMeterFallback stops itself as soon as the WebSocket starts delivering
+// messages - it only exists to cover a socket that never connects at all
+// (very old browser, a proxy stripping the Upgrade header), not to run
+// alongside a working one.
+function pollMeterFallback() {
+  if (wsMeterWorking) return;
+  fetch('/api/meter').then(function(r) { return r.json(); }).then(applyMeter).catch(function() {});
+  setTimeout(pollMeterFallback, 1000);
+}
+connectMeterSocket();
+</script>
+</body></html>`))
+
+func handleDashboard(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	name := deviceName
+	wifiEn := wifiEnabled
+	wifiS := wifiSSID
+	wifiP := wifiPassword
+	transportIcon := transportMode != "text"
+	mutex.Unlock()
+
+	var vuBuf, holdBuf, srBuf, chBuf, fmtBuf, tagBuf, transportBuf, qrBuf bytes.Buffer
+	vuRangeFragmentTmpl.Execute(&vuBuf, vuRangeOptionsView())
+	peakHoldFragmentTmpl.Execute(&holdBuf, peakHoldOptionsView())
+	sampleRateFragmentTmpl.Execute(&srBuf, sampleRateOptionsView())
+	channelCountFragmentTmpl.Execute(&chBuf, currentChannelCountView())
+	formatFragmentTmpl.Execute(&fmtBuf, formatOptionsView())
+	tagFragmentTmpl.Execute(&tagBuf, tagOptionsView())
+	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
+
+	// Generate WiFi QR code as base64 PNG for the settings modal
+	var qrBase64 string
+	if wifiEn && wifiS != "" {
+		if code, err := qrcode.New(fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", wifiS, wifiP), qrcode.Medium); err == nil {
+			png, _ := code.PNG(256)
+			qrBase64 = base64.StdEncoding.EncodeToString(png)
+		}
+	}
+	wifiQRFragmentTmpl.Execute(&qrBuf, wifiQRView{wifiEn, wifiS, wifiP, qrBase64})
+
+	dashboardTmpl.Execute(w, dashboardData{
+		DeviceName:           name,
+		Logo:                 template.HTML(pi9696LogoSVG),
+		VURangeFragment:      template.HTML(vuBuf.String()),
+		PeakHoldFragment:     template.HTML(holdBuf.String()),
+		SampleRateFragment:   template.HTML(srBuf.String()),
+		ChannelCountFragment: template.HTML(chBuf.String()),
+		FormatFragment:       template.HTML(fmtBuf.String()),
+		TagFragment:          template.HTML(tagBuf.String()),
+		TransportFragment:    template.HTML(transportBuf.String()),
+		WifiEnabled:          wifiEn,
+		WifiSSID:             wifiS,
+		WifiPassword:         wifiP,
+		WifiQRFragment:       template.HTML(qrBuf.String()),
+		TransportIcon:        transportIcon,
+	})
+}
+
+// isValidDeviceName restricts the web-settable unit name to a small safe
+// charset. It ends up in three places that each have their own risk if left
+// unvalidated: an INFERNO_NAME env var passed to a subprocess (env values
+// aren't shell-parsed, so injection isn't possible there, but a name full of
+// control characters would still be a bad idea to hand to another process),
+// an html/template-escaped page (safe either way, template does the
+// escaping), and log lines (unescaped - control chars could forge log
+// entries).
+func isValidDeviceName(name string) bool {
+	if name == "" || len(name) > 32 {
+		return false
+	}
+	for _, c := range name {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimSpace(r.FormValue("name"))
+	if isValidDeviceName(name) {
+		mutex.Lock()
+		deviceName = name
+		persistConfig()
+		mutex.Unlock()
+		log.Printf("Device name changed to %q via remote", name)
+	}
+
+	mutex.Lock()
+	current := deviceName
+	mutex.Unlock()
+	fmt.Fprintf(w, `<form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML">
+<input name="name" value="%s" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
+<button type="submit">Save</button>
+</form>`, template.HTMLEscapeString(current))
+}
+
+// handleDisplayPNG mirrors the OLED exactly - encoded from the same packed
+// framebuffer real hardware receives (see TTFDisplay.EncodePNG), not a
+// separate HTML/CSS reimplementation of the layout that could drift from
+// what render() actually draws.
+//
+// Encodes into an in-memory buffer under the lock, then writes to the
+// response after releasing it. png.Encode writes straight through
+// http.ResponseWriter to the socket - encoding directly into w while
+// holding mutex would block render(), every encoder/button callback
+// (physical and remote), scheduleLoop, and infernoWorker's recording guard
+// for as long as a slow or stalled client's network write took, the same
+// class of bug already fixed once for stopRecording().
+func handleDisplayPNG(w http.ResponseWriter, r *http.Request) {
+	var buf bytes.Buffer
+	mutex.Lock()
+	err := hwManager.EncodePNG(&buf)
+	mutex.Unlock()
+	if err != nil {
+		log.Printf("Failed to encode display PNG: %v", err)
+		http.Error(w, "failed to encode display", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "no-store")
+	buf.WriteTo(w)
+}
+
+// The input handlers below call the exact same functions
+// setupHardwareCallbacks wires to physical encoder/button interrupts - a
+// remote click is indistinguishable, from the state machine's point of
+// view, from a real one. That's what keeps every existing guard (recording
+// blocks playback and vice versa, confirmation dialogs before delete/
+// format/shutdown/restart) intact without reimplementing them here.
+
+func handleInputEncoderRotate(direction int) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		onEncoderRotate(direction)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+func handleInputEncoderClick(w http.ResponseWriter, r *http.Request) {
+	onEncoderClick()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleInputEncoderHold(w http.ResponseWriter, r *http.Request) {
+	onEncoderHold()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func handleInputButton(bt hardware.ButtonType) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		onButtonPress(bt)
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+var configTmpl = template.Must(template.New("config").Parse(`
+<table>
+<tr><td>Sample Rate</td><td>{{.SampleRate}}kHz</td></tr>
+<tr><td>Channels</td><td>{{.Channels}}</td></tr>
+<tr><td>Format</td><td>{{.Format}}</td></tr>
+<tr><td>Tag</td><td>{{.Tag}}</td></tr>
+<tr><td>Schedule</td><td>{{.Schedule}}</td></tr>
+<tr><td>Inferno</td><td>{{.Inferno}}</td></tr>
+<tr><td>Network</td><td>{{.Network}}</td></tr>
+</table>
+`))
+
+type configView struct {
+	SampleRate int
+	Channels   int
+	Format     string
+	Tag        string
+	Schedule   string
+	Inferno    string
+	Network    string
+}
+
+// handleAPIConfig is read-only by design: mutating settings goes through
+// the encoder/button controls above (the same state machine the OLED menu
+// system already guards), not a second, parallel settings form here.
+func handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	v := configView{
+		SampleRate: sampleRates[sampleRateIdx] / 1000,
+		Channels:   channelCount,
+		Format:     formatNames[recordFormat],
+		Tag:        tagStatusText(),
+		Schedule:   scheduleStatusText(),
+		Inferno:    getInfernoStatusText(),
+	}
+	mutex.Unlock()
+
+	_, v.Network = hwManager.Network.GetNetworkStatus()
+
+	configTmpl.Execute(w, v)
+}
+
+var statusTmpl = template.Must(template.New("status").Parse(`
+{{if .Recording}}<p class="rec">&#9679; RECORDING - {{.Elapsed}}</p>
+<p>{{.Meter}}</p>
+<button hx-post="/api/record/stop" hx-target="#status" hx-swap="innerHTML" data-record-stop>Stop</button>
+ {{else if .Playing}}<p>&#9654; Playing back - {{.Elapsed}}</p>
+ {{else if .Paused}}<p>&#10074;&#10074; Paused - {{.Elapsed}}</p>
+ {{else if .Demo}}<p class="{{if eq .DemoKind "record"}}rec{{else}}idle{{end}}">{{if eq .DemoKind "record"}}&#9679; DEMO RECORDING{{else}}&#9654; DEMO PLAYBACK{{end}} - {{.Elapsed}}</p>
+<button hx-post="/api/demo/stop" hx-target="#status" hx-swap="innerHTML">Stop Demo</button>
+ {{else if .MonOutput}}<p class="idle">&#9654; Monitoring output - playing {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch {{.Elapsed}}</p>
+ <button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML">Start Recording</button>
+ {{else if .Monitoring}}<p class="idle">&#128266; Monitoring input - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
+<button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML">Start Recording</button>
+<button hx-post="/api/monitor/stop" hx-target="#status" hx-swap="innerHTML">Stop Monitoring</button>
+{{else}}<p class="idle">Idle - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
+<button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Start Recording</button>
+<button hx-post="/api/monitor/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Monitor Input</button>
+<button hx-post="/api/demo/start/record" hx-target="#status" hx-swap="innerHTML">Demo Record</button>
+<button hx-post="/api/demo/start/playback" hx-target="#status" hx-swap="innerHTML">Demo Playback</button>
+{{if not .InfernoUp}}<p>(Inferno server not running)</p>{{end}}
+{{end}}
+<p>Storage: {{.Storage}}</p>
+`))
+
+type statusView struct {
+	Recording  bool
+	Playing    bool
+	Paused     bool
+	Monitoring bool
+	MonOutput  bool
+	Demo       bool
+	DemoKind   string
+	Elapsed    string
+	Meter      string
+	Format     string
+	SampleRate int
+	Channels   int
+	InfernoUp  bool
+	Storage    string
+}
+
+func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	v := statusView{
+		Recording:  isRecording,
+		Playing:    currentState == StatePlaying,
+		Paused:     currentState == StatePaused,
+		Monitoring: monitoring,
+		MonOutput:  monitoringOutput,
+		Demo:       demoMode,
+		DemoKind:   demoKind,
+		Format:     formatNames[recordFormat],
+		SampleRate: sampleRates[sampleRateIdx] / 1000,
+		Channels:   channelCount,
+		InfernoUp:  infernoState == InfernoRunning,
+		Storage:    getRemainingStorage(),
+	}
+	switch {
+	case v.Recording:
+		v.Elapsed = formatDuration(time.Since(recordStart))
+		v.Meter = formatMeter()
+	case v.Playing:
+		v.Elapsed = formatDuration(time.Since(playbackStart))
+	case v.Paused:
+		v.Elapsed = formatDuration(playbackPausedElapsed)
+	case v.Demo:
+		v.Elapsed = formatDuration(time.Since(demoStart))
+	}
+	mutex.Unlock()
+
+	statusTmpl.Execute(w, v)
+}
+
+// handleAPIMeter is deliberately separate from handleAPIStatus: the VU
+// hologram needs numeric dB values on a fast (~150ms) poll to look live,
+// while /api/status's 2s poll is fine for everything else on the dashboard.
+// meterPeakDB/meterRMSDB fall back to meterSilence whenever nothing is
+// recording (see main.go's stopRecording/meterReader), so the hologram
+// correctly goes quiet rather than showing a stale level.
+type channelLevel struct {
+	PeakDB float64 `json:"peakDB"`
+	RMSDB  float64 `json:"rmsDB"`
+}
+
+type meterResponse struct {
+	PeakDB     float64        `json:"peakDB"`
+	RMSDB      float64        `json:"rmsDB"`
+	Recording  bool           `json:"recording"`
+	Playing    bool           `json:"playing"`
+	Paused     bool           `json:"paused"`
+	Monitoring bool           `json:"monitoring"`
+	MonOutput  bool           `json:"monOutput"`
+	Demo       bool           `json:"demo"`
+	Elapsed    string         `json:"elapsed"`
+	Channels   []channelLevel `json:"channels"`
+	// FloorDB is the currently configured VU-meter range floor (Settings ->
+	// Meter Range, see vuRangeOptions in main.go) - sent on every message
+	// so the dashboard's vuPct()/db-scale ticks track a change made from
+	// the OLED without needing a page reload.
+	FloorDB float64 `json:"floorDB"`
+}
+
+// jsonSafeDB coerces a dB level to a JSON-encodable value. encoding/json will
+// not marshal +/-Inf or NaN (the WebSocket meter and /api/meter would then
+// return an empty 200 instead of a payload), so clamp any non-finite reading
+// to the silence sentinel before it reaches the wire. meterReader in main.go
+// already sanitizes at ingestion, but this guarantees the JSON sink can never
+// fail even if a non-finite value comes from some other path (demo math,
+// decay ballistics, etc.).
+func jsonSafeDB(v float64) float64 {
+	if math.IsInf(v, 0) || math.IsNaN(v) {
+		return meterSilence
+	}
+	return v
+}
+
+// currentMeterResponse builds a meterResponse snapshot under the app mutex -
+// shared by the plain-HTTP /api/meter handler (kept for anything that wants
+// a one-shot read) and the /ws/meter push loop below, so there's exactly
+// one place that assembles this payload.
+func currentMeterResponse() meterResponse {
+	mutex.Lock()
+	defer mutex.Unlock()
+
+	resp := meterResponse{
+		PeakDB:     jsonSafeDB(meterPeakDB),
+		RMSDB:      jsonSafeDB(meterRMSDB),
+		Recording:  isRecording,
+		Playing:    currentState == StatePlaying,
+		Paused:     currentState == StatePaused,
+		Monitoring: monitoring,
+		MonOutput:  monitoringOutput,
+		Demo:       demoMode,
+		FloorDB:    vuRangeOptions[vuRangeIdx],
+	}
+	// Always size the meter bank to the configured channel count. During
+	// recording, the peak/RMS arrays are exactly channelCount (startRecording
+	// sizes them to it), and at idle/monitoring they follow it too, so this
+	// is normally a no-op - but while a channel change is still in flight
+	// (Inferno restart is deferred if a take is running), sizing to
+	// channelCount means the VU count tracks the setting immediately instead
+	// of staying pinned to the old running server. The per-index bounds
+	// checks below keep channels beyond the current arrays silent rather
+	// than reading out of range.
+	count := channelCount
+	resp.Channels = make([]channelLevel, count)
+	for i := range resp.Channels {
+		if i < len(meterChannelPeakHeld) {
+			resp.Channels[i] = channelLevel{PeakDB: jsonSafeDB(meterChannelPeakHeld[i]), RMSDB: jsonSafeDB(meterChannelRMS[i])}
+		} else {
+			resp.Channels[i] = channelLevel{PeakDB: meterSilence, RMSDB: meterSilence}
+		}
+	}
+	switch {
+	case resp.Recording:
+		resp.Elapsed = formatDuration(time.Since(recordStart))
+	case resp.Playing:
+		resp.Elapsed = formatDuration(time.Since(playbackStart))
+	case resp.Paused:
+		// Playback time is frozen while paused - the VFD must not keep
+		// counting. Format the captured duration captured at pause time.
+		resp.Elapsed = formatDuration(playbackPausedElapsed)
+	case resp.Demo:
+		resp.Elapsed = formatDuration(time.Since(demoStart))
+	}
+	return resp
+}
+
+func handleAPIMeter(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(currentMeterResponse())
+}
+
+// handleWSMeter pushes a meter snapshot every 100ms over a WebSocket rather
+// than making the dashboard poll /api/meter - fewer requests, and headroom
+// to tighten the interval later without adding HTTP request overhead per
+// tick. Falls back to nothing fancier than closing on the first send error
+// (client navigated away, network dropped) - the dashboard's reconnect
+// logic (see the WS setup in dashboardTmpl) is what handles that, not this
+// loop retrying.
+func handleWSMeter(ws *websocket.Conn) {
+	defer ws.Close()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for range ticker.C {
+		if err := websocket.JSON.Send(ws, currentMeterResponse()); err != nil {
+			return
+		}
+	}
+}
+
+func handleAPIRecordStart(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	if currentState == StateIdle && !isRecording {
+		startRecording()
+	}
+	mutex.Unlock()
+	handleAPIStatus(w, r)
+}
+
+func handleAPIRecordStop(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	if isRecording {
+		stopRecording()
+	}
+	mutex.Unlock()
+	handleAPIStatus(w, r)
+}
+
+func handleAPIMonitorStart(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	startMonitor()
+	mutex.Unlock()
+	handleAPIStatus(w, r)
+}
+
+func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	if monitoring {
+		stopMonitor()
+	}
+	mutex.Unlock()
+	handleAPIStatus(w, r)
+}
+
+// handleAPIDemoStart accepts "record" or "playback" via the {kind} path
+// value purely to change how the dashboard labels the simulated session
+// (see statusTmpl) - the generated levels are identical either way.
+func handleAPIDemoStart(w http.ResponseWriter, r *http.Request) {
+	kind := r.PathValue("kind")
+	if kind != "record" && kind != "playback" {
+		http.NotFound(w, r)
+		return
+	}
+	mutex.Lock()
+	startDemo(kind)
+	mutex.Unlock()
+	handleAPIStatus(w, r)
+}
+
+func handleAPIDemoStop(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	if demoMode {
+		stopDemo()
+	}
+	mutex.Unlock()
+	handleAPIStatus(w, r)
+}
+
+var recordingsTmpl = template.Must(template.New("recordings").Parse(`
+<table>
+<tr><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr>
+{{if not .}}<tr><td colspan="7">None yet.</td></tr>{{else}}
+{{range .}}<tr>
+<td>{{.Name}}</td>
+<td>{{.Channels}}</td>
+<td>{{.Format}} {{.SampleRate}}kHz</td>
+<td>{{.StartStr}}</td>
+<td>{{.EndStr}}</td>
+<td>{{.DurationStr}}</td>
+<td><a href="/download/{{.Name}}">download</a></td>
+</tr>{{end}}
+{{end}}
+</table>
+`))
+
+type recordingRow struct {
+	Name        string
+	Channels    int
+	Format      string
+	SampleRate  int
+	StartStr    string
+	EndStr      string
+	DurationStr string
+}
+
+// recFilenameRe matches the app's own recording filenames, e.g.
+// "recording_20240131_143022_ch2_48kHz.wav" - see startRecording in
+// main.go. Everything but duration/end time is recoverable straight from
+// the name; duration needs the file's actual content (see recordingDuration).
+var recFilenameRe = regexp.MustCompile(`^recording_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz\.(\w+)$`)
+
+// recDurationCache avoids re-running ffprobe on every 15s recordings poll
+// for files that haven't changed - keyed by path, invalidated by
+// size+mtime, which is enough since finished recordings are never modified
+// in place. Guarded by its own mutex, not the app's: this never touches
+// app state, only a local cache map.
+var (
+	recDurationCacheMu sync.Mutex
+	recDurationCache   = map[string]recDurationCacheEntry{}
+)
+
+type recDurationCacheEntry struct {
+	size    int64
+	modTime time.Time
+	dur     time.Duration
+}
+
+// recordingDuration returns how long the recording at path plays for. WAV
+// duration is computed directly from the file size (pcm_s24le, 3 bytes/
+// sample - see startRecording's ffmpeg args) rather than shelling out,
+// since it's exact and free. FLAC/MP3 are variable-bitrate/compressed, so
+// there's no size-based formula - those go through ffprobe, cached by
+// (path, size, mtime) so a steady-state poll of unchanged files costs
+// nothing after the first look.
+func recordingDuration(path string, channels, sampleRate int, format string) time.Duration {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+
+	if format == "WAV" {
+		const bytesPerSample = 3 // pcm_s24le
+		const headerBytes = 44
+		dataBytes := info.Size() - headerBytes
+		if dataBytes <= 0 || channels <= 0 || sampleRate <= 0 {
+			return 0
+		}
+		return time.Duration(dataBytes) * time.Second / time.Duration(int64(channels)*int64(bytesPerSample)*int64(sampleRate))
+	}
+
+	recDurationCacheMu.Lock()
+	if e, ok := recDurationCache[path]; ok && e.size == info.Size() && e.modTime.Equal(info.ModTime()) {
+		recDurationCacheMu.Unlock()
+		return e.dur
+	}
+	recDurationCacheMu.Unlock()
+
+	// path comes only from recordingFiles()'s own glob of RecordPath, never
+	// from request input, so this is not command-injection-exposed.
+	out, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path).Output()
+	var dur time.Duration
+	if err == nil {
+		if secs, perr := strconv.ParseFloat(strings.TrimSpace(string(out)), 64); perr == nil {
+			dur = time.Duration(secs * float64(time.Second))
+		}
+	}
+
+	recDurationCacheMu.Lock()
+	recDurationCache[path] = recDurationCacheEntry{size: info.Size(), modTime: info.ModTime(), dur: dur}
+	recDurationCacheMu.Unlock()
+	return dur
+}
+
+func buildRecordingRow(path string) recordingRow {
+	name := filepath.Base(path)
+	row := recordingRow{Name: name}
+
+	m := recFilenameRe.FindStringSubmatch(name)
+	if m == nil {
+		return row
+	}
+	start, err := time.ParseInLocation("20060102 150405", m[1]+" "+m[2], time.Local)
+	if err != nil {
+		return row
+	}
+	channels, _ := strconv.Atoi(m[3])
+	sampleRate, _ := strconv.Atoi(m[4])
+	format := strings.ToUpper(m[5])
+
+	row.Channels = channels
+	row.SampleRate = sampleRate
+	row.Format = format
+	row.StartStr = start.Format("2006-01-02 15:04:05")
+
+	dur := recordingDuration(path, channels, sampleRate, format)
+	if dur > 0 {
+		row.DurationStr = formatDuration(dur)
+		row.EndStr = start.Add(dur).Format("2006-01-02 15:04:05")
+	} else {
+		row.DurationStr = "-"
+		row.EndStr = "-"
+	}
+	return row
+}
+
+func handleAPIRecordings(w http.ResponseWriter, r *http.Request) {
+	var rows []recordingRow
+	for _, f := range recordingFiles() {
+		rows = append(rows, buildRecordingRow(f))
+	}
+	recordingsTmpl.Execute(w, rows)
+}
+
+// handleDownload only serves files that appear in the app's own current
+// recordingFiles() listing - whitelisting against reality rather than just
+// filepath.Base()-sanitizing the request, so a path like "../../etc/passwd"
+// is rejected outright rather than relying on string-cleaning alone.
+func handleDownload(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("filename")
+	for _, f := range recordingFiles() {
+		if filepath.Base(f) == name {
+			http.ServeFile(w, r, f)
+			return
+		}
+	}
+	http.NotFound(w, r)
+}
+
+func newRemoteMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /manifest.json", handleManifest)
+	mux.HandleFunc("GET /icon.svg", handleIcon)
+	mux.HandleFunc("GET /login", handleLoginGet)
+	mux.HandleFunc("POST /login", handleLoginPost)
+	mux.HandleFunc("GET /logout", handleLogout)
+	mux.HandleFunc("GET /", requireAuth(handleDashboard))
+	mux.HandleFunc("GET /api/status", requireAuth(handleAPIStatus))
+	mux.HandleFunc("GET /api/meter", requireAuth(handleAPIMeter))
+	mux.HandleFunc("GET /ws/meter", requireAuth(websocket.Handler(handleWSMeter).ServeHTTP))
+	mux.HandleFunc("GET /api/config", requireAuth(handleAPIConfig))
+	mux.HandleFunc("POST /api/device-name", requireAuth(handleAPIDeviceName))
+	mux.HandleFunc("POST /api/settings/vu-range", requireAuth(handleAPISettingsVURange))
+	mux.HandleFunc("POST /api/settings/peak-hold", requireAuth(handleAPISettingsPeakHold))
+	mux.HandleFunc("POST /api/settings/sample-rate", requireAuth(handleAPISettingsSampleRate))
+	mux.HandleFunc("POST /api/settings/channels", requireAuth(handleAPISettingsChannels))
+	mux.HandleFunc("POST /api/settings/format", requireAuth(handleAPISettingsFormat))
+	mux.HandleFunc("POST /api/settings/tag", requireAuth(handleAPISettingsTag))
+	mux.HandleFunc("POST /api/settings/transport-mode", requireAuth(handleAPISettingsTransportMode))
+	mux.HandleFunc("POST /api/settings/wifi", requireAuth(handleAPISettingsWiFi))
+	mux.HandleFunc("POST /api/record/start", requireAuth(handleAPIRecordStart))
+	mux.HandleFunc("POST /api/record/stop", requireAuth(handleAPIRecordStop))
+	mux.HandleFunc("POST /api/monitor/start", requireAuth(handleAPIMonitorStart))
+	mux.HandleFunc("POST /api/monitor/stop", requireAuth(handleAPIMonitorStop))
+	mux.HandleFunc("POST /api/demo/start/{kind}", requireAuth(handleAPIDemoStart))
+	mux.HandleFunc("POST /api/demo/stop", requireAuth(handleAPIDemoStop))
+	mux.HandleFunc("GET /api/recordings", requireAuth(handleAPIRecordings))
+	mux.HandleFunc("GET /download/{filename}", requireAuth(handleDownload))
+
+	mux.HandleFunc("GET /api/display.png", requireAuth(handleDisplayPNG))
+	mux.HandleFunc("POST /api/input/encoder/left", requireAuth(handleInputEncoderRotate(-1)))
+	mux.HandleFunc("POST /api/input/encoder/right", requireAuth(handleInputEncoderRotate(1)))
+	mux.HandleFunc("POST /api/input/encoder/click", requireAuth(handleInputEncoderClick))
+	mux.HandleFunc("POST /api/input/encoder/hold", requireAuth(handleInputEncoderHold))
+	mux.HandleFunc("POST /api/input/button/record", requireAuth(handleInputButton(hardware.RecordButton)))
+	mux.HandleFunc("POST /api/input/button/stop", requireAuth(handleInputButton(hardware.StopButton)))
+	mux.HandleFunc("POST /api/input/button/play", requireAuth(handleInputButton(hardware.PlayButton)))
+
+	// htmx.min.js is downloaded by setup.sh (pinned to 4.0.0, see setup.sh)
+	// rather than referencing an external CDN at runtime - this device
+	// shouldn't depend on internet access, only its own LAN, to serve its
+	// control page. A dedicated single-file handler (not http.FileServer
+	// mounted on the web/ dir) so this never exposes directory listing for
+	// anything else that might land in that directory.
+	mux.HandleFunc("GET /static/htmx.min.js", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join("web", "htmx.min.js"))
+	})
+
+	return mux
+}
+
+const remoteControlPort = "8080"
+
+// startRemoteServer binds to ip only (never 0.0.0.0) - see PROJECT_STATUS.md:
+// this is a deliberate constraint so the control surface is reachable from
+// the recorder's own eth0 LAN and nothing else (no USB gadget interfaces, no
+// future wifi, no localhost-only tunneling assumptions).
+func startRemoteServer(ip string) (*http.Server, error) {
+	listener, err := net.Listen("tcp", net.JoinHostPort(ip, remoteControlPort))
+	if err != nil {
+		return nil, err
+	}
+
+	srv := &http.Server{Handler: newRemoteMux()}
+	go func() {
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("Remote control server error: %v", err)
+		}
+	}()
+
+	log.Printf("Remote control server listening on http://%s", listener.Addr())
+	return srv, nil
+}
+
+// remoteControlLoop (re)binds the remote control server to eth0's current IP
+// and tears it down when eth0 loses its address, mirroring networkMonitorLoop's
+// polling approach but kept entirely separate from the app mutex: binding/
+// shutting down a listener is not instant, and this must never block
+// render()/input handling the way pre-worker Inferno start/stop used to.
+func remoteControlLoop() {
+	var currentServer *http.Server
+	var currentIP string
+
+	for {
+		ip := ""
+		if info, err := hwManager.Network.GetNetworkInfo(); err == nil && info.Connected {
+			ip = info.IPAddress
+		}
+
+		if ip != currentIP {
+			if currentServer != nil {
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				currentServer.Shutdown(ctx)
+				cancel()
+				currentServer = nil
+				log.Printf("Remote control server stopped")
+			}
+
+			currentIP = ip
+			if ip != "" {
+				srv, err := startRemoteServer(ip)
+				if err != nil {
+					log.Printf("Failed to start remote control server on %s: %v", ip, err)
+					currentIP = "" // retry on the next tick
+				} else {
+					currentServer = srv
+				}
+			}
+		}
+
+		time.Sleep(5 * time.Second)
+	}
+}
+
+// remoteAccessInfo is what Settings -> Remote Access shows on the OLED.
+func remoteAccessInfo() []string {
+	info, err := hwManager.Network.GetNetworkInfo()
+	if err != nil || !info.Connected || info.IPAddress == "" {
+		return []string{"Remote Access", "Not available", "(eth0 has no IP)"}
+	}
+	return []string{
+		"Remote Access",
+		fmt.Sprintf("http://%s:%s", info.IPAddress, remoteControlPort),
+		"Token: " + formatToken(remoteToken),
+	}
+}

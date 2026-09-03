@@ -77,8 +77,8 @@ This document provides the complete wiring reference for connecting all componen
 | Button   | Pi Pin | GPIO | Description |
 |----------|--------|------|-------------|
 | Record   | 29     | 5    | Start Recording |
-| Stop     | 31     | 6    | Stop Recording |
-| Play     | 33     | 13   | Play/Pause (future) |
+| Stop     | 31     | 6    | Stop Recording, or stop playback |
+| Play     | 33     | 13   | Play back most recent recording |
 | Common   | 6/9/14 | -    | Ground (any GND pin) |
 
 **Wiring Notes:**
@@ -87,7 +87,28 @@ This document provides the complete wiring reference for connecting all componen
 - Internal pull-ups are enabled in software
 - Use quality tactile switches for better feel
 
-### 4. Audio Interface
+### 4. Status LEDs
+
+**Interface:** GPIO digital output (no PWM/brightness control)
+**Type:** Standard 3mm/5mm LEDs with a current-limiting resistor (330Ω-1kΩ for 3.3V logic)
+
+| LED    | Pi Pin | GPIO | Description |
+|--------|--------|------|-------------|
+| Record | 32     | 12   | Lit solid while recording is in progress |
+| Status | 36     | 16   | Lit solid while the Inferno server is running |
+| Common | 6/9/14 | -    | Ground (any GND pin, cathode side through the resistor) |
+
+**Wiring Notes:**
+- Anode (long leg) → resistor → GPIO pin; cathode (short leg) → GND
+- These GPIO pins were chosen specifically to avoid every pin already used
+  elsewhere in this document (display SPI, encoder, buttons, I2C on
+  GPIO2/3, and UART/I2S on GPIO14/15/18-21, left clear for an audio HAT)
+- Software-side pins are set in `hardware/leds.go`; the app is inert
+  without these wired (LED.Set on an unconfigured pin is skipped in
+  simulator/dev mode, and simply does nothing useful if the pins aren't
+  physically connected)
+
+### 5. Audio Interface
 
 **Recommended:** USB Audio Interface
 **Alternative:** Raspberry Pi Audio HAT
@@ -112,6 +133,7 @@ This document provides the complete wiring reference for connecting all componen
 | OLED Display | 50-150 | Varies with brightness |
 | Encoder | 5 | Minimal |
 | Buttons | <1 | When not pressed |
+| Status LEDs | 2-20 | Depends on resistor value, per LED |
 | **Total** | **~1000mA** | **At 5V (5W)** |
 
 **Power Supply Recommendation:**
@@ -279,6 +301,7 @@ This document provides the complete wiring reference for connecting all componen
 | Date | Version | Changes |
 |------|---------|---------|
 | 2024-01-XX | 1.0 | Initial wiring specification |
+| 2026-08-28 | 1.1 | Added Status LEDs (GPIO12/16); Play button no longer marked future |
 
 ---
 

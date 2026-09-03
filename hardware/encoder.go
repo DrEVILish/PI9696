@@ -2,30 +2,41 @@ package hardware
 
 import (
 	"fmt"
-	"sync"
-	"time"
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/conn/v3/gpio/gpioreg"
+	"sync"
+	"time"
 )
 
 type Encoder struct {
-	pinA       gpio.PinIn
-	pinB       gpio.PinIn
-	pinButton  gpio.PinIn
-	lastA      gpio.Level
-	lastB      gpio.Level
-	position   int
-	buttonDown bool
-	buttonTime time.Time
-	mutex      sync.Mutex
-	callbacks  struct {
-		onRotate func(direction int)  // +1 for clockwise, -1 for counter-clockwise
+	pinA             gpio.PinIn
+	pinB             gpio.PinIn
+	pinButton        gpio.PinIn
+	lastA            gpio.Level
+	lastB            gpio.Level
+	lastRotationTime time.Time
+	position         int
+	buttonDown       bool
+	buttonTime       time.Time
+	pressPending     bool
+	pressSince       time.Time
+	releasePending   bool
+	releaseSince     time.Time
+	mutex            sync.Mutex
+	callbacks        struct {
+		onRotate func(direction int) // +1 for clockwise, -1 for counter-clockwise
 		onClick  func()
 		onHold   func() // Called after 3 second hold
 	}
 }
 
 func NewEncoder() (*Encoder, error) {
+	if simMode() {
+		// No real GPIO on a dev machine; callbacks simply won't fire from
+		// hardware input, but the rest of the app can still run.
+		return &Encoder{position: 0}, nil
+	}
+
 	pinA := gpioreg.ByName("GPIO17")
 	if pinA == nil {
 		return nil, fmt.Errorf("failed to get encoder pin A")
@@ -81,13 +92,22 @@ func (e *Encoder) readEncoder() {
 
 	if currentA != e.lastA {
 		if currentA == gpio.Low {
-			// Falling edge on A
-			if currentB == gpio.Low {
-				// B is also low, clockwise
-				e.handleRotation(1)
-			} else {
-				// B is high, counter-clockwise
-				e.handleRotation(-1)
+			// Falling edge on A. Mechanical contact bounce on EC11-style
+			// encoders can produce several spurious low/high transitions
+			// within a couple of milliseconds of the real one - unlike the
+			// push button and the three momentary buttons, this path had no
+			// debounce at all, so a single physical detent could register
+			// as two or more rotate events (or occasionally the wrong
+			// direction, if B's level happened to change mid-bounce).
+			if time.Since(e.lastRotationTime) >= 5*time.Millisecond {
+				if currentB == gpio.Low {
+					// B is also low, clockwise
+					e.handleRotation(1)
+				} else {
+					// B is high, counter-clockwise
+					e.handleRotation(-1)
+				}
+				e.lastRotationTime = time.Now()
 			}
 		}
 	}
@@ -96,6 +116,17 @@ func (e *Encoder) readEncoder() {
 	e.lastB = currentB
 }
 
+// buttonDebounce is the settling window applied to the encoder's push-switch.
+// Unlike the rotation path (which debounces in readEncoder), the push button
+// had no transition debounce: a single mid-hold bounce could make readButton
+// take the release path mid-hold (firing a click while the user is still
+// holding), then re-arm buttonDown/buttonTime when it bounced back - degrading
+// a genuine 3s hold into a click. pressSince pins the time of the most recent
+// *settled* edge so bounces within the window are ignored (a bit like the
+// classic RC-debounced switch: the level must stay stable for buttonDebounce
+// before it counts).
+const buttonDebounce = 10 * time.Millisecond
+
 func (e *Encoder) readButton() {
 	currentButton := e.pinButton.Read() == gpio.Low // Active low
 
@@ -103,14 +134,36 @@ func (e *Encoder) readButton() {
 	defer e.mutex.Unlock()
 
 	if currentButton && !e.buttonDown {
-		// Button pressed
+		// Button pressed. Only latch it once the line has been low (the
+		// engaged state) continuously past the debounce window, so a bounce
+		// that briefly releases it doesn't re-run the press logic.
+		if !e.pressPending {
+			e.pressPending = true
+			e.pressSince = time.Now()
+			return
+		}
+		if time.Since(e.pressSince) < buttonDebounce {
+			return
+		}
+		e.pressPending = false
 		e.buttonDown = true
 		e.buttonTime = time.Now()
 	} else if !currentButton && e.buttonDown {
-		// Button released
+		// Button released. Confirm the release held past the debounce window
+		// before finishing the press, so bounce back down doesn't cancel a
+		// just-completed click and re-arm a phantom hold.
+		if !e.releasePending {
+			e.releasePending = true
+			e.releaseSince = time.Now()
+			return
+		}
+		if time.Since(e.releaseSince) < buttonDebounce {
+			return
+		}
+		e.releasePending = false
 		e.buttonDown = false
 		holdTime := time.Since(e.buttonTime)
-		
+
 		if holdTime >= 3*time.Second {
 			// Long press (3+ seconds)
 			if e.callbacks.onHold != nil {

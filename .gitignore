@@ -27,6 +27,19 @@ go.work.sum
 # env file
 .env
 
+# FiraCode fonts - downloaded by setup.sh, not committed
+fonts/
+
+# htmx.js - downloaded by setup.sh, not committed
+web/htmx.min.js
+
+# Built binaries
+/pi9696
+/font-converter
+/simcheck
+
 # Editor/IDE
 # .idea/
 # .vscode/
+# Local dev-tool config (machine-specific permissions etc.)
+.claude/
