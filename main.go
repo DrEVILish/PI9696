@@ -92,9 +92,6 @@ func loadPersistedConfig() {
 	if c.ChannelCount >= 1 && c.ChannelCount <= MaxChannelCount {
 		channelCount = c.ChannelCount
 	}
-	if c.RecordFormat >= 0 && int(c.RecordFormat) < len(formatNames) {
-		recordFormat = RecordFormat(c.RecordFormat)
-	}
 	if c.TagPresetIdx >= 0 && c.TagPresetIdx < len(tagPresets) {
 		tagPresetIdx = c.TagPresetIdx
 	}
@@ -112,8 +109,8 @@ func loadPersistedConfig() {
 	wifiSSID = c.WifiSSID
 	wifiPassword = c.WifiPassword
 
-	log.Printf("Loaded persisted config from %s (device %q, %dkHz %dch %s)",
-		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount, formatNames[recordFormat])
+	log.Printf("Loaded persisted config from %s (device %q, %dkHz %dch WAV)",
+		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount)
 }
 
 // persistConfig snapshots the current non-destructive settings to ConfigPath.
@@ -124,7 +121,6 @@ func persistConfig() {
 		DeviceName:    deviceName,
 		SampleRateIdx: sampleRateIdx,
 		ChannelCount:  channelCount,
-		RecordFormat:  int(recordFormat),
 		TagPresetIdx:  tagPresetIdx,
 		VURangeIdx:    vuRangeIdx,
 		PeakHoldIdx:   peakHoldIdx,
@@ -363,7 +359,6 @@ const (
 	StatePlaying
 	StatePaused
 	StateSettings
-	StateSchedule
 	StateRemoteInfo
 	StateCopyFiles
 	StateCopying
@@ -373,41 +368,20 @@ const (
 	StateIdleBrowse // encoder-driven idle browsing: paged VU meters, then a network/token page - see onEncoderRotate's StateIdle case
 	StateWifi       // WiFi access-point submenu (enable/disable, show QR)
 	StateWifiQR     // full-screen QR code for joining the WiFi AP
-	StateAudio      // Audio submenu: Sample Rate, Channel Count, Format, Tag
+	StateAudio      // Audio submenu: Sample Rate, Channel Count, Tag
 	StateMetering   // Metering submenu: Meter Range, Peak Hold
 )
 
-// RecordFormat selects the container/codec ffmpeg encodes to when finalizing
-// a recording. Each has a different channel-count ceiling (see
-// maxChannelsForFormat): WAV is uncompressed PCM with no practical limit,
-// FLAC is lossless but only reasonably supports up to 8 channels, and MP3's
-// bitstream format only supports mono/stereo.
-type RecordFormat int
-
-const (
-	FormatWAV RecordFormat = iota
-	FormatFLAC
-	FormatMP3
-)
-
-var formatNames = []string{"WAV", "FLAC", "MP3"}
+// Recording output is WAV (PCM 24-bit) only - see OutputBitsPerSample and the
+// ffmpeg args in startRecording. There's deliberately no FLAC/MP3 option and
+// therefore no per-format ceiling to respect; WAV supports the full 1-128
+// channel range.
 
 // tagPresets are the selectable values for the recording-tag metadata field.
 // Free-text annotation would need a text-entry UI this encoder-only,
 // no-keyboard hardware doesn't have; a preset list is the practical
 // alternative. "" (first entry) means no tag is written.
 var tagPresets = []string{"", "Show", "Rehearsal", "Soundcheck", "Interview", "Backup"}
-
-func maxChannelsForFormat(f RecordFormat) int {
-	switch f {
-	case FormatFLAC:
-		return 8
-	case FormatMP3:
-		return 2
-	default:
-		return MaxChannelCount
-	}
-}
 
 type MenuMode int
 
@@ -445,7 +419,6 @@ var (
 	sampleRates            = []int{44100, 48000, 96000, 192000}
 	sampleRateIdx          = 1 // Default to 48kHz
 	channelCount           = 2
-	recordFormat           = FormatWAV
 	tagPresetIdx           = 0
 	isRecording            = false
 	isCopying              = false
@@ -474,14 +447,9 @@ var (
 	demoMode               bool          // synthetic VU-only demo, no real audio - see startDemo/demoLoop
 	demoKind               string
 	demoStart              time.Time
-	idleBrowsePage         int  // current page within StateIdleBrowse - see onEncoderRotate
-	idleBrowseMonitorOwned bool // true if entering idle-browse started the monitor itself, so it knows to stop it again on exit rather than killing a monitor session started deliberately from the web UI
-	scheduleHour           = 8
-	scheduleMinute         = 0
-	scheduleDuration       = 0 // minutes; 0 = manual stop
-	scheduleArmed          = false
-	scheduleFiredDate      string     // "YYYYMMDD" of the day the schedule last fired, so scheduleLoop's 1s poll doesn't refire within the same matching minute
-	editingParameter       bool       // true once a parameter row (Sample Rate/Channel/Format/Tag in Settings, Hour/Minute/Duration in Schedule) has been clicked into - only then does rotation adjust its value instead of navigating
+	idleBrowsePage         int        // current page within StateIdleBrowse - see onEncoderRotate
+	idleBrowseMonitorOwned bool       // true if entering idle-browse started the monitor itself, so it knows to stop it again on exit rather than killing a monitor session started deliberately from the web UI
+	editingParameter       bool       // true once a parameter row (Sample Rate/Channel/Tag in Settings) has been clicked into - only then does rotation adjust its value instead of navigating
 	deviceName             = "PI9696" // unit name shown on the login/dashboard and passed to Inferno as INFERNO_NAME; changeable only from the authenticated dashboard
 	currentState           = StateIdle
 	menuMode               = SettingsMenu
@@ -524,7 +492,6 @@ type PersistedConfig struct {
 	DeviceName    string `json:"deviceName"`
 	SampleRateIdx int    `json:"sampleRateIdx"`
 	ChannelCount  int    `json:"channelCount"`
-	RecordFormat  int    `json:"recordFormat"`
 	TagPresetIdx  int    `json:"tagPresetIdx"`
 	VURangeIdx    int    `json:"vuRangeIdx"`
 	PeakHoldIdx   int    `json:"peakHoldIdx"`
@@ -556,7 +523,6 @@ func main() {
 	go detectUSB()
 	go updateLoop()
 	go networkMonitorLoop()
-	go scheduleLoop()
 	go demoLoop()
 	go peakHoldLoop()
 	go mdnsLoop()
@@ -626,7 +592,7 @@ func gracefulShutdown() {
 
 	// Wait for the owning goroutines (see startRecording/startPlayback/
 	// startMonitor) to actually reap their processes before the app exits,
-	// so ffmpeg isn't orphaned and the recording's WAV/FLAC/MP3 header gets
+	// so ffmpeg isn't orphaned and the recording's WAV header gets
 	// finalized.
 	if recDone != nil {
 		<-recDone
@@ -697,9 +663,7 @@ func onEncoderRotate(direction int) {
 			adjustSampleRate(direction)
 		case 1: // Channel Count
 			adjustChannelCount(direction)
-		case 2: // Format
-			adjustRecordFormat(direction)
-		case 3: // Tag
+		case 2: // Tag
 			adjustRecordTag(direction)
 		}
 
@@ -713,25 +677,6 @@ func onEncoderRotate(direction int) {
 			adjustVURange(direction)
 		case 1: // Peak Hold
 			adjustPeakHold(direction)
-		}
-
-	case StateSchedule:
-		if !editingParameter {
-			navigateMenu(direction)
-			break
-		}
-		switch selectedMenu {
-		case 0: // Hour
-			scheduleHour = ((scheduleHour+direction)%24 + 24) % 24
-		case 1: // Minute
-			scheduleMinute = ((scheduleMinute+direction)%60 + 60) % 60
-		case 2: // Duration, in 5-minute steps, 0-480 (8h)
-			scheduleDuration += direction * 5
-			if scheduleDuration < 0 {
-				scheduleDuration = 0
-			} else if scheduleDuration > 480 {
-				scheduleDuration = 480
-			}
 		}
 
 	case StateCopyFiles:
@@ -774,9 +719,6 @@ func onEncoderClick() {
 
 	case StateSettings:
 		handleSettingsClick()
-
-	case StateSchedule:
-		handleScheduleClick()
 
 	case StateCopyFiles:
 		handleCopyFilesClick()
@@ -903,15 +845,8 @@ func adjustChannelCount(direction int) {
 		channelCount = MaxChannelCount
 	}
 
-	// A format's channel ceiling (FLAC ~8, MP3 2) can be exceeded by
-	// widening the channel count after that format was already selected;
-	// fall back to the next more permissive format rather than silently
-	// keeping a format/channel-count combination ffmpeg can't encode.
-	for recordFormat != FormatWAV && channelCount > maxChannelsForFormat(recordFormat) {
-		old := recordFormat
-		recordFormat--
-		log.Printf("Channel count %d exceeds %s limit, falling back to %s", channelCount, formatNames[old], formatNames[recordFormat])
-	}
+	// WAV supports the full 1-MaxChannelCount range - no per-format ceiling
+	// to fall back over.
 
 	// Check if we need to restart Inferno server
 	checkInfernoRestart()
@@ -924,34 +859,16 @@ func adjustRecordTag(direction int) {
 	settingChanged()
 }
 
-// adjustRecordFormat cycles recordFormat, skipping any format whose channel
-// ceiling (see maxChannelsForFormat) the current channelCount already
-// exceeds. The loop is bounded by len(formatNames) and always terminates
-// since FormatWAV has no ceiling below MaxChannelCount.
-func adjustRecordFormat(direction int) {
-	next := recordFormat
-	for i := 0; i < len(formatNames); i++ {
-		next = RecordFormat((int(next) + direction + len(formatNames)) % len(formatNames))
-		if channelCount <= maxChannelsForFormat(next) {
-			recordFormat = next
-			settingChanged()
-			return
-		}
-	}
-}
-
 func navigateMenu(direction int) {
 	var maxItems int
 
 	switch currentState {
 	case StateSettings:
-		maxItems = 10 // Audio, Metering, Schedule Recording, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
+		maxItems = 9 // Audio, Metering, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
 	case StateAudio:
-		maxItems = 5 // Sample Rate, Channel Count, Format, Tag, Back
+		maxItems = 4 // Sample Rate, Channel Count, Tag, Back
 	case StateMetering:
 		maxItems = 3 // Meter Range, Peak Hold, Back
-	case StateSchedule:
-		maxItems = 5 // Hour, Minute, Duration, Arm/Disarm, Exit
 	case StateCopyFiles:
 		maxItems = len(allFiles) + 3 // Start Copy, [All], [NONE], files...
 	case StateSystemOptions:
@@ -979,7 +896,7 @@ func handleSettingsClick() {
 	}
 
 	switch selectedMenu {
-	case 0: // Audio submenu (Sample Rate, Channel Count, Format, Tag)
+	case 0: // Audio submenu (Sample Rate, Channel Count, Tag)
 		currentState = StateAudio
 		selectedMenu = 0
 		menuScrollOffset = 0
@@ -987,55 +904,51 @@ func handleSettingsClick() {
 		currentState = StateMetering
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 2: // Schedule Recording
-		currentState = StateSchedule
-		selectedMenu = 0
-		menuScrollOffset = 0
-	case 3: // Copy Files
+	case 2: // Copy Files
 		if usbMounted {
 			loadFilesToCopy()
 			currentState = StateCopyFiles
 			selectedMenu = 0
 			menuScrollOffset = 0
 		}
-	case 4: // System Options
+	case 3: // System Options
 		currentState = StateSystemOptions
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 5: // Network Info
+	case 4: // Network Info
 		currentState = StateNetworkInfo
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 6: // Remote Access
+	case 5: // Remote Access
 		currentState = StateRemoteInfo
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 7: // Restart Inferno
+	case 6: // Restart Inferno
 		menuMode = InfernoRestartConfirm
 		currentState = StateConfirm
 		confirmOption = ConfirmNo
-	case 8: // WiFi submenu (enable/disable + QR)
+	case 7: // WiFi submenu (enable/disable + QR)
 		currentState = StateWifi
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 9: // Exit
+	case 8: // Exit
 		currentState = StateIdle
 		menuScrollOffset = 0
 	}
 }
 
-// handleAudioClick drives the Audio submenu (StateAudio): the four format
-// rows behave exactly like they did when they were top-level settings - a
-// click enters edit mode, rotate adjusts, click again confirms.
+// handleAudioClick drives the Audio submenu (StateAudio): the three
+// parameter rows behave exactly like they did when they were top-level
+// settings - a click enters edit mode, rotate adjusts, click again confirms.
 func handleAudioClick() {
 	if editingParameter {
 		editingParameter = false
 		return
 	}
 	switch selectedMenu {
-	case 0, 1, 2, 3: // Sample Rate, Channel Count, Format, Tag
+	case 0, 1, 2: // Sample Rate, Channel Count, Tag
 		editingParameter = true
-	case 4: // Back
+	case 3: // Back
 		currentState = StateSettings
 		selectedMenu = 0
 		menuScrollOffset = 0
@@ -1055,30 +968,6 @@ func handleMeteringClick() {
 	case 2: // Back
 		currentState = StateSettings
 		selectedMenu = 1
-		menuScrollOffset = 0
-	}
-}
-
-func handleScheduleClick() {
-	if editingParameter {
-		editingParameter = false
-		return
-	}
-
-	switch selectedMenu {
-	case 0, 1, 2: // Hour, Minute, Duration - click to enter edit mode
-		editingParameter = true
-	case 3: // Arm/Disarm toggle
-		scheduleArmed = !scheduleArmed
-		if scheduleArmed {
-			scheduleFiredDate = "" // allow it to fire today even if it already fired earlier today before being disarmed and re-armed
-			log.Printf("Recording scheduled for %02d:%02d (duration %dm, 0=manual stop)", scheduleHour, scheduleMinute, scheduleDuration)
-		} else {
-			log.Printf("Scheduled recording disarmed")
-		}
-	case 4: // Exit
-		currentState = StateSettings
-		selectedMenu = 4
 		menuScrollOffset = 0
 	}
 }
@@ -1276,66 +1165,6 @@ func infernoWorker() {
 		if req.done != nil {
 			close(req.done)
 		}
-	}
-}
-
-// scheduleLoop polls once a second for an armed schedule reaching its
-// target HH:MM and starts a recording, then (if a duration was set) stops it
-// again after that many minutes. One-shot by design: firing disarms the
-// schedule, so a day is never silently re-triggered without the user
-// re-arming it. scheduledStopAt is local to this loop - only scheduleLoop
-// itself ever needs to track a pending auto-stop deadline.
-func scheduleLoop() {
-	var scheduledStopAt time.Time
-	wasInTargetMinute := false
-
-	for {
-		time.Sleep(1 * time.Second)
-
-		mutex.Lock()
-		now := time.Now()
-		today := now.Format("20060102")
-		inTargetMinute := now.Hour() == scheduleHour && now.Minute() == scheduleMinute
-
-		// Clear any deadline left over from a recording that's no longer
-		// running (e.g. manually stopped early) before it can later reach
-		// forward in time and stop an unrelated recording that happens to
-		// still be active when the old deadline arrives.
-		if !isRecording {
-			scheduledStopAt = time.Time{}
-		}
-
-		if scheduleArmed && currentState == StateIdle && !isRecording &&
-			inTargetMinute && scheduleFiredDate != today {
-			scheduleFiredDate = today
-			scheduleArmed = false
-			if infernoState == InfernoRunning {
-				log.Printf("Scheduled recording starting")
-				startRecording()
-				if scheduleDuration > 0 {
-					scheduledStopAt = now.Add(time.Duration(scheduleDuration) * time.Minute)
-				}
-			} else {
-				log.Printf("Scheduled recording skipped: Inferno server not running")
-			}
-		} else if scheduleArmed && wasInTargetMinute && !inTargetMinute && scheduleFiredDate != today {
-			// The target HH:MM came and went without firing (device was
-			// busy recording/playing/mid-menu) - disarm rather than
-			// silently rolling over to fire unexpectedly tomorrow, matching
-			// the documented one-shot/re-arm-it-yourself behavior instead
-			// of leaving a schedule the user never re-confirmed lying in
-			// wait for 24 hours.
-			log.Printf("Scheduled recording missed its %02d:%02d window (device was busy), disarming", scheduleHour, scheduleMinute)
-			scheduleArmed = false
-		}
-		wasInTargetMinute = inTargetMinute
-
-		if isRecording && !scheduledStopAt.IsZero() && now.After(scheduledStopAt) {
-			log.Printf("Scheduled recording duration elapsed, stopping")
-			stopRecording()
-			scheduledStopAt = time.Time{}
-		}
-		mutex.Unlock()
 	}
 }
 
@@ -1591,9 +1420,8 @@ func startRecording() {
 	recordStart = time.Now()
 	timestamp := recordStart.Format("20060102_150405")
 	sampleRate := sampleRates[sampleRateIdx]
-	ext := strings.ToLower(formatNames[recordFormat])
 	recordingFile = filepath.Join(recordingSubdir(recordStart),
-		fmt.Sprintf("recording_%s_ch%d_%dkHz.%s", timestamp, channelCount, sampleRate/1000, ext))
+		fmt.Sprintf("recording_%s_ch%d_%dkHz.wav", timestamp, channelCount, sampleRate/1000))
 
 	// Create recording directory
 	os.MkdirAll(filepath.Dir(recordingFile), 0755)
@@ -1611,23 +1439,14 @@ func startRecording() {
 		"-ac", fmt.Sprintf("%d", channelCount),
 		"-i", fifoPath,
 	}
-	switch recordFormat {
-	case FormatFLAC:
-		args = append(args, "-c:a", "flac", "-sample_fmt", "s32", "-bits_per_raw_sample", "24")
-	case FormatMP3:
-		args = append(args, "-c:a", "libmp3lame", "-b:a", "320k")
-	default: // FormatWAV
-		args = append(args, "-c:a", "pcm_s24le")
-	}
+	// Only output format is WAV (PCM 24-bit) - see OutputBitsPerSample.
+	args = append(args, "-c:a", "pcm_s24le")
 
-	// ffmpeg's -metadata maps onto whatever tag mechanism the target
-	// container actually uses (WAV LIST/INFO chunk, FLAC Vorbis comments,
-	// MP3 ID3v2) - no per-format code needed here, though not every key
-	// round-trips on every muxer: verified "date" and "comment" survive on
-	// all three, but WAV's INFO chunk only maps a fixed field set and
-	// silently drops arbitrary keys like "software". "date" is always
-	// written for provenance; "comment" only when a tag preset is selected
-	// (see tagPresets - there's no text-entry UI on this encoder-only
+	// ffmpeg's -metadata maps onto the WAV container's LIST/INFO chunk. WAV's
+	// INFO chunk only maps a fixed field set and silently drops arbitrary keys
+	// like "software"; "date" and "comment" are verified to round-trip. "date"
+	// is always written for provenance; "comment" only when a tag preset is
+	// selected (see tagPresets - there's no text-entry UI on this encoder-only
 	// hardware for free-form annotations).
 	args = append(args, "-metadata", "date="+recordStart.Format(time.RFC3339))
 	if tag := tagPresets[tagPresetIdx]; tag != "" {
@@ -1934,8 +1753,8 @@ func recordingSubdir(t time.Time) string {
 	return filepath.Join(RecordPath, t.Format("2006-01-02"))
 }
 
-// recordingFiles lists all finished recordings across every supported output
-// format (WAV/FLAC/MP3) and every location they can live. Recordings are
+// recordingFiles lists all finished recordings (always WAV - the only output
+// format) and every location they can live. Recordings are
 // written into a per-day subfolder under RecordPath (e.g. /rec/2026-08-30/) so
 // the storage stays browsable at scale, but legacy flat files at the top level
 // are still picked up. Copy/Delete/Play/download all route through here, so
@@ -1944,21 +1763,19 @@ func recordingSubdir(t time.Time) string {
 func recordingFiles() []string {
 	seen := map[string]bool{}
 	var files []string
-	for _, ext := range []string{"wav", "flac", "mp3"} {
-		patterns := []string{
-			filepath.Join(RecordPath, "*."+ext),
-			filepath.Join(RecordPath, "*", "*."+ext),
+	patterns := []string{
+		filepath.Join(RecordPath, "*.wav"),
+		filepath.Join(RecordPath, "*", "*.wav"),
+	}
+	for _, pat := range patterns {
+		matches, err := filepath.Glob(pat)
+		if err != nil {
+			continue
 		}
-		for _, pat := range patterns {
-			matches, err := filepath.Glob(pat)
-			if err != nil {
-				continue
-			}
-			for _, m := range matches {
-				if !seen[m] {
-					seen[m] = true
-					files = append(files, m)
-				}
+		for _, m := range matches {
+			if !seen[m] {
+				seen[m] = true
+				files = append(files, m)
 			}
 		}
 	}
@@ -1978,8 +1795,7 @@ func latestRecording() string {
 }
 
 // startPlayback plays the most recent recording through the default ALSA
-// device via ffmpeg, which already understands every RecordFormat container
-// this app can produce - no separate decoder per format needed.
+// device via ffmpeg, which understands the WAV container directly.
 func startPlayback() {
 	file := latestRecording()
 	if file == "" {
@@ -2353,8 +2169,6 @@ func render() {
 		renderPlayingScreen()
 	case StateSettings:
 		renderSettingsMenu()
-	case StateSchedule:
-		renderScheduleMenu()
 	case StateCopyFiles:
 		renderCopyFilesMenu()
 	case StateCopying:
@@ -2383,14 +2197,8 @@ func render() {
 func renderStatusBar() {
 	sampleRate := sampleRates[sampleRateIdx]
 	// Use FiraCode ligatures: >= <= != === !== -> <- =>
-	// MP3 is lossy at a fixed target bitrate, so "bit depth" doesn't apply
-	// the way it does for WAV/FLAC's lossless PCM-derived output.
-	var formatStr string
-	if recordFormat == FormatMP3 {
-		formatStr = fmt.Sprintf("MP3 320k %dkHz %dch", sampleRate/1000, channelCount)
-	} else {
-		formatStr = fmt.Sprintf("%s %dbit %dkHz %dch", formatNames[recordFormat], BitsPerSample, sampleRate/1000, channelCount)
-	}
+	// WAV is uncompressed PCM at the output bit depth shown below.
+	formatStr := fmt.Sprintf("WAV %dbit %dkHz %dch", OutputBitsPerSample, sampleRate/1000, channelCount)
 
 	// Right side - USB status with enhanced typography
 	rightSide := ""
@@ -2792,9 +2600,8 @@ func renderSettingsMenu() {
 	// (Audio / Metering / WiFi) so the screen stays to a couple of focused
 	// pages instead of a long scroll of ten-odd rows.
 	allItems := []hardware.MenuItem{
-		{Label: "Audio →", Value: fmt.Sprintf("%s %dch", formatNames[recordFormat], channelCount)},
+		{Label: "Audio →", Value: fmt.Sprintf("WAV %dch", channelCount)},
 		{Label: "Metering →", Value: fmt.Sprintf("%ddB", int(vuRangeOptions[vuRangeIdx]))},
-		{Label: "Schedule Recording →", Value: scheduleStatusText()},
 		{Label: "Copy Files →", Value: ""},
 		{Label: "System Options →", Value: ""},
 		{Label: "Network Info →", Value: ""},
@@ -2869,12 +2676,10 @@ func renderSettingsMenu() {
 		// Draw right-aligned value if present
 		if item.Value != "" {
 			// Extra right margin (32, not 16) vs. the scroll-indicator
-			// column: with 5 of these 11 items carrying a value, any of
-			// them can land as the top visible row when scrolled (offsets
-			// 1-4 all start on a value-bearing row), so - same fix and same
-			// reasoning as renderScheduleMenu - the up arrow at (240,22)
-			// needs guaranteed clearance rather than relying on empty-value
-			// rows happening to end up there.
+			// column: with several of these items carrying a value, any of
+			// them can land as the top visible row when scrolled, so the up
+			// arrow at (240,22) needs guaranteed clearance rather than
+			// relying on empty-value rows happening to end up there.
 			valueWidth := hwManager.GetTextWidth(item.Value)
 			hwManager.DrawText(256-valueWidth-32, y, item.Value)
 		}
@@ -2902,103 +2707,6 @@ func tagStatusText() string {
 		return "None"
 	}
 	return tagPresets[tagPresetIdx]
-}
-
-// scheduleStatusText is the Settings-menu row value for "Schedule Recording".
-func scheduleStatusText() string {
-	if scheduleArmed {
-		return fmt.Sprintf("%02d:%02d", scheduleHour, scheduleMinute)
-	}
-	return "Off"
-}
-
-func renderScheduleMenu() {
-	// No separate header - see renderSettingsMenu for why.
-	armLabel := "Arm Schedule"
-	if scheduleArmed {
-		armLabel = "Disarm Schedule"
-	}
-	durationText := "Manual stop"
-	if scheduleDuration > 0 {
-		durationText = fmt.Sprintf("%dm", scheduleDuration)
-	}
-	statusText := "Not armed"
-	if scheduleArmed {
-		statusText = "Armed"
-	}
-
-	items := []hardware.MenuItem{
-		{Label: "Hour →", Value: fmt.Sprintf("%02d", scheduleHour)},
-		{Label: "Minute →", Value: fmt.Sprintf("%02d", scheduleMinute)},
-		{Label: "Duration →", Value: durationText},
-		{Label: armLabel, Value: statusText},
-		{Label: "← Exit", Value: ""},
-	}
-
-	totalItems := len(items)
-	maxVisibleItems := 4
-
-	if selectedMenu < menuScrollOffset {
-		menuScrollOffset = selectedMenu
-	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
-		menuScrollOffset = selectedMenu - maxVisibleItems + 1
-	}
-	if menuScrollOffset > totalItems-maxVisibleItems {
-		menuScrollOffset = totalItems - maxVisibleItems
-	}
-	if menuScrollOffset < 0 {
-		menuScrollOffset = 0
-	}
-
-	endIdx := menuScrollOffset + maxVisibleItems
-	if endIdx > totalItems {
-		endIdx = totalItems
-	}
-	visibleItems := items[menuScrollOffset:endIdx]
-	visibleSelectedIndex := selectedMenu - menuScrollOffset
-
-	y := 22
-	fontHeight := 13
-	for i, item := range visibleItems {
-		if i == visibleSelectedIndex {
-			hwManager.SwitchToContext("selected")
-		} else {
-			hwManager.SwitchToContext("menu")
-		}
-
-		prefix := "  "
-		if i == visibleSelectedIndex {
-			if editingParameter && visibleSelectedIndex <= 2 { // Hour/Minute/Duration are the only editable rows here
-				prefix = "» "
-			} else {
-				prefix = "> "
-			}
-		}
-		hwManager.DrawText(8, y, prefix+item.Label)
-
-		if item.Value != "" {
-			// Extra right margin (32 vs the 16 renderSettingsMenu/
-			// renderSystemOptionsMenu use) vs. the standard scroll-indicator
-			// column: unlike those menus, every row here has a value, so the
-			// value-less-row coincidence that keeps their up arrow clear of
-			// text doesn't hold - Minute's "00" would otherwise sit directly
-			// under the up arrow whenever this 5-item list is scrolled down.
-			valueWidth := hwManager.GetTextWidth(item.Value)
-			hwManager.DrawText(256-valueWidth-32, y, item.Value)
-		}
-
-		y += fontHeight
-	}
-
-	if totalItems > maxVisibleItems {
-		hwManager.SwitchToContext("details")
-		if menuScrollOffset > 0 {
-			hwManager.DrawText(240, 22, "↑")
-		}
-		if menuScrollOffset+maxVisibleItems < totalItems {
-			hwManager.DrawText(240, 61, "↓")
-		}
-	}
 }
 
 // Get Inferno server status text for display
@@ -3227,13 +2935,12 @@ func renderWifiMenu() {
 }
 
 // renderAudioMenu draws the Audio submenu (StateAudio): Sample Rate, Channel
-// Count, Format, Tag, Back. Reuses the same scrolling/menu logic pattern as
+// Count, Tag, Back. Reuses the same scrolling/menu logic pattern as
 // renderWifiMenu, with the editing-cursor prefix from renderSettingsMenu.
 func renderAudioMenu() {
 	items := []hardware.MenuItem{
 		{Label: "Sample Rate →", Value: fmt.Sprintf("%dkHz", sampleRates[sampleRateIdx]/1000)},
 		{Label: "Channel Count →", Value: fmt.Sprintf("%d", channelCount)},
-		{Label: "Format →", Value: formatNames[recordFormat]},
 		{Label: "Tag →", Value: tagStatusText()},
 		{Label: "← Back", Value: ""},
 	}
@@ -3560,22 +3267,11 @@ func lowDisk() bool {
 	return r > 0 && r < diskWarnMinutes*time.Minute
 }
 
-// recordingBytesPerSecond estimates on-disk output rate for the current
-// format. WAV/FLAC are derived from the raw PCM rate; FLAC is lossless but
-// variable-rate, so ~55% of raw PCM is used as a representative average for
-// real-world program material rather than claiming false precision. MP3 is
-// fixed-bitrate CBR, independent of sample rate or channel count.
+// recordingBytesPerSecond estimates on-disk output rate. WAV is uncompressed
+// PCM, so it's derived exactly from the raw PCM rate.
 func recordingBytesPerSecond() float64 {
 	sampleRate := sampleRates[sampleRateIdx]
-	switch recordFormat {
-	case FormatMP3:
-		return 320000.0 / 8.0
-	case FormatFLAC:
-		raw := float64(sampleRate * channelCount * OutputBitsPerSample / 8)
-		return raw * 0.55
-	default: // FormatWAV
-		return float64(sampleRate * channelCount * OutputBitsPerSample / 8)
-	}
+	return float64(sampleRate * channelCount * OutputBitsPerSample / 8)
 }
 
 func getRemainingStorage() string {

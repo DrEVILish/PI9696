@@ -14,7 +14,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -348,7 +347,6 @@ type dashboardData struct {
 	PeakHoldFragment     template.HTML
 	SampleRateFragment   template.HTML
 	ChannelCountFragment template.HTML
-	FormatFragment       template.HTML
 	TagFragment          template.HTML
 	TransportFragment    template.HTML
 	WifiEnabled          bool
@@ -416,14 +414,6 @@ func currentChannelCountView() channelCountView {
 	return channelCountView{Count: channelCount, Max: MaxChannelCount}
 }
 
-func formatOptionsView() optionsView {
-	mutex.Lock()
-	defer mutex.Unlock()
-	opts := make([]string, len(formatNames))
-	copy(opts, formatNames)
-	return optionsView{Options: opts, Idx: int(recordFormat)}
-}
-
 func tagOptionsView() optionsView {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -477,17 +467,6 @@ var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(
 <label for="channelsInput">Channels</label>
 <input id="channelsInput" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
 <span class="hint">1–{{.Max}}</span>
-</form>
-</div>
-</div>`))
-
-var formatFragmentTmpl = template.Must(template.New("format").Parse(`<div id="format" class="setting-cell">
-<div class="setting-row">
-<form hx-post="/api/settings/format" hx-target="#format" hx-swap="outerHTML">
-<label>Format</label>
-<select name="idx" onchange="this.form.requestSubmit()">
-{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
-</select>
 </form>
 </div>
 </div>`))
@@ -615,15 +594,6 @@ func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
 		mutex.Lock()
 		if n >= 1 && n <= MaxChannelCount {
 			channelCount = n
-			// A format's channel ceiling (FLAC ~8, MP3 2) may now be exceeded
-			// by widening the channel count; fall back to the next more
-			// permissive format rather than keeping a combination ffmpeg
-			// can't encode - mirroring the front-panel encoder path.
-			for recordFormat != FormatWAV && channelCount > maxChannelsForFormat(recordFormat) {
-				old := recordFormat
-				recordFormat--
-				log.Printf("Channel count %d exceeds %s limit, falling back to %s", channelCount, formatNames[old], formatNames[recordFormat])
-			}
 			// Relaunch Inferno with the new channel count if it's running
 			// (the worker's restart path re-starts monitoring too), so the
 			// running instance - and with it the live VU count - always
@@ -634,22 +604,6 @@ func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
 		mutex.Unlock()
 	}
 	channelCountFragmentTmpl.Execute(w, currentChannelCountView())
-}
-
-func handleAPISettingsFormat(w http.ResponseWriter, r *http.Request) {
-	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
-		mutex.Lock()
-		if idx >= 0 && idx < len(formatNames) {
-			recordFormat = RecordFormat(idx)
-			if channelCount > maxChannelsForFormat(recordFormat) {
-				channelCount = maxChannelsForFormat(recordFormat)
-			}
-			checkInfernoRestart()
-			settingChanged()
-		}
-		mutex.Unlock()
-	}
-	formatFragmentTmpl.Execute(w, formatOptionsView())
 }
 
 func handleAPISettingsTag(w http.ResponseWriter, r *http.Request) {
@@ -1192,7 +1146,6 @@ body.meters-collapsed{padding-bottom:4em}
         <h3 class="settings-group-title">Audio</h3>
         {{.SampleRateFragment}}
         {{.ChannelCountFragment}}
-        {{.FormatFragment}}
       </section>
 
       <section class="settings-group">
@@ -1607,12 +1560,11 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	transportIcon := transportMode != "text"
 	mutex.Unlock()
 
-	var vuBuf, holdBuf, srBuf, chBuf, fmtBuf, tagBuf, transportBuf, qrBuf bytes.Buffer
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, transportBuf, qrBuf bytes.Buffer
 	vuRangeFragmentTmpl.Execute(&vuBuf, vuRangeOptionsView())
 	peakHoldFragmentTmpl.Execute(&holdBuf, peakHoldOptionsView())
 	sampleRateFragmentTmpl.Execute(&srBuf, sampleRateOptionsView())
 	channelCountFragmentTmpl.Execute(&chBuf, currentChannelCountView())
-	formatFragmentTmpl.Execute(&fmtBuf, formatOptionsView())
 	tagFragmentTmpl.Execute(&tagBuf, tagOptionsView())
 	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
 
@@ -1633,7 +1585,6 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		PeakHoldFragment:     template.HTML(holdBuf.String()),
 		SampleRateFragment:   template.HTML(srBuf.String()),
 		ChannelCountFragment: template.HTML(chBuf.String()),
-		FormatFragment:       template.HTML(fmtBuf.String()),
 		TagFragment:          template.HTML(tagBuf.String()),
 		TransportFragment:    template.HTML(transportBuf.String()),
 		WifiEnabled:          wifiEn,
@@ -1692,7 +1643,7 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 // response after releasing it. png.Encode writes straight through
 // http.ResponseWriter to the socket - encoding directly into w while
 // holding mutex would block render(), every encoder/button callback
-// (physical and remote), scheduleLoop, and infernoWorker's recording guard
+// (physical and remote), and infernoWorker's recording guard
 // for as long as a slow or stalled client's network write took, the same
 // class of bug already fixed once for stopRecording().
 func handleDisplayPNG(w http.ResponseWriter, r *http.Request) {
@@ -1748,7 +1699,6 @@ var configTmpl = template.Must(template.New("config").Parse(`
 <tr><td>Channels</td><td>{{.Channels}}</td></tr>
 <tr><td>Format</td><td>{{.Format}}</td></tr>
 <tr><td>Tag</td><td>{{.Tag}}</td></tr>
-<tr><td>Schedule</td><td>{{.Schedule}}</td></tr>
 <tr><td>Inferno</td><td>{{.Inferno}}</td></tr>
 <tr><td>Network</td><td>{{.Network}}</td></tr>
 </table>
@@ -1759,7 +1709,6 @@ type configView struct {
 	Channels   int
 	Format     string
 	Tag        string
-	Schedule   string
 	Inferno    string
 	Network    string
 }
@@ -1772,9 +1721,8 @@ func handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 	v := configView{
 		SampleRate: sampleRates[sampleRateIdx] / 1000,
 		Channels:   channelCount,
-		Format:     formatNames[recordFormat],
+		Format:     "WAV",
 		Tag:        tagStatusText(),
-		Schedule:   scheduleStatusText(),
 		Inferno:    getInfernoStatusText(),
 	}
 	mutex.Unlock()
@@ -1834,7 +1782,7 @@ func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		MonOutput:  monitoringOutput,
 		Demo:       demoMode,
 		DemoKind:   demoKind,
-		Format:     formatNames[recordFormat],
+		Format:     "WAV",
 		SampleRate: sampleRates[sampleRateIdx] / 1000,
 		Channels:   channelCount,
 		InfernoUp:  infernoState == InfernoRunning,
@@ -2065,66 +2013,19 @@ type recordingRow struct {
 // the name; duration needs the file's actual content (see recordingDuration).
 var recFilenameRe = regexp.MustCompile(`^recording_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz\.(\w+)$`)
 
-// recDurationCache avoids re-running ffprobe on every 15s recordings poll
-// for files that haven't changed - keyed by path, invalidated by
-// size+mtime, which is enough since finished recordings are never modified
-// in place. Guarded by its own mutex, not the app's: this never touches
-// app state, only a local cache map.
-var (
-	recDurationCacheMu sync.Mutex
-	recDurationCache   = map[string]recDurationCacheEntry{}
-)
-
-type recDurationCacheEntry struct {
-	size    int64
-	modTime time.Time
-	dur     time.Duration
-}
-
-// recordingDuration returns how long the recording at path plays for. WAV
-// duration is computed directly from the file size (pcm_s24le, 3 bytes/
-// sample - see startRecording's ffmpeg args) rather than shelling out,
-// since it's exact and free. FLAC/MP3 are variable-bitrate/compressed, so
-// there's no size-based formula - those go through ffprobe, cached by
-// (path, size, mtime) so a steady-state poll of unchanged files costs
-// nothing after the first look.
-func recordingDuration(path string, channels, sampleRate int, format string) time.Duration {
+func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	info, err := os.Stat(path)
 	if err != nil {
 		return 0
 	}
 
-	if format == "WAV" {
-		const bytesPerSample = 3 // pcm_s24le
-		const headerBytes = 44
-		dataBytes := info.Size() - headerBytes
-		if dataBytes <= 0 || channels <= 0 || sampleRate <= 0 {
-			return 0
-		}
-		return time.Duration(dataBytes) * time.Second / time.Duration(int64(channels)*int64(bytesPerSample)*int64(sampleRate))
+	const bytesPerSample = 3 // pcm_s24le
+	const headerBytes = 44
+	dataBytes := info.Size() - headerBytes
+	if dataBytes <= 0 || channels <= 0 || sampleRate <= 0 {
+		return 0
 	}
-
-	recDurationCacheMu.Lock()
-	if e, ok := recDurationCache[path]; ok && e.size == info.Size() && e.modTime.Equal(info.ModTime()) {
-		recDurationCacheMu.Unlock()
-		return e.dur
-	}
-	recDurationCacheMu.Unlock()
-
-	// path comes only from recordingFiles()'s own glob of RecordPath, never
-	// from request input, so this is not command-injection-exposed.
-	out, err := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", path).Output()
-	var dur time.Duration
-	if err == nil {
-		if secs, perr := strconv.ParseFloat(strings.TrimSpace(string(out)), 64); perr == nil {
-			dur = time.Duration(secs * float64(time.Second))
-		}
-	}
-
-	recDurationCacheMu.Lock()
-	recDurationCache[path] = recDurationCacheEntry{size: info.Size(), modTime: info.ModTime(), dur: dur}
-	recDurationCacheMu.Unlock()
-	return dur
+	return time.Duration(dataBytes) * time.Second / time.Duration(int64(channels)*int64(bytesPerSample)*int64(sampleRate))
 }
 
 func buildRecordingRow(path string) recordingRow {
@@ -2148,7 +2049,7 @@ func buildRecordingRow(path string) recordingRow {
 	row.Format = format
 	row.StartStr = start.Format("2006-01-02 15:04:05")
 
-	dur := recordingDuration(path, channels, sampleRate, format)
+	dur := recordingDuration(path, channels, sampleRate)
 	if dur > 0 {
 		row.DurationStr = formatDuration(dur)
 		row.EndStr = start.Add(dur).Format("2006-01-02 15:04:05")
@@ -2199,7 +2100,6 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/peak-hold", requireAuth(handleAPISettingsPeakHold))
 	mux.HandleFunc("POST /api/settings/sample-rate", requireAuth(handleAPISettingsSampleRate))
 	mux.HandleFunc("POST /api/settings/channels", requireAuth(handleAPISettingsChannels))
-	mux.HandleFunc("POST /api/settings/format", requireAuth(handleAPISettingsFormat))
 	mux.HandleFunc("POST /api/settings/tag", requireAuth(handleAPISettingsTag))
 	mux.HandleFunc("POST /api/settings/transport-mode", requireAuth(handleAPISettingsTransportMode))
 	mux.HandleFunc("POST /api/settings/wifi", requireAuth(handleAPISettingsWiFi))
