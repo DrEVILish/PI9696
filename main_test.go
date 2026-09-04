@@ -263,81 +263,6 @@ func TestStopRecordingDoesNotBlockMutex(t *testing.T) {
 	stopInfernoAndWait()
 }
 
-func TestAdjustRecordFormatSkipsInvalidForChannelCount(t *testing.T) {
-	origFormat, origChannels := recordFormat, channelCount
-	t.Cleanup(func() { recordFormat, channelCount = origFormat, origChannels })
-
-	channelCount = 4 // valid for WAV/FLAC, exceeds MP3's 2-channel ceiling
-	recordFormat = FormatWAV
-
-	adjustRecordFormat(1)
-	if recordFormat != FormatFLAC {
-		t.Fatalf("expected FLAC (MP3 skipped at 4ch), got %s", formatNames[recordFormat])
-	}
-
-	adjustRecordFormat(1) // MP3 invalid at 4ch, wraps back to WAV
-	if recordFormat != FormatWAV {
-		t.Fatalf("expected wrap to WAV (MP3 invalid at 4ch), got %s", formatNames[recordFormat])
-	}
-}
-
-func TestAdjustChannelCountFallsBackFormat(t *testing.T) {
-	origFormat, origChannels := recordFormat, channelCount
-	t.Cleanup(func() { recordFormat, channelCount = origFormat, origChannels })
-
-	recordFormat = FormatMP3
-	channelCount = 2
-
-	adjustChannelCount(1) // 2 -> 3 exceeds MP3's 2-channel ceiling
-
-	// Falls back only as far as necessary - FLAC's 8-channel ceiling still
-	// covers 3 channels, so it shouldn't drop all the way to WAV.
-	if recordFormat != FormatFLAC {
-		t.Fatalf("expected fallback to FLAC when channel count exceeds MP3 ceiling, got %s", formatNames[recordFormat])
-	}
-	if channelCount != 3 {
-		t.Fatalf("expected channelCount 3, got %d", channelCount)
-	}
-}
-
-func TestScheduleArmDisarm(t *testing.T) {
-	origArmed, origHour, origMinute, origDuration, origFired :=
-		scheduleArmed, scheduleHour, scheduleMinute, scheduleDuration, scheduleFiredDate
-	t.Cleanup(func() {
-		scheduleArmed, scheduleHour, scheduleMinute, scheduleDuration, scheduleFiredDate =
-			origArmed, origHour, origMinute, origDuration, origFired
-	})
-
-	mutex.Lock()
-	scheduleArmed = false
-	scheduleHour = 8
-	scheduleMinute = 30
-	scheduleDuration = 0
-	currentState = StateSchedule
-	selectedMenu = 3 // Arm/Disarm row
-	editingParameter = false
-	mutex.Unlock()
-
-	onEncoderClick()
-
-	mutex.Lock()
-	armed := scheduleArmed
-	mutex.Unlock()
-	if !armed {
-		t.Fatalf("expected schedule to be armed after clicking the Arm/Disarm row")
-	}
-
-	onEncoderClick()
-
-	mutex.Lock()
-	disarmed := !scheduleArmed
-	currentState = StateIdle
-	mutex.Unlock()
-	if !disarmed {
-		t.Fatalf("expected schedule to be disarmed after clicking the Arm/Disarm row again")
-	}
-}
-
 // TestRotationNavigatesUntilRowIsClicked is the regression test for the bug
 // where rotation directly adjusted whichever parameter row happened to be
 // selected, meaning the cursor could never advance past row 0: every
@@ -421,41 +346,6 @@ func TestRotationNavigatesUntilRowIsClicked(t *testing.T) {
 	mutex.Unlock()
 	if !exited {
 		t.Fatalf("expected click to exit edit mode back to Audio navigation")
-	}
-}
-
-func TestScheduleHourMinuteWrap(t *testing.T) {
-	origHour, origMinute, origEditing := scheduleHour, scheduleMinute, editingParameter
-	t.Cleanup(func() { scheduleHour, scheduleMinute, editingParameter = origHour, origMinute, origEditing })
-
-	mutex.Lock()
-	currentState = StateSchedule
-	selectedMenu = 0
-	editingParameter = true // rotation only adjusts once the row has been entered - see TestRotationNavigatesUntilRowIsClicked
-	scheduleHour = 23
-	mutex.Unlock()
-
-	onEncoderRotate(1)
-
-	mutex.Lock()
-	hourWrapped := scheduleHour == 0
-	selectedMenu = 1
-	scheduleMinute = 0
-	mutex.Unlock()
-
-	onEncoderRotate(-1)
-
-	mutex.Lock()
-	minuteWrapped := scheduleMinute == 59
-	currentState = StateIdle
-	editingParameter = false
-	mutex.Unlock()
-
-	if !hourWrapped {
-		t.Fatalf("expected hour to wrap 23 -> 0, got %d", scheduleHour)
-	}
-	if !minuteWrapped {
-		t.Fatalf("expected minute to wrap 0 -> 59, got %d", scheduleMinute)
 	}
 }
 
@@ -665,7 +555,7 @@ func TestRemoteDisplayPNGEndpoint(t *testing.T) {
 // go through the real onEncoderClick/onEncoderHold functions - the same
 // ones physical hardware calls - rather than a parallel implementation, by
 // checking they produce the exact state transitions those functions are
-// already known (see the encoder/schedule tests above) to produce.
+// already known to produce.
 func TestRemoteInputEndpointsDriveStateMachine(t *testing.T) {
 	initTestHardware(t)
 	origToken := remoteToken

@@ -44,7 +44,7 @@ func main() {
 	os.MkdirAll("/tmp/pi9696_shots", 0755)
 
 	statusBar := func() {
-		hm.DrawStatusBarWithInferno("WAV 32bit 48kHz 2ch", "4GB [USB]", true)
+		hm.DrawStatusBarWithInferno("WAV 24bit 48kHz 2ch", "4GB [USB]", true)
 	}
 
 	shot("idle", func() {
@@ -68,8 +68,8 @@ func main() {
 		items := []hardware.MenuItem{
 			{Label: "Sample Rate →", Value: "48kHz"},
 			{Label: "Channel Count →", Value: "2"},
-			{Label: "Format →", Value: "WAV"},
-			{Label: "Copy Files →", Value: ""},
+			{Label: "Tag →", Value: "None"},
+			{Label: "← Back", Value: ""},
 		}
 		y := 22
 		fh := 13
@@ -126,17 +126,16 @@ func main() {
 	})
 
 	shot("settings_menu_offset1", func() {
-		// selectedMenu=2 ("Format") forces menuScrollOffset=1, putting
-		// "Channel Count" (which HAS a right-aligned value) as the top
-		// visible row with the up arrow showing - the exact collision this
-		// 11-item Settings menu can now reach, unlike the old 4/7-item
-		// version where value-bearing rows never landed under the arrow.
+		// Audio (which carries a right-aligned "WAV Nch" value) lands as the
+		// top visible row with the up arrow showing - the exact collision this
+		// scrollable Settings menu can reach, where a value-bearing row ends
+		// up right under the arrow.
 		statusBar()
 		items := []hardware.MenuItem{
-			{Label: "Channel Count →", Value: "2"},
-			{Label: "Format →", Value: "WAV"},
-			{Label: "Tag →", Value: "None"},
-			{Label: "Schedule Recording →", Value: "Off"},
+			{Label: "Audio →", Value: "WAV 2ch"},
+			{Label: "Metering →", Value: "60dB"},
+			{Label: "Copy Files →", Value: ""},
+			{Label: "System Options →", Value: ""},
 		}
 		y := 22
 		fh := 13
@@ -144,40 +143,6 @@ func main() {
 			ctx := "menu"
 			prefix := "  "
 			if i == 1 {
-				ctx = "selected"
-				prefix = "> "
-			}
-			hm.SwitchToContext(ctx)
-			hm.DrawText(8, y, prefix+item.Label)
-			if item.Value != "" {
-				w := hm.GetTextWidth(item.Value)
-				hm.DrawText(256-w-32, y, item.Value)
-			}
-			y += fh
-		}
-		hm.SwitchToContext("details")
-		hm.DrawText(240, 22, "↑")
-	})
-
-	shot("schedule_menu", func() {
-		// selectedMenu=3 ("Arm Schedule") forces a scroll to show
-		// Minute/Duration/Arm/Exit with the up arrow visible - checks it
-		// doesn't collide with Minute's right-aligned "00" value, unlike the
-		// other scrolled-menu shots where the top visible row happens to
-		// have no value.
-		statusBar()
-		items := []hardware.MenuItem{
-			{Label: "Minute →", Value: "00"},
-			{Label: "Duration →", Value: "60m"},
-			{Label: "Arm Schedule", Value: "Not armed"},
-			{Label: "← Exit", Value: ""},
-		}
-		y := 22
-		fh := 13
-		for i, item := range items {
-			ctx := "menu"
-			prefix := "  "
-			if i == 2 {
 				ctx = "selected"
 				prefix = "> "
 			}
