@@ -4,12 +4,12 @@ A professional audio recording interface for Raspberry Pi 5 designed to fit in a
 
 ## Hardware Requirements
 
-- Raspberry Pi 5
+- Raspberry Pi 5 (dual-band WiFi radio used for the optional AP)
 - 2.7" 256×64 OLED Display (SSD1322) via SPI
 - Rotary Encoder (EC11) with push button
-- 3x Momentary buttons (Record, Stop, Play)
-- 2x Status LEDs (Record, Inferno server status)
-- Audio interface (USB or HAT)
+- 3x Momentary buttons (Record, Stop, Play) with backlight lamps
+- Audio sources are Inferno AoIP (AES67/Dante) over Ethernet - no analog/USB audio I/O
+  in the build (see "Audio & Playback").
 
 ## Software Requirements
 
@@ -42,9 +42,9 @@ A professional audio recording interface for Raspberry Pi 5 designed to fit in a
 - All buttons use internal pull-ups
 
 ### Status LEDs
-- Record → GPIO12 (lit while recording)
-- Status → GPIO16 (lit while the Inferno server is running)
-- See WIRING.md for resistor/polarity details
+- REC / STOP / PLAY buttons each have a **backlight lamp**; there are no separate status LEDs
+- Status indication lives on the OLED (USB, Network, WiFi if enabled, and Inferno)
+- See WIRING.md for wiring details
 
 ## Software Setup
 
@@ -168,15 +168,13 @@ sudo journalctl -u pi9696 -f   # view logs
 
 1. **Sample Rate**: 44.1kHz, 48kHz, 96kHz, 192kHz (auto-restarts Inferno server)
 2. **Channel Count**: Adjust from 1 to 128 channels (auto-restarts Inferno server)
-3. **Format**: WAV, FLAC, or MP3 (channel count limits which formats are selectable - see Recording Format below)
-4. **Tag**: Attach a preset tag (Show, Rehearsal, Soundcheck, Interview, Backup, or None) to the next recording's metadata
-5. **Schedule Recording**: Arm a one-shot recording at a set HH:MM, with an optional auto-stop duration
-6. **Copy Files**: Transfer recordings to USB drive
-7. **System Options**: System management submenu
-8. **Network Info**: Display network connection details
-9. **Remote Access**: Shows the URL and token for the web remote control
-10. **Restart Inferno**: Manually restart Inferno Audio over IP server
-11. **Exit**: Return to main display
+3. **Tag**: Attach a preset tag (Show, Rehearsal, Soundcheck, Interview, Backup, or None) to the next recording's metadata
+4. **Copy Files**: Transfer recordings to USB drive
+5. **System Options**: System management submenu
+6. **Network Info**: Display network connection details
+7. **Remote Access**: Shows the URL and token for the web remote control
+8. **Restart Inferno**: Manually restart Inferno Audio over IP server
+9. **Exit**: Return to main display
 
 ### System Options Submenu
 1. **Delete All**: Remove all recordings with confirmation
@@ -194,20 +192,16 @@ sudo journalctl -u pi9696 -f   # view logs
 
 ### Recording Format
 
-- **Output Formats**: WAV (PCM 24-bit), FLAC (lossless, 24-bit), MP3 (320kbps CBR)
-- **Format Channel Limits**: WAV up to 128 channels, FLAC up to 8 channels, MP3 up to 2 channels
-  (MP3's bitstream format only supports mono/stereo; FLAC is impractical much above 8). Raising
-  the channel count past a selected format's limit automatically falls back to the next format
-  that still supports it.
-- **Internal Pipeline**: 32-bit signed little-endian via FIFO regardless of output format
+- **Output Format**: WAV (PCM 24-bit) only - there is deliberately no FLAC or MP3 option
+- **Channel Support**: 1-128 channels (the full range, since WAV has no practical channel ceiling)
+- **Internal Pipeline**: 32-bit signed little-endian via FIFO; finalized to 24-bit PCM WAV on disk
 - **Sample Rates**: 44.1kHz, 48kHz, 96kHz, 192kHz
-- **Channel Support**: 1-128 channels (format-dependent, see above)
-- **File Naming**: `recording_YYYYMMDD_HHMMSS_chN_NNkHz.{wav,flac,mp3}`
+- **File Naming**: `recording_YYYYMMDD_HHMMSS_chN_NNkHz.wav`
 - **Raw FIFO**: `/rec/raw/inferno_YYYYMMDD_HHMMSS_chN_NNkHz.raw` (temporary)
 - **Metadata**: Every recording is stamped with a `date` tag (recording start time); a `comment`
   tag is added when a Tag preset other than "None" is selected in Settings. Written via ffmpeg's
-  `-metadata`, which maps onto whichever tag mechanism the container uses (WAV INFO chunk, FLAC
-  Vorbis comments, MP3 ID3v2) - readable with `ffprobe -show_entries format_tags <file>` or any
+  `-metadata`, which maps onto the WAV container's LIST/INFO chunk (`date` and `comment` are
+  verified to round-trip) - readable with `ffprobe -show_entries format_tags <file>` or any
   standard tag reader.
 
 ### Level Metering
@@ -221,32 +215,35 @@ available on the remote control dashboard.
 
 ### Playback
 
-Press **Play** while idle to play back the most recently created recording (any supported
-format) through the default ALSA audio device. Press **Stop** or hold the encoder to stop
-playback early. Playback and recording are mutually exclusive - each button is a no-op while
-the other is active.
+Press **Play** while idle to play back the most recently created recording (WAV). Playback is
+sent **out through Inferno** (AES67/Dante) onto the network - there is no local analog output.
+Press **Stop** or hold the encoder to stop playback early. Playback and recording are mutually
+exclusive - each button is a no-op while the other is active.
 
 ### Remote Control
 
-A web UI is served on **eth0 only**, port 8080 (never on any other interface, and never
-`0.0.0.0`) once the interface has an IP - started/stopped automatically as eth0 comes up or
-down. Settings → Remote Access shows the URL and an 8-character access token (shown, and
-enterable at `/login`, as two groups of 4 - e.g. `K7M2 QX9F` - for readability; the separator is
-optional when typing it in). A correct token gets a session cookie good for 12 hours.
+A web UI is served on **any IP-based interface** (eth0, or wlan0 once the WiFi AP/client is
+up) on port 8080 once the interface has an IP - started/stopped automatically as the interface
+comes up or down. Settings → Remote Access shows the URL and an 8-character access token
+(shown, and enterable at `/login`, as two groups of 4 - e.g. `K7M2 QX9F` - for readability;
+the separator is optional when typing it in). A correct token gets a session cookie good for 12
+hours.
 
 The dashboard mirrors the physical device: the OLED display itself (a live PNG snapshot of the
 actual framebuffer, not a redrawn approximation) plus the rotary encoder and all three buttons
-at the top, so you can navigate the exact same menu system remotely - Format/Tag/Schedule
-settings, System Options, everything - the same way you would standing in front of it. Status,
+at the top, so you can navigate the exact same menu system remotely - Sample Rate/Channel
+Count/Tag (the WAV-only recording format is fixed) settings, System Options, everything - the
+same way you would standing in front of it. Status,
 a read-only config summary, and the recordings file browser (download only - no upload, no
 delete-over-network, no arbitrary file access; downloads are checked against the app's own
 current recording list, not just sanitized user input) follow below.
 
 **Security posture, read before exposing this on a shared network:**
 - The server is **plain HTTP, not HTTPS** - no certificate management on an embedded device with
-  no stable hostname. Anyone who can sniff eth0's LAN traffic can see the token and hijack the
-  session. Treat this the way you'd treat an unencrypted admin page on any other LAN appliance:
-  fine on a trusted/isolated recording-room network, not fine on shared/untrusted networks.
+  no stable hostname. Anyone who can sniff the unit's LAN traffic (eth0 or WiFi) can see the
+  token and hijack the session. Treat this the way you'd treat an unencrypted admin page on any
+  other LAN appliance: fine on a trusted/isolated recording-room network, not fine on
+  shared/untrusted networks.
 - The token is short (8 characters, ~40 bits of entropy) so it fits on the OLED and is typeable
   from a phone; a login rate limiter (5 failed attempts locks out that IP for 60s) is what keeps
   it from being brute-forceable over the network, not the token's raw length.
@@ -261,14 +258,8 @@ current recording list, not just sanitized user input) follow below.
 
 ### Scheduled Recording
 
-Settings → Schedule Recording lets you set an Hour, Minute, and optional auto-stop Duration
-(0 = manual stop), then Arm the schedule. Once armed, a background check fires the recording
-automatically at the next occurrence of that time (today, or tomorrow if it's already passed)
-- as long as the Inferno server is running and the app is idle at that moment. Firing disarms
-the schedule; re-arm it for the next day. If a duration was set, the recording stops itself
-automatically after that many minutes. If the device is busy (already recording, playing, or
-mid-menu) at the target minute, the schedule is disarmed rather than silently carried over to
-fire a day later than expected - re-arm it if you still want it.
+**Removed from the product design.** The Schedule menu item and scheduling loop are being
+taken out of the codebase; recording is start/stop only.
 
 ### Inferno Server Operation
 
@@ -286,10 +277,8 @@ fire a day later than expected - re-arm it if you still want it.
 - Check permissions: `ls -l /dev/spidev*`
 
 ### Audio Issues
-- List audio devices: `arecord -l`
-- Test recording: `arecord -D hw:0 -f S32_LE -r 48000 -c 2 test.wav`
-- Check ALSA configuration: `cat /proc/asound/cards`
 - Check Inferno server: Look for `[INF]` in the status bar
+- Verify AoIP network connectivity (Inferno subscribes/publishes AES67/Dante over eth0)
 - Test Inferno manually: `cd inferno && INFERNO_SAMPLE_RATE=48000 ./target/release/inferno -c 2 -o /tmp/test.fifo`
 
 ### Network Issues

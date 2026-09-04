@@ -87,41 +87,37 @@ This document provides the complete wiring reference for connecting all componen
 - Internal pull-ups are enabled in software
 - Use quality tactile switches for better feel
 
-### 4. Status LEDs
+### 4. Button Lamps (REC / STOP / PLAY backlights)
 
 **Interface:** GPIO digital output (no PWM/brightness control)
-**Type:** Standard 3mm/5mm LEDs with a current-limiting resistor (330Ω-1kΩ for 3.3V logic)
+**Type:** Small LED backlights behind each button with a current-limiting resistor
+(330Ω-1kΩ for 3.3V logic)
 
-| LED    | Pi Pin | GPIO | Description |
-|--------|--------|------|-------------|
-| Record | 32     | 12   | Lit solid while recording is in progress |
-| Status | 36     | 16   | Lit solid while the Inferno server is running |
-| Common | 6/9/14 | -    | Ground (any GND pin, cathode side through the resistor) |
+| Lamp  | Pi Pin | GPIO | Description |
+|-------|--------|------|-------------|
+| REC   | 32     | 12   | Lit while recording is in progress |
+| STOP  | 36     | 16   | Lit while the app is running (booting / playback / etc.) |
+| PLAY  | TBD    | TBD  | Lit while playback is active |
 
 **Wiring Notes:**
+- There are **no separate status LEDs**: these backlights plus the OLED are the status
+  indication. Status details (USB, Network, WiFi if enabled, Inferno) display on the OLED's
+  status screen.
 - Anode (long leg) → resistor → GPIO pin; cathode (short leg) → GND
-- These GPIO pins were chosen specifically to avoid every pin already used
-  elsewhere in this document (display SPI, encoder, buttons, I2C on
-  GPIO2/3, and UART/I2S on GPIO14/15/18-21, left clear for an audio HAT)
 - Software-side pins are set in `hardware/leds.go`; the app is inert
   without these wired (LED.Set on an unconfigured pin is skipped in
   simulator/dev mode, and simply does nothing useful if the pins aren't
   physically connected)
 
-### 5. Audio Interface
+### 5. Audio (AoIP / Ethernet)
 
-**Recommended:** USB Audio Interface
-**Alternative:** Raspberry Pi Audio HAT
+**Source & playback: audio is carried over the network via Inferno (AES67/Dante).**
+There is **no analog or USB audio I/O** in the build:
 
-**USB Audio Interface:**
-- Connect to any USB 3.0 port on Raspberry Pi 5
-- Ensure it supports 48kHz/96kHz sampling rates
-- Minimum 32-bit depth support recommended
-
-**Audio HAT (if used):**
-- Follow manufacturer's wiring instructions
-- Typically uses GPIO pins 18, 19, 20, 21 for I2S
-- May conflict with SPI - verify compatibility
+- Inferno sends and receives audio bidirectionally over the Ethernet link.
+- Recording subscribes the Inferno stream into the FIFO pipeline; playback goes back out
+  through Inferno onto the network.
+- No USB audio interface, no DAC/HAT, no XLR/TRS analog inputs.
 
 ## Power Requirements
 
@@ -138,7 +134,7 @@ This document provides the complete wiring reference for connecting all componen
 
 **Power Supply Recommendation:**
 - Minimum: 5V 3A (15W) official Raspberry Pi 5 power supply
-- Recommended: 5V 5A (25W) for headroom and USB audio interface
+- Recommended: 5V 5A (25W) for headroom
 
 ## Construction Tips
 
@@ -173,9 +169,9 @@ This document provides the complete wiring reference for connecting all componen
    ```
 
 3. **Connector Placement:**
-   - USB audio interface: Rear panel
+   - Ethernet (Inferno AoIP): Rear panel
    - Power input: Rear panel
-   - Analog audio inputs: Rear panel XLR/TRS
+   - USB: Rear panel (recording export / config import)
 
 ### Cable Management
 
@@ -221,20 +217,19 @@ This document provides the complete wiring reference for connecting all componen
 
 ### Audio Testing
 
-1. **List Audio Devices:**
-   ```bash
-   arecord -l
-   ```
+1. **Verify AoIP Stream Received:**
+   Confirm the Inferno server is running (`[INF]` in the app status bar) and that the
+   network stream and FIFO are flowing.
 
-2. **Test Recording:**
+2. **Test FIFO Pipeline Recording:**
    ```bash
-   arecord -D hw:0 -f S32_LE -r 48000 -c 2 -d 5 test.wav
+   cd inferno && INFERNO_SAMPLE_RATE=48000 ./target/release/inferno -c 2 -o /tmp/test.fifo
+   ffmpeg -f s32le -ar 48000 -ac 2 -i /tmp/test.fifo -c:a pcm_s24le test.wav
    ```
 
 3. **Verify File:**
    ```bash
    file test.wav
-   aplay test.wav
    ```
 
 ## Troubleshooting
@@ -278,15 +273,14 @@ This document provides the complete wiring reference for connecting all componen
 
 ### Audio Issues
 
-**Symptom:** No audio devices found
-- Check USB connection
-- Verify device compatibility
-- Update ALSA: `sudo apt update && sudo apt upgrade alsa-utils`
+**Symptom:** No audio being recorded
+- Check Inferno server status (`[INF]` in the app status bar)
+- Verify Ethernet link and AoIP stream connectivity
+- Check that the FIFO pipeline is flowing (Inferno writes PCM → ffmpeg reads)
 
 **Symptom:** Poor audio quality
 - Check sample rate settings
-- Verify bit depth support
-- Test with different USB ports
+- Verify the AoIP stream's sample rate/channel/bit-depth configuration matches Inferno
 
 ## Safety Notes
 
@@ -302,6 +296,7 @@ This document provides the complete wiring reference for connecting all componen
 |------|---------|---------|
 | 2024-01-XX | 1.0 | Initial wiring specification |
 | 2026-08-28 | 1.1 | Added Status LEDs (GPIO12/16); Play button no longer marked future |
+| 2026-09-04 | 1.2 | Analog/USB audio I/O dropped (AoIP-only); LEDs → REC/STOP/PLAY button lamps; PLAY lamp GPIO TBD |
 
 ---
 
