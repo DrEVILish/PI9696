@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"pi9696/hardware"
+	"pi9696/xlog"
 
 	"github.com/skip2/go-qrcode"
 )
@@ -74,12 +75,12 @@ func isSimMode() bool {
 func loadPersistedConfig() {
 	data, err := os.ReadFile(ConfigPath)
 	if err != nil {
-		log.Printf("No persisted config at %s (%v) - using defaults", ConfigPath, err)
+		logDebugf("No persisted config at %s (%v) - using defaults", ConfigPath, err)
 		return
 	}
 	var c PersistedConfig
 	if err := json.Unmarshal(data, &c); err != nil {
-		log.Printf("Corrupt config at %s (%v) - using defaults", ConfigPath, err)
+		logErrorf("Corrupt config at %s (%v) - using defaults", ConfigPath, err)
 		return
 	}
 
@@ -104,13 +105,16 @@ func loadPersistedConfig() {
 	if c.TransportMode == "icon" || c.TransportMode == "text" {
 		transportMode = c.TransportMode
 	}
+	if c.LogLevelIdx >= 0 && c.LogLevelIdx < len(logLevelNames) {
+		applyLogLevel(LogLevel(c.LogLevelIdx))
+	}
 
 	wifiEnabled = c.WifiEnabled
 	wifiSSID = c.WifiSSID
 	wifiPassword = c.WifiPassword
 
-	log.Printf("Loaded persisted config from %s (device %q, %dkHz %dch WAV)",
-		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount)
+	logInfof("Loaded persisted config from %s (device %q, %dkHz %dch WAV, log=%s)",
+		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount, logLevelNames[int(xlog.GetLevel())])
 }
 
 // persistConfig snapshots the current non-destructive settings to ConfigPath.
@@ -125,28 +129,29 @@ func persistConfig() {
 		VURangeIdx:    vuRangeIdx,
 		PeakHoldIdx:   peakHoldIdx,
 		TransportMode: transportMode,
+		LogLevelIdx:   int(xlog.GetLevel()),
 		WifiEnabled:   wifiEnabled,
 		WifiSSID:      wifiSSID,
 		WifiPassword:  wifiPassword,
 	}
 	data, err := json.MarshalIndent(&cur, "", "  ")
 	if err != nil {
-		log.Printf("Failed to marshal config: %v", err)
+		logErrorf("Failed to marshal config: %v", err)
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(ConfigPath), 0755); err != nil {
-		log.Printf("Failed to create config dir: %v", err)
+		logErrorf("Failed to create config dir: %v", err)
 		return
 	}
 	tmp := ConfigPath + ".tmp"
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
-		log.Printf("Failed to write config: %v", err)
+		logErrorf("Failed to write config: %v", err)
 		return
 	}
 	if err := os.Rename(tmp, ConfigPath); err != nil {
-		log.Printf("Failed to commit config: %v", err)
+		logErrorf("Failed to commit config: %v", err)
 	}
-	log.Printf("Persisted settings to %s", ConfigPath)
+	logDebugf("Persisted settings to %s", ConfigPath)
 }
 
 // settingChanged is a tiny helper for the handful of places a persistent
@@ -168,7 +173,7 @@ func settingChanged() {
 // name) defaults to the device name; the password is user-set via the web UI.
 func applyWifiConfig(ssid, pass string, enabled bool) {
 	if isSimMode() {
-		log.Printf("wifi: sim mode - AP %q enabled=%v (no hardware change)", ssid, enabled)
+		logInfof("wifi: sim mode - AP %q enabled=%v (no hardware change)", ssid, enabled)
 		wifiInited = true
 		return
 	}
@@ -178,7 +183,7 @@ func applyWifiConfig(ssid, pass string, enabled bool) {
 		"\nwpa=2\nwpa_passphrase=" + pass +
 		"\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nchannel=6\nhw_mode=g\nignore_broadcast_ssid=0\n"
 	if err := os.WriteFile(apConf, []byte(conf), 0600); err != nil {
-		log.Printf("wifi: failed to write %s: %v", apConf, err)
+		logErrorf("wifi: failed to write %s: %v", apConf, err)
 		return
 	}
 
@@ -189,10 +194,10 @@ func applyWifiConfig(ssid, pass string, enabled bool) {
 		cmd = exec.Command("systemctl", "disable", "--now", "hostapd")
 	}
 	if out, err := cmd.CombinedOutput(); err != nil {
-		log.Printf("wifi: hostapd %s failed: %v: %s", map[bool]string{true: "start", false: "stop"}[enabled], err, out)
+		logErrorf("wifi: hostapd %s failed: %v: %s", map[bool]string{true: "start", false: "stop"}[enabled], err, out)
 	}
 	wifiInited = true
-	log.Printf("wifi: access point %q %s", ssid, map[bool]string{true: "started", false: "stopped"}[enabled])
+	logInfof("wifi: access point %q %s", ssid, map[bool]string{true: "started", false: "stopped"}[enabled])
 }
 
 // setWifiEnabled flips the runtime AP state, persists it (so it's also the
@@ -255,7 +260,7 @@ func renderWifiQRScreen() {
 	// module is 2x2 px so a ~25-module QR fits the 100px-deep right side.
 	code, err := qrcode.New(wifiQRContent(), qrcode.Medium)
 	if err != nil {
-		log.Printf("wifi: failed to generate QR: %v", err)
+		logErrorf("wifi: failed to generate QR: %v", err)
 		return
 	}
 	bmp := code.Bitmap()
@@ -340,10 +345,10 @@ func mdnsLoop() {
 			// avahi also registers the local hostname so <host>.local resolves.
 			c := exec.Command("avahi-publish-service", "-s", host, "_workstation._tcp", "9")
 			if err := c.Start(); err != nil {
-				log.Printf("mdns: avahi publish failed: %v", err)
+				logErrorf("mdns: avahi publish failed: %v", err)
 			} else {
 				cmd = c
-				log.Printf("mdns: advertising %s.local", host)
+				logInfof("mdns: advertising %s.local", host)
 			}
 			lastName = name
 		}
@@ -370,6 +375,7 @@ const (
 	StateWifiQR     // full-screen QR code for joining the WiFi AP
 	StateAudio      // Audio submenu: Sample Rate, Channel Count, Tag
 	StateMetering   // Metering submenu: Meter Range, Peak Hold
+	StateLogging    // Logging submenu: Error, Warn, Info, Debug, Back
 )
 
 // Recording output is WAV (PCM 24-bit) only - see OutputBitsPerSample and the
@@ -496,6 +502,7 @@ type PersistedConfig struct {
 	VURangeIdx    int    `json:"vuRangeIdx"`
 	PeakHoldIdx   int    `json:"peakHoldIdx"`
 	TransportMode string `json:"transportMode"`
+	LogLevelIdx   int    `json:"logLevelIdx"`
 
 	WifiEnabled  bool   `json:"wifiEnabled"`
 	WifiSSID     string `json:"wifiSSID"`
@@ -508,6 +515,7 @@ var wifiInited bool
 
 func main() {
 	var err error
+	openLogFileSink()
 	loadPersistedConfig()
 
 	hwManager, err = hardware.NewHardwareManager()
@@ -546,7 +554,7 @@ func main() {
 		if _, err := startRemoteServer(bindHost); err != nil {
 			log.Fatalf("PI9696_REMOTE_BIND: failed to bind %s:%s: %v", bindHost, remoteControlPort, err)
 		}
-		log.Printf("TEST-ONLY remote control server: http://%s:%s (token: %s)", bindHost, remoteControlPort, formatToken(remoteToken))
+		logInfof("TEST-ONLY remote control server: http://%s:%s (token: %s)", bindHost, remoteControlPort, formatToken(remoteToken))
 	} else {
 		go remoteControlLoop()
 	}
@@ -679,6 +687,11 @@ func onEncoderRotate(direction int) {
 			adjustPeakHold(direction)
 		}
 
+	case StateLogging:
+		// The Logging submenu (Error/Warn/Info/Debug) is a direct-select
+		// list, not edit-mode rows - clicking a level applies it at once.
+		navigateMenu(direction)
+
 	case StateCopyFiles:
 		navigateMenu(direction)
 
@@ -741,6 +754,9 @@ func onEncoderClick() {
 	case StateMetering:
 		handleMeteringClick()
 
+	case StateLogging:
+		handleLoggingClick()
+
 	case StateConfirm:
 		handleConfirmClick()
 	}
@@ -793,7 +809,7 @@ func onButtonPress(buttonType hardware.ButtonType) {
 				// Refuse to start a take there isn't room to finish: flash a
 				// warning on the idle screen instead (see renderIdleScreen).
 				diskWarnUntil = time.Now().Add(5 * time.Second)
-				log.Printf("Refusing to record: less than 30 minutes of space remains")
+				logWarnf("Refusing to record: less than 30 minutes of space remains")
 			} else {
 				startRecording()
 			}
@@ -864,11 +880,13 @@ func navigateMenu(direction int) {
 
 	switch currentState {
 	case StateSettings:
-		maxItems = 9 // Audio, Metering, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
+		maxItems = 10 // Audio, Metering, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
 	case StateAudio:
 		maxItems = 4 // Sample Rate, Channel Count, Tag, Back
 	case StateMetering:
 		maxItems = 3 // Meter Range, Peak Hold, Back
+	case StateLogging:
+		maxItems = len(logLevelNames) + 1 // Error, Warn, Info, Debug, Back
 	case StateCopyFiles:
 		maxItems = len(allFiles) + 3 // Start Copy, [All], [NONE], files...
 	case StateSystemOptions:
@@ -904,34 +922,38 @@ func handleSettingsClick() {
 		currentState = StateMetering
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 2: // Copy Files
+	case 2: // Logging submenu (Error, Warn, Info, Debug)
+		currentState = StateLogging
+		selectedMenu = 0
+		menuScrollOffset = 0
+	case 3: // Copy Files
 		if usbMounted {
 			loadFilesToCopy()
 			currentState = StateCopyFiles
 			selectedMenu = 0
 			menuScrollOffset = 0
 		}
-	case 3: // System Options
+	case 4: // System Options
 		currentState = StateSystemOptions
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 4: // Network Info
+	case 5: // Network Info
 		currentState = StateNetworkInfo
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 5: // Remote Access
+	case 6: // Remote Access
 		currentState = StateRemoteInfo
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 6: // Restart Inferno
+	case 7: // Restart Inferno
 		menuMode = InfernoRestartConfirm
 		currentState = StateConfirm
 		confirmOption = ConfirmNo
-	case 7: // WiFi submenu (enable/disable + QR)
+	case 8: // WiFi submenu (enable/disable + QR)
 		currentState = StateWifi
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 8: // Exit
+	case 9: // Exit
 		currentState = StateIdle
 		menuScrollOffset = 0
 	}
@@ -968,6 +990,21 @@ func handleMeteringClick() {
 	case 2: // Back
 		currentState = StateSettings
 		selectedMenu = 1
+		menuScrollOffset = 0
+	}
+}
+
+// handleLoggingClick drives the Logging submenu (StateLogging). It's a
+// direct-select list - clicking a level applies it immediately (and presses
+// it into the persisted config) rather than the press-to-edit dance the
+// numeric Audio/Metering params need; the last row is Back.
+func handleLoggingClick() {
+	switch selectedMenu {
+	case 0, 1, 2, 3: // Error, Warn, Info, Debug
+		setLogLevel(LogLevel(selectedMenu))
+	case 4: // Back
+		currentState = StateSettings
+		selectedMenu = 2
 		menuScrollOffset = 0
 	}
 }
@@ -1024,12 +1061,12 @@ func handleWifiClick() {
 	switch selectedMenu {
 	case 0: // Enable/disable the AP
 		setWifiEnabled(!wifiEnabled)
-		log.Printf("wifi: AP toggled %v via OLED (SSID %q)", wifiEnabled, wifiSSID)
+		logInfof("wifi: AP toggled %v via OLED (SSID %q)", wifiEnabled, wifiSSID)
 	case 1: // Show the join QR code
 		currentState = StateWifiQR
 	case 2: // Back to settings
 		currentState = StateSettings
-		selectedMenu = 12
+		selectedMenu = 8
 		menuScrollOffset = 0
 	}
 }
@@ -1090,7 +1127,7 @@ func enqueueInferno(cmd infernoCommand) {
 	select {
 	case infernoReqCh <- infernoRequest{cmd: cmd}:
 	default:
-		log.Printf("Inferno command queue full, dropping request")
+		logWarnf("Inferno command queue full, dropping request")
 	}
 }
 
@@ -1127,7 +1164,7 @@ func infernoWorker() {
 				// timer still running while no more audio is being
 				// captured. Defer instead - stopRecording() re-enqueues
 				// this restart once it's safe.
-				log.Printf("Deferring Inferno restart: recording in progress")
+				logWarnf("Deferring Inferno restart: recording in progress")
 				break
 			}
 
@@ -1176,12 +1213,12 @@ func networkMonitorLoop() {
 		if networkUp && !networkWasUp {
 			// Network just came up, start Inferno if not running
 			if infernoState != InfernoRunning {
-				log.Printf("Network available, starting Inferno server")
+				logInfof("Network available, starting Inferno server")
 				enqueueInferno(infernoCmdStart)
 			}
 		} else if !networkUp && networkWasUp {
 			// Network went down
-			log.Printf("Network unavailable")
+			logWarnf("Network unavailable")
 		}
 
 		networkWasUp = networkUp
@@ -1198,7 +1235,7 @@ func networkMonitorLoop() {
 func checkInfernoRestart() {
 	currentSampleRate := sampleRates[sampleRateIdx]
 	if (currentSampleRate != lastSampleRate || channelCount != lastChannelCount) && infernoState == InfernoRunning {
-		log.Printf("Settings changed, restarting Inferno server")
+		logInfof("Settings changed, restarting Inferno server")
 		enqueueInferno(infernoCmdRestart)
 	}
 }
@@ -1234,7 +1271,7 @@ func doStartInferno() {
 
 	// Create new FIFO
 	if err := syscall.Mkfifo(path, 0666); err != nil {
-		log.Printf("Failed to create Inferno FIFO %s: %v", path, err)
+		logErrorf("Failed to create Inferno FIFO %s: %v", path, err)
 		mutex.Lock()
 		infernoState = InfernoFailed
 		mutex.Unlock()
@@ -1261,7 +1298,7 @@ func doStartInferno() {
 	// for command injection even with shell metacharacters in the name.
 	binary := InfernoBinary
 	if _, err := os.Stat(binary); err != nil {
-		log.Printf("Cannot start Inferno server: built binary %s not found (%v) - run setup.sh to build it", binary, err)
+		logErrorf("Cannot start Inferno server: built binary %s not found (%v) - run setup.sh to build it", binary, err)
 		mutex.Lock()
 		infernoState = InfernoFailed
 		mutex.Unlock()
@@ -1277,7 +1314,7 @@ func doStartInferno() {
 	)
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to start Inferno server: %v", err)
+		logErrorf("Failed to start Inferno server: %v", err)
 		os.Remove(path)
 		mutex.Lock()
 		infernoState = InfernoFailed
@@ -1304,7 +1341,7 @@ func doStartInferno() {
 		}
 	}
 	mutex.Unlock()
-	log.Printf("Inferno server started with %dkHz, %d channels", sampleRate/1000, channels)
+	logInfof("Inferno server started with %dkHz, %d channels", sampleRate/1000, channels)
 }
 
 // doStopInferno stops the Inferno server. Must only be called from
@@ -1338,7 +1375,7 @@ func doStopInferno() {
 		select {
 		case <-waitCh:
 		case <-time.After(5 * time.Second):
-			log.Printf("Inferno server did not exit after SIGTERM, sending SIGKILL")
+			logWarnf("Inferno server did not exit after SIGTERM, sending SIGKILL")
 			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 			<-waitCh
 		}
@@ -1348,7 +1385,7 @@ func doStopInferno() {
 		os.Remove(path)
 	}
 
-	log.Printf("Inferno server stopped")
+	logInfof("Inferno server stopped")
 }
 
 // Restart the Inferno server. Called from handleConfirmClick under mutex;
@@ -1380,7 +1417,7 @@ func enqueueSystemOp(op systemOp) {
 	select {
 	case systemOpCh <- op:
 	default:
-		log.Printf("system op: channel full, dropping %d", op)
+		logWarnf("system op: channel full, dropping %d", op)
 	}
 }
 
@@ -1401,7 +1438,7 @@ func systemOpWorker() {
 
 func startRecording() {
 	if infernoState != InfernoRunning {
-		log.Printf("Cannot start recording: Inferno server not running")
+		logErrorf("Cannot start recording: Inferno server not running")
 		return
 	}
 
@@ -1467,12 +1504,12 @@ func startRecording() {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("Failed to attach FFmpeg stdout: %v", err)
+		logErrorf("Failed to attach FFmpeg stdout: %v", err)
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to start FFmpeg: %v", err)
+		logErrorf("Failed to start FFmpeg: %v", err)
 		return
 	}
 
@@ -1637,11 +1674,11 @@ func startMonitor() {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		log.Printf("Failed to attach monitor ffmpeg stdout: %v", err)
+		logErrorf("Failed to attach monitor ffmpeg stdout: %v", err)
 		return
 	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to start monitor ffmpeg: %v", err)
+		logErrorf("Failed to start monitor ffmpeg: %v", err)
 		return
 	}
 
@@ -1799,7 +1836,7 @@ func latestRecording() string {
 func startPlayback() {
 	file := latestRecording()
 	if file == "" {
-		log.Printf("No recordings to play")
+		logWarnf("No recordings to play")
 		return
 	}
 
@@ -1818,7 +1855,7 @@ func startPlayback() {
 
 	cmd := exec.Command("ffmpeg", "-nostdin", "-i", file, "-f", "alsa", "default")
 	if err := cmd.Start(); err != nil {
-		log.Printf("Failed to start playback: %v", err)
+		logErrorf("Failed to start playback: %v", err)
 		monitoringOutput = false
 		return
 	}
@@ -1864,7 +1901,7 @@ func pausePlayback() {
 	playbackPausedElapsed = time.Since(playbackStart)
 	playbackCmd.Process.Signal(syscall.SIGSTOP)
 	currentState = StatePaused
-	log.Printf("Playback paused")
+	logInfof("Playback paused")
 }
 
 // resumePlayback unpauses a paused ffmpeg with SIGCONT and returns the UI to
@@ -1879,7 +1916,7 @@ func resumePlayback() {
 	playbackStart = playbackStart.Add(time.Since(playbackStart) - playbackPausedElapsed)
 	playbackPausedElapsed = 0
 	currentState = StatePlaying
-	log.Printf("Playback resumed")
+	logInfof("Playback resumed")
 }
 
 // maybeResumeInputMonitorLocked must be called with mutex held. It restores
@@ -1971,7 +2008,7 @@ func startCopyOperation() {
 
 			err := copyFile(src, dst)
 			if err != nil {
-				log.Printf("Failed to copy %s: %v", file, err)
+				logErrorf("Failed to copy %s: %v", file, err)
 			}
 			mutex.Lock()
 			copyProgress = int(float64(i+1) / float64(len(selectedFiles)) * 100)
@@ -2021,13 +2058,13 @@ func deleteAllRecordings() {
 
 func formatUSB() {
 	if !usbMounted {
-		log.Printf("Cannot format USB: not mounted")
+		logErrorf("Cannot format USB: not mounted")
 		return
 	}
 
 	device, err := usbDevicePath()
 	if err != nil {
-		log.Printf("Cannot format USB: %v", err)
+		logErrorf("Cannot format USB: %v", err)
 		return
 	}
 
@@ -2036,11 +2073,11 @@ func formatUSB() {
 	// password prompt would block - hence this running on systemOpWorker, not
 	// the UI mutex.
 	if out, err := exec.Command("sudo", "umount", USBMountPoint).CombinedOutput(); err != nil {
-		log.Printf("format USB: umount failed: %v: %s", err, out)
+		logErrorf("format USB: umount failed: %v: %s", err, out)
 		return
 	}
 	if out, err := exec.Command("sudo", "mkfs.vfat", "-F", "32", device).CombinedOutput(); err != nil {
-		log.Printf("format USB: mkfs failed: %v: %s", err, out)
+		logErrorf("format USB: mkfs failed: %v: %s", err, out)
 		return
 	}
 	time.Sleep(2 * time.Second)
@@ -2051,13 +2088,13 @@ func formatUSB() {
 	// was mounted and the next "copy to USB" wrote plain files into the empty
 	// mountpoint dir on the SD card's root filesystem.
 	if err := os.MkdirAll(USBMountPoint, 0755); err != nil {
-		log.Printf("format USB: mkdir mountpoint failed: %v", err)
+		logErrorf("format USB: mkdir mountpoint failed: %v", err)
 	}
 	if out, err := exec.Command("sudo", "mount", device, USBMountPoint).CombinedOutput(); err != nil {
-		log.Printf("format USB: remount failed: %v: %s", err, out)
+		logErrorf("format USB: remount failed: %v: %s", err, out)
 		return
 	}
-	log.Printf("USB drive formatted (FAT32) and remounted")
+	logInfof("USB drive formatted (FAT32) and remounted")
 }
 
 // usbDevicePath looks up the block device currently mounted at USBMountPoint.
@@ -2187,6 +2224,8 @@ func render() {
 		renderAudioMenu()
 	case StateMetering:
 		renderMeteringMenu()
+	case StateLogging:
+		renderLoggingMenu()
 	case StateConfirm:
 		renderConfirmDialog()
 	}
@@ -2602,6 +2641,7 @@ func renderSettingsMenu() {
 	allItems := []hardware.MenuItem{
 		{Label: "Audio →", Value: fmt.Sprintf("WAV %dch", channelCount)},
 		{Label: "Metering →", Value: fmt.Sprintf("%ddB", int(vuRangeOptions[vuRangeIdx]))},
+		{Label: "Logging →", Value: logLevelNames[int(xlog.GetLevel())]},
 		{Label: "Copy Files →", Value: ""},
 		{Label: "System Options →", Value: ""},
 		{Label: "Network Info →", Value: ""},
@@ -3072,6 +3112,80 @@ func renderMeteringMenu() {
 			}
 		}
 
+		labelText := prefix + item.Label
+		hwManager.DrawText(8, y, labelText)
+
+		if item.Value != "" {
+			valueWidth := hwManager.GetTextWidth(item.Value)
+			hwManager.DrawText(256-valueWidth-32, y, item.Value)
+		}
+		y += fontHeight
+	}
+
+	if totalItems > maxVisibleItems {
+		hwManager.SwitchToContext("details")
+		if menuScrollOffset > 0 {
+			hwManager.DrawText(240, 22, "↑")
+		}
+		if menuScrollOffset+maxVisibleItems < totalItems {
+			hwManager.DrawText(240, 61, "↓")
+		}
+	}
+}
+
+// renderLoggingMenu draws the Logging submenu (StateLogging): a direct-select
+// list of the four levels plus Back. The active level is marked so it reads as
+// a picker (the value is what a selection means, not an editable parameter).
+func renderLoggingMenu() {
+	items := make([]hardware.MenuItem, 0, len(logLevelNames)+1)
+	for i, name := range logLevelNames {
+		mark := " "
+		if LogLevel(i) == xlog.GetLevel() {
+			mark = "●"
+		}
+		items = append(items, hardware.MenuItem{Label: name, Value: mark})
+	}
+	items = append(items, hardware.MenuItem{Label: "← Back", Value: ""})
+	totalItems := len(items)
+	maxVisibleItems := 4
+
+	if selectedMenu < menuScrollOffset {
+		menuScrollOffset = selectedMenu
+	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
+		menuScrollOffset = selectedMenu - maxVisibleItems + 1
+	}
+	if menuScrollOffset > totalItems-maxVisibleItems {
+		menuScrollOffset = totalItems - maxVisibleItems
+	}
+	if menuScrollOffset < 0 {
+		menuScrollOffset = 0
+	}
+
+	endIdx := menuScrollOffset + maxVisibleItems
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+	visibleItems := items[menuScrollOffset:endIdx]
+	visibleSelectedIndex := selectedMenu - menuScrollOffset
+
+	y := 22
+	fontHeight := 13
+
+	for i, item := range visibleItems {
+		if i == visibleSelectedIndex {
+			if err := hwManager.SwitchToContext("selected"); err != nil {
+				return
+			}
+		} else {
+			if err := hwManager.SwitchToContext("menu"); err != nil {
+				return
+			}
+		}
+
+		prefix := "  "
+		if i == visibleSelectedIndex {
+			prefix = "> "
+		}
 		labelText := prefix + item.Label
 		hwManager.DrawText(8, y, labelText)
 

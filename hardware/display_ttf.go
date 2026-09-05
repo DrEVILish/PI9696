@@ -8,9 +8,10 @@ import (
 	"image/png"
 	"io"
 	"io/ioutil"
-	"log"
 	"os"
 	"time"
+
+	"pi9696/xlog"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
@@ -580,7 +581,7 @@ func (d *TTFDisplay) DrawStatusBarWithIcons(formatInfo, usbInfo string, usbConne
 func (d *TTFDisplay) Close() error {
 	if d.font != nil {
 		if err := d.font.Close(); err != nil {
-			log.Printf("Warning: failed to close font: %v", err)
+			xlog.Warnf("failed to close font: %v", err)
 		}
 	}
 	if d.spiConn != nil {
@@ -597,7 +598,7 @@ func NewDisplayWithFallback(fontPath string, fontSize float64) (*TTFDisplay, err
 	// Try to load TTF font first
 	display, err := NewTTFDisplay(fontPath, fontSize)
 	if err != nil {
-		log.Printf("Failed to load TTF font, falling back to bitmap font: %v", err)
+		xlog.Warnf("failed to load TTF font, falling back to bitmap font: %v", err)
 		// Could fallback to original bitmap font implementation here
 		return nil, err
 	}

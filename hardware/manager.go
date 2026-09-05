@@ -3,7 +3,8 @@ package hardware
 import (
 	"fmt"
 	"io"
-	"log"
+
+	"pi9696/xlog"
 
 	"golang.org/x/image/font"
 )
@@ -23,7 +24,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 	firacode, err := NewFiraCodeManager()
 	if err != nil {
 		// Fallback to basic display if FiraCode fails
-		log.Printf("FiraCode initialization failed, attempting fallback: %v", err)
+		xlog.Errorf("FiraCode initialization failed, attempting fallback: %v", err)
 
 		// Try basic TTF display with system font
 		basicDisplay, basicErr := NewTTFDisplay("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11.0)
@@ -44,7 +45,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 			fontFaces:   make(map[string]font.Face),
 		}
 		firacode.fontFaces[fontFaceKey(firacode.currentFont, firacode.currentSize)] = basicDisplay.font
-		log.Println("Using fallback display with system fonts")
+		xlog.Warnf("Using fallback display with system fonts")
 	}
 	hm.FiraCode = firacode
 
@@ -75,7 +76,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 	}
 	hm.LEDs = leds
 
-	log.Println("Hardware initialized successfully with FiraCode support")
+	xlog.Infof("Hardware initialized successfully with FiraCode support")
 	return hm, nil
 }
 
@@ -398,7 +399,7 @@ func (hm *HardwareManager) TestEncoder() error {
 		return fmt.Errorf("encoder reset failed")
 	}
 
-	log.Printf("Encoder test passed - initial position: %d", initialPos)
+	xlog.Debugf("Encoder test passed - initial position: %d", initialPos)
 	return nil
 }
 
@@ -412,30 +413,30 @@ func (hm *HardwareManager) TestButtons() error {
 
 	for _, button := range buttons {
 		pressed := hm.Buttons.IsPressed(button)
-		log.Printf("Button %s: pressed=%v", button.String(), pressed)
+		xlog.Debugf("Button %s: pressed=%v", button.String(), pressed)
 	}
 
 	return nil
 }
 
 func (hm *HardwareManager) TestAll() error {
-	log.Println("Testing all hardware components...")
+	xlog.Infof("Testing all hardware components...")
 
 	if err := hm.TestDisplay(); err != nil {
 		return fmt.Errorf("display test failed: %v", err)
 	}
-	log.Println("✓ Display test passed")
+	xlog.Infof("✓ Display test passed")
 
 	if err := hm.TestEncoder(); err != nil {
 		return fmt.Errorf("encoder test failed: %v", err)
 	}
-	log.Println("✓ Encoder test passed")
+	xlog.Infof("✓ Encoder test passed")
 
 	if err := hm.TestButtons(); err != nil {
 		return fmt.Errorf("buttons test failed: %v", err)
 	}
-	log.Println("✓ Buttons test passed")
+	xlog.Infof("✓ Buttons test passed")
 
-	log.Println("All hardware tests completed successfully")
+	xlog.Infof("All hardware tests completed successfully")
 	return nil
 }

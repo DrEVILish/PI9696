@@ -209,7 +209,10 @@ PI9696_SIM=1 ./pi9696
 - **Audio Optimization** - ALSA configuration for low latency
 - **Resource Management** - Proper permissions and user groups
 - **Process Management** - Persistent Inferno server with automatic restart
-- **Logging** - Structured logging with rotation
+- **Logging** - Structured logging with rotation (journald + `/var/log/pi9696/app.log`).
+  Multi-tier (Error / Warn / Info / Debug), default Error-only, level set from the OLED
+  Settings → Logging submenu and the WebUI settings modal and persisted (Round 2 decision;
+  implemented in `xlog` package)
 
 ### 🚀 Deployment Status
 
@@ -511,6 +514,21 @@ Third design-review pass: fills in the specifics needed to finish the build.
   reviewable: a reviewer can inspect a single self-contained change rather than a bundle of
   unrelated edits.
 
+### Feature History
+
+- **1.11.0 - Multi-tier logging.** All logging across the app and the hardware package now
+  flows through a single leveled logger (`xlog`) with Error / Warn / Info / Debug tiers,
+  filtered by a process-wide threshold that defaults to Error-only (per Round 2 decision).
+  The level is user-changeable from the OLED Settings → Logging submenu (a direct-select
+  picker replacing no prior setting, renumbering the Settings menu to 10 rows) and a new
+  Log Level row in the WebUI settings modal (`POST /api/settings/log-level`), and is
+  persisted in the config (`logLevelIdx`) so a raised level survives reboots. Output is a
+  best-effort dual sink: journald (via the stdlib logger the systemd unit captures) plus
+  `/var/log/pi9696/app.log` (setup.sh already creates the dir; logrotate rotates it), with
+  the file sink silently degrading on systems that can't open it (e.g. sim mode). Also
+  fixes a pre-existing bug where the WiFi submenu's Back returned to Settings row 12 (now
+  8, matching the renumbered menu instead of wrapping oddly).
+
 ### ✅ Quality Assurance
 
 #### Code Quality
@@ -559,8 +577,7 @@ Third design-review pass: fills in the specifics needed to finish the build.
 The PI9696 audio recorder is complete and ready for hardware assembly and deployment. All software components are implemented, tested (in simulation), and documented. The system provides a professional audio recording solution suitable for studio or live applications.
 
 **Last Updated:** 2026-09-04
-**Version:** 1.10.0 - WAV-only recording engine: FLAC/MP3 output and the Format setting were
-removed entirely (menu row, web settings dropdown, format channel-ceiling fallback, and
-format-aware storage estimate). The recording engine now always finalizes to PCM 24-bit WAV
-over the full 1-128 channel range, and the recorder/WebUI show WAV as the sole fixed format.
+**Version:** 1.11.0 - Multi-tier logging (Error/Warn/Info/Debug, Error-only default,
+changeable from the OLED Settings → Logging submenu and the WebUI settings modal, persisted,
+journald + `/var/log/pi9696/app.log` via the shared `xlog` package).
 **Maintainer:** Development Team
