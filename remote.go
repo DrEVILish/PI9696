@@ -351,6 +351,8 @@ type dashboardData struct {
 	TagFragment          template.HTML
 	TransportFragment    template.HTML
 	LogLevelFragment     template.HTML
+	BrightnessFragment   template.HTML
+	AutoDimFragment      template.HTML
 	WifiEnabled          bool
 	WifiSSID             string
 	WifiPassword         string
@@ -451,6 +453,86 @@ var logLevelFragmentTmpl = template.Must(template.New("loglevel").Parse(`<div id
 </form>
 </div>
 </div>`))
+
+// brightnessFragmentTmpl is the Display -> Brightness setting: a 0-100
+// slider (the OLED's continuous brightness control) that live-updates its
+// readout while dragging and submits on release, so the panel responds only
+// when the operator finishes moving it.
+var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<div id="brightness" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/brightness" hx-target="#brightness" hx-swap="outerHTML">
+<label for="brightnessRange">Brightness</label>
+<span class="hint" id="brightnessVal">{{.Pct}}%</span>
+<input id="brightnessRange" class="styled-range" type="range" name="pct" min="0" max="100" step="1" value="{{.Pct}}" oninput="document.getElementById('brightnessVal').textContent=this.value+'%'" onchange="this.form.requestSubmit()" title="Panel brightness 0-100%">
+</form>
+</div>
+</div>`))
+
+// autoDimFragmentTmpl is the Display -> Auto Dim setting: an on/off switch
+// for the dim-then-off idle behavior. Mirrors the WiFi switch markup.
+var autoDimFragmentTmpl = template.Must(template.New("autodim").Parse(`<div id="autodim" class="setting-cell">
+<div class="setting-row setting-row--switch">
+<form hx-post="/api/settings/dim" hx-target="#autodim" hx-swap="outerHTML">
+<label for="autoDimToggle">Auto Dim</label>
+<label class="sci-switch" for="autoDimToggle">
+<input id="autoDimToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
+<span class="sci-switch-track"><span class="sci-thumb"></span></span>
+<span class="switch-readout" data-on="AUTO" data-off="MANUAL"></span>
+</label>
+</form>
+</div>
+</div>`))
+
+// brightnessView/autoDimView carry the exact values the fragments render, so
+// both the dashboard and the htmx POST handlers share one template.
+type brightnessView struct {
+	Pct int
+}
+
+type autoDimView struct {
+	Enabled bool
+}
+
+func brightnessViewData() brightnessView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return brightnessView{Pct: oledBrightnessPct}
+}
+
+func autoDimViewData() autoDimView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return autoDimView{Enabled: autoDimEnabled}
+}
+
+func handleAPISettingsBrightness(w http.ResponseWriter, r *http.Request) {
+	if pct, err := strconv.Atoi(r.FormValue("pct")); err == nil {
+		mutex.Lock()
+		if pct >= 0 && pct <= 100 {
+			oledBrightnessPct = pct
+			noteActivity() // a WebUI brightness change is input - wake the panel
+			if hwManager != nil {
+				hwManager.SetBrightness(oledBrightnessPct)
+			}
+			settingChanged()
+		}
+		mutex.Unlock()
+	}
+	brightnessFragmentTmpl.Execute(w, brightnessViewData())
+}
+
+func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
+	enabled := r.FormValue("enabled") != ""
+	mutex.Lock()
+	autoDimEnabled = enabled
+	// Either way this is an input while the panel may be dimmed/off: wake it
+	// (turning dim off restores the screen, turning it on restarts the idle
+	// clock from full brightness).
+	noteActivity()
+	settingChanged()
+	mutex.Unlock()
+	autoDimFragmentTmpl.Execute(w, autoDimViewData())
+}
 
 var peakHoldFragmentTmpl = template.Must(template.New("peakhold").Parse(`<div id="peakhold" class="setting-cell">
 <div class="setting-row">
@@ -844,6 +926,16 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .sci-switch input:checked ~ .switch-readout{color:var(--glow);text-shadow:0 0 6px rgba(0,217,255,0.6)}
 .sci-switch input:checked ~ .switch-readout::after{content:attr(data-on)}
 
+/* Continuous OLED brightness slider: a wide Sci-Fi range control with a
+   glowing track and thumb, sized so a single row holds label + live % readout
+   + slider (the readout is updated inline by the fragment's oninput). */
+.styled-range{-webkit-appearance:none;appearance:none;flex:1 1 auto;min-width:0;height:1.6em;background:transparent;cursor:pointer}
+.styled-range::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,#0e3a5c,var(--glow))}
+.styled-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-5px;border-radius:3px;background:#02050a;border:1px solid var(--glow);box-shadow:0 0 8px rgba(0,217,255,0.5)}
+.styled-range::-moz-range-track{height:4px;border-radius:2px;background:linear-gradient(90deg,#0e3a5c,var(--glow))}
+.styled-range::-moz-range-thumb{width:14px;height:14px;border-radius:3px;background:#02050a;border:1px solid var(--glow);box-shadow:0 0 8px rgba(0,217,255,0.5)}
+.styled-range:focus-visible{outline:1px solid var(--glow);outline-offset:2px}
+
 /* The rack-mount reel-to-reel transport lives in the normal document flow
    right below the three-column grid and scrolls with the page. The level
    meters are NOT here - they live in the pinned, collapsible footer (see
@@ -1190,6 +1282,12 @@ body.meters-collapsed{padding-bottom:4em}
       <section class="settings-group">
         <h3 class="settings-group-title">Transport</h3>
         {{.TransportFragment}}
+      </section>
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">Display</h3>
+        {{.BrightnessFragment}}
+        {{.AutoDimFragment}}
       </section>
 
       <section class="settings-group">
@@ -1593,7 +1691,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	transportIcon := transportMode != "text"
 	mutex.Unlock()
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, transportBuf, logLevelBuf, qrBuf bytes.Buffer
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, qrBuf bytes.Buffer
 	vuRangeFragmentTmpl.Execute(&vuBuf, vuRangeOptionsView())
 	peakHoldFragmentTmpl.Execute(&holdBuf, peakHoldOptionsView())
 	sampleRateFragmentTmpl.Execute(&srBuf, sampleRateOptionsView())
@@ -1601,6 +1699,8 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	tagFragmentTmpl.Execute(&tagBuf, tagOptionsView())
 	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
 	logLevelFragmentTmpl.Execute(&logLevelBuf, logLevelOptionsView())
+	brightnessFragmentTmpl.Execute(&brightnessBuf, brightnessViewData())
+	autoDimFragmentTmpl.Execute(&autoDimBuf, autoDimViewData())
 
 	// Generate WiFi QR code as base64 PNG for the settings modal
 	var qrBase64 string
@@ -1622,6 +1722,8 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		TagFragment:          template.HTML(tagBuf.String()),
 		TransportFragment:    template.HTML(transportBuf.String()),
 		LogLevelFragment:     template.HTML(logLevelBuf.String()),
+		BrightnessFragment:   template.HTML(brightnessBuf.String()),
+		AutoDimFragment:      template.HTML(autoDimBuf.String()),
 		WifiEnabled:          wifiEn,
 		WifiSSID:             wifiS,
 		WifiPassword:         wifiP,
@@ -2134,6 +2236,8 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/vu-range", requireAuth(handleAPISettingsVURange))
 	mux.HandleFunc("POST /api/settings/peak-hold", requireAuth(handleAPISettingsPeakHold))
 	mux.HandleFunc("POST /api/settings/log-level", requireAuth(handleAPISettingsLogLevel))
+	mux.HandleFunc("POST /api/settings/brightness", requireAuth(handleAPISettingsBrightness))
+	mux.HandleFunc("POST /api/settings/dim", requireAuth(handleAPISettingsAutoDim))
 	mux.HandleFunc("POST /api/settings/sample-rate", requireAuth(handleAPISettingsSampleRate))
 	mux.HandleFunc("POST /api/settings/channels", requireAuth(handleAPISettingsChannels))
 	mux.HandleFunc("POST /api/settings/tag", requireAuth(handleAPISettingsTag))

@@ -58,6 +58,10 @@ type TTFDisplay struct {
 	buffer  []byte
 	font    font.Face
 	canvas  *image.Gray // renderScale times the panel's logical 256x64 resolution
+
+	// brightnessPct is the last SetBrightness target (0-100). It tracks only
+	// what was asked for, so auto-dim can restore the user's level.
+	brightnessPct int
 }
 
 func NewTTFDisplay(fontPath string, fontSize float64) (*TTFDisplay, error) {
@@ -117,14 +121,15 @@ func NewTTFDisplay(fontPath string, fontSize float64) (*TTFDisplay, error) {
 	}
 
 	d := &TTFDisplay{
-		sim:     sim,
-		spiPort: spiPort,
-		spiConn: spiConn,
-		dcPin:   dcPin,
-		resPin:  resPin,
-		buffer:  make([]byte, DisplayWidth*DisplayHeight/2), // 4 bits per pixel for SSD1322
-		font:    fontFace,
-		canvas:  image.NewGray(image.Rect(0, 0, DisplayWidth*renderScale, DisplayHeight*renderScale)),
+		sim:           sim,
+		spiPort:       spiPort,
+		spiConn:       spiConn,
+		dcPin:         dcPin,
+		resPin:        resPin,
+		buffer:        make([]byte, DisplayWidth*DisplayHeight/2), // 4 bits per pixel for SSD1322
+		font:          fontFace,
+		canvas:        image.NewGray(image.Rect(0, 0, DisplayWidth*renderScale, DisplayHeight*renderScale)),
+		brightnessPct: 100,
 	}
 
 	if !sim {
@@ -208,6 +213,26 @@ func (d *TTFDisplay) init() error {
 	}
 
 	return nil
+}
+
+// SetBrightness sets the panel's contrast current (SSD1322 command 0xC1,
+// value 0x00-0xFF) from a 0-100 percentage - the "continuous brightness
+// slider" of the Round 3 design. The init sequence also sets contrast; this
+// is the runtime path used by the Settings/WebUI brightness control and by
+// auto-dim, which drives the same command to a dim level then to 0 (panel
+// effectively off) rather than using the display-sleep command, keeping a
+// single brightness mechanism. No-op in sim/dev mode (no SPI bus).
+func (d *TTFDisplay) SetBrightness(pct int) {
+	if pct < 0 {
+		pct = 0
+	} else if pct > 100 {
+		pct = 100
+	}
+	d.brightnessPct = pct
+	if d.sim {
+		return
+	}
+	d.writeCommand([]byte{0xC1, byte(pct * 255 / 100)})
 }
 
 func (d *TTFDisplay) writeCommand(cmd []byte) error {

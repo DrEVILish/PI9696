@@ -170,16 +170,19 @@ sudo journalctl -u pi9696 -f   # view logs
    Channel Count (1-128, auto-restarts Inferno server), and Tag (attach a preset metadata
    tag to the next recording; WAV is the sole fixed output format)
 2. **Metering**: Submenu with Meter Range and Peak Hold
-3. **Logging**: Submenu selecting the log verbosity - **Error** (default, quietest),
+3. **Display**: Submenu with Brightness (continuous 0-100% adjust row) and Auto Dim
+   (dim after 30s of inactivity, off after 2 min; any input wakes it). Also settable
+   from the WebUI as a brightness slider + auto-dim switch.
+4. **Logging**: Submenu selecting the log verbosity - **Error** (default, quietest),
    **Warn**, **Info**, or **Debug** (most verbose). Applied immediately and persisted; the
    active level is also settable from the WebUI settings modal.
-4. **Copy Files**: Transfer recordings to USB drive
-5. **System Options**: System management submenu
-6. **Network Info**: Display network connection details
-7. **Remote Access**: Shows the URL and token for the web remote control
-8. **Restart Inferno**: Manually restart Inferno Audio over IP server
-9. **WiFi**: Access Point submenu (enable/disable the AP, show the join QR code)
-10. **Exit**: Return to main display
+5. **Copy Files**: Transfer recordings to USB drive
+6. **System Options**: System management submenu
+7. **Network Info**: Display network connection details
+8. **Remote Access**: Shows the URL and token for the web remote control
+9. **Restart Inferno**: Manually restart Inferno Audio over IP server
+10. **WiFi**: Access Point submenu (enable/disable the AP, show the join QR code)
+11. **Exit**: Return to main display
 
 ### System Options Submenu
 1. **Delete All**: Remove all recordings with confirmation
