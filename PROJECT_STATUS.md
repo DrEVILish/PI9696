@@ -423,9 +423,10 @@ for later releases; everything else reflects the intended current behaviour of t
 
 Second design-review pass. Items marked *(future)* are noted for later releases.
 
-- **OLED brightness** - **Adjustable brightness** via the menu/WebUI.
+- **OLED brightness** - **Adjustable brightness** via the menu/WebUI (implemented as a
+  continuous 0-100% slider in 1.12.0).
 - **Display dimming** - **Auto-dim + screen saver** after a period of inactivity to save the
-  OLED and reduce heat.
+  OLED and reduce heat (implemented as dim-then-off in 1.12.0).
 - **Audio source** - Always use **Inferno (AoIP) as the audio source** - the device is an
   AoIP recorder; follow the Inferno documentation rather than exposing raw ALSA device
   selection.
@@ -516,6 +517,18 @@ Third design-review pass: fills in the specifics needed to finish the build.
 
 ### Feature History
 
+- **1.12.0 - OLED brightness + auto-dim.** The display's brightness is now a continuous
+  0-100% setting (SSD1322 contrast current, command 0xC1) via a new Settings → Display
+  submenu (Brightness press-to-edit row + Auto Dim toggle) and a Brightness group in the
+  WebUI settings modal (`POST /api/settings/brightness` as a live 0-100 range slider,
+  `POST /api/settings/dim` as the auto-dim switch). Auto-dim (default on) dims an idle
+  panel after 30s to 20% and turns it off after 2 min; any input (encoder, buttons, or the
+  WebUI endpoints that route through the same handlers) wakes it back to the user's level.
+  The setting persists via `oledBrightnessPct` (pointer, so pre-1.12 configs keep the 100%
+  default) and `autoDimDisabled` (inverted bool), and is applied at boot. Inserts the
+  Display row into Settings at index 2, renumbering the menu to 11 rows (Logging back
+  target 3, WiFi back target 9).
+
 - **1.11.0 - Multi-tier logging.** All logging across the app and the hardware package now
   flows through a single leveled logger (`xlog`) with Error / Warn / Info / Debug tiers,
   filtered by a process-wide threshold that defaults to Error-only (per Round 2 decision).
@@ -527,7 +540,7 @@ Third design-review pass: fills in the specifics needed to finish the build.
   `/var/log/pi9696/app.log` (setup.sh already creates the dir; logrotate rotates it), with
   the file sink silently degrading on systems that can't open it (e.g. sim mode). Also
   fixes a pre-existing bug where the WiFi submenu's Back returned to Settings row 12 (now
-  8, matching the renumbered menu instead of wrapping oddly).
+  9, matching the renumbered menu instead of wrapping oddly).
 
 ### ✅ Quality Assurance
 
@@ -576,8 +589,7 @@ Third design-review pass: fills in the specifics needed to finish the build.
 
 The PI9696 audio recorder is complete and ready for hardware assembly and deployment. All software components are implemented, tested (in simulation), and documented. The system provides a professional audio recording solution suitable for studio or live applications.
 
-**Last Updated:** 2026-09-04
-**Version:** 1.11.0 - Multi-tier logging (Error/Warn/Info/Debug, Error-only default,
-changeable from the OLED Settings → Logging submenu and the WebUI settings modal, persisted,
-journald + `/var/log/pi9696/app.log` via the shared `xlog` package).
+**Last Updated:** 2026-09-05
+**Version:** 1.12.0 - OLED brightness (continuous 0-100% via Settings → Display and the
+WebUI slider) + auto-dim (dim after 30s, off after 2 min, wake on any input, persisted).
 **Maintainer:** Development Team

@@ -163,6 +163,15 @@ func (hm *HardwareManager) SetPixel(x, y int, brightness byte) {
 	}
 }
 
+// SetBrightness forwards a 0-100% panel brightness to the physical display;
+// also used by auto-dim (dim level, then 0 for off) and by wake-on-input to
+// restore the user's level. No-op in sim mode (writeCommand is).
+func (hm *HardwareManager) SetBrightness(pct int) {
+	if hm.FiraCode != nil && hm.FiraCode.display != nil {
+		hm.FiraCode.display.SetBrightness(pct)
+	}
+}
+
 func (hm *HardwareManager) DrawBox(x, y, width, height int, brightness byte) {
 	if hm.FiraCode != nil && hm.FiraCode.display != nil {
 		hm.FiraCode.display.DrawBox(x, y, width, height, brightness)

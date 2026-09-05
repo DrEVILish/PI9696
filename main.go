@@ -68,6 +68,42 @@ func isSimMode() bool {
 	return os.Getenv("PI9696_SIM") != ""
 }
 
+// OLED display brightness + auto-dim (Round 3 design decision).
+//
+// Brightness is a continuous 0-100% setting applied to the SSD1322's
+// contrast current (see TTFDisplay.SetBrightness), settable from the OLED
+// Settings -> Display submenu and the WebUI settings modal.
+//
+// Auto-dim keeps an idle panel dim instead of blazing at full brightness
+// (an OLED's power draw is pixel-proportional, and this unit powers on
+// continuously): after dimTimeout of no input the panel drops to
+// dimDimBrightnessPct, after dimOffTimeout it goes to 0 (effectively off),
+// and any input (encoder or buttons, including the WebUI equivalents, which
+// flow through the same handlers) wakes it back to the user's brightness.
+// It is a display-saver, not a recording/playback control - it applies
+// regardless of state, per the design decision.
+const (
+	dimTimeout          = 30 * time.Second
+	dimOffTimeout       = 2 * time.Minute
+	dimDimBrightnessPct = 20
+)
+
+// oledBrightnessPct is the user's display brightness (0-100), always the
+// wake-from-dim target and normally the live value too.
+var oledBrightnessPct = 100
+
+// autoDimEnabled toggles the dim-then-off behavior. Default on.
+var autoDimEnabled = true
+
+// lastInputTime is the most recent encoder/button/WebUI input, fed by
+// noteActivity; zero until the app boots so a stale default can't trigger an
+// immediate dim.
+var lastInputTime time.Time
+
+// displayDimState is the current auto-dim stage: 0 = full brightness,
+// 1 = dimmed, 2 = off. Transitions are applied once in applyAutoDimLocked.
+var displayDimState int
+
 // loadPersistedConfig reads ConfigPath and restores the non-destructive
 // settings onto the globals, clamping out-of-range values so a hand-edited
 // config can't push an index past its slice. Called once at startup before
@@ -108,6 +144,12 @@ func loadPersistedConfig() {
 	if c.LogLevelIdx >= 0 && c.LogLevelIdx < len(logLevelNames) {
 		applyLogLevel(LogLevel(c.LogLevelIdx))
 	}
+	if c.OledBrightnessPct != nil {
+		if *c.OledBrightnessPct >= 0 && *c.OledBrightnessPct <= 100 {
+			oledBrightnessPct = *c.OledBrightnessPct
+		}
+	}
+	autoDimEnabled = !c.AutoDimDisabled
 
 	wifiEnabled = c.WifiEnabled
 	wifiSSID = c.WifiSSID
@@ -122,17 +164,19 @@ func loadPersistedConfig() {
 // atomic via a temp file + rename so a power cut mid-write can't truncate it.
 func persistConfig() {
 	cur := PersistedConfig{
-		DeviceName:    deviceName,
-		SampleRateIdx: sampleRateIdx,
-		ChannelCount:  channelCount,
-		TagPresetIdx:  tagPresetIdx,
-		VURangeIdx:    vuRangeIdx,
-		PeakHoldIdx:   peakHoldIdx,
-		TransportMode: transportMode,
-		LogLevelIdx:   int(xlog.GetLevel()),
-		WifiEnabled:   wifiEnabled,
-		WifiSSID:      wifiSSID,
-		WifiPassword:  wifiPassword,
+		DeviceName:        deviceName,
+		SampleRateIdx:     sampleRateIdx,
+		ChannelCount:      channelCount,
+		TagPresetIdx:      tagPresetIdx,
+		VURangeIdx:        vuRangeIdx,
+		PeakHoldIdx:       peakHoldIdx,
+		TransportMode:     transportMode,
+		LogLevelIdx:       int(xlog.GetLevel()),
+		OledBrightnessPct: &oledBrightnessPct,
+		AutoDimDisabled:   !autoDimEnabled,
+		WifiEnabled:       wifiEnabled,
+		WifiSSID:          wifiSSID,
+		WifiPassword:      wifiPassword,
 	}
 	data, err := json.MarshalIndent(&cur, "", "  ")
 	if err != nil {
@@ -158,6 +202,55 @@ func persistConfig() {
 // setting is mutated, so they all funnel through persistConfig.
 func settingChanged() {
 	persistConfig()
+}
+
+// applyAutoDimLocked advances the display's dim/off state to whatever the
+// idle time dictates, applying a brightness transition only when the stage
+// changes (SPI writes on every 100ms render are pointless churn). Must be
+// called under the app mutex (render does). A zero lastInputTime (pre-boot)
+// is treated as "active now" so the panel can't go dark before first render.
+func applyAutoDimLocked(now time.Time) {
+	if lastInputTime.IsZero() {
+		lastInputTime = now
+	}
+	target := 0
+	if autoDimEnabled {
+		idle := now.Sub(lastInputTime)
+		if idle > dimOffTimeout {
+			target = 2
+		} else if idle > dimTimeout {
+			target = 1
+		}
+	}
+	if target == displayDimState {
+		return
+	}
+	displayDimState = target
+	if hwManager == nil {
+		return
+	}
+	switch target {
+	case 2:
+		hwManager.SetBrightness(0)
+	case 1:
+		hwManager.SetBrightness(dimDimBrightnessPct)
+	default:
+		hwManager.SetBrightness(oledBrightnessPct)
+	}
+}
+
+// noteActivity records an input and wakes a dimmed/off display back to the
+// user's brightness. Called from the encoder/button handlers (which hold the
+// app mutex), so no locking here; the WebUI input endpoints route through the
+// same handlers and therefore wake it too.
+func noteActivity() {
+	lastInputTime = time.Now()
+	if displayDimState != 0 {
+		displayDimState = 0
+		if hwManager != nil {
+			hwManager.SetBrightness(oledBrightnessPct)
+		}
+	}
 }
 
 // applyWifiConfig writes the hostapd configuration and starts/stops the
@@ -375,6 +468,7 @@ const (
 	StateWifiQR     // full-screen QR code for joining the WiFi AP
 	StateAudio      // Audio submenu: Sample Rate, Channel Count, Tag
 	StateMetering   // Metering submenu: Meter Range, Peak Hold
+	StateDisplay    // Display submenu: Brightness, Auto Dim, Back
 	StateLogging    // Logging submenu: Error, Warn, Info, Debug, Back
 )
 
@@ -502,7 +596,15 @@ type PersistedConfig struct {
 	VURangeIdx    int    `json:"vuRangeIdx"`
 	PeakHoldIdx   int    `json:"peakHoldIdx"`
 	TransportMode string `json:"transportMode"`
-	LogLevelIdx   int    `json:"logLevelIdx"`
+	// LogLevelIdx persists the current log threshold (0-3 = Error..Debug).
+	LogLevelIdx int `json:"logLevelIdx"`
+	// OledBrightnessPct holds the display brightness (0-100). Pointer so a
+	// config without the field (pre-1.12 units) keeps the 100% default rather
+	// than being indistinguishable from an explicit 0.
+	OledBrightnessPct *int `json:"oledBrightnessPct,omitempty"`
+	// AutoDimDisabled persists the auto-dim Off state; inverted because Go's
+	// zero value (false) is the desired default of "enabled".
+	AutoDimDisabled bool `json:"autoDimDisabled,omitempty"`
 
 	WifiEnabled  bool   `json:"wifiEnabled"`
 	WifiSSID     string `json:"wifiSSID"`
@@ -522,6 +624,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize hardware: %v", err)
 	}
+
+	// Apply the persisted brightness and seed the activity clock so the
+	// auto-dim starts counting from boot (a zero lastInputTime must never
+	// count as "idle for years").
+	hwManager.SetBrightness(oledBrightnessPct)
+	lastInputTime = time.Now()
 
 	remoteToken = generateRemoteToken()
 
@@ -632,6 +740,8 @@ func onEncoderRotate(direction int) {
 	mutex.Lock()
 	defer mutex.Unlock()
 
+	noteActivity()
+
 	switch currentState {
 	case StateIdle:
 		// Rotating from the home screen opens the idle-browse flow: paged
@@ -687,6 +797,18 @@ func onEncoderRotate(direction int) {
 			adjustPeakHold(direction)
 		}
 
+	case StateDisplay:
+		if !editingParameter {
+			navigateMenu(direction)
+			break
+		}
+		switch selectedMenu {
+		case 0: // Brightness
+			adjustOledBrightness(direction)
+		case 1: // Auto Dim
+			adjustAutoDim(direction)
+		}
+
 	case StateLogging:
 		// The Logging submenu (Error/Warn/Info/Debug) is a direct-select
 		// list, not edit-mode rows - clicking a level applies it at once.
@@ -718,6 +840,8 @@ func onEncoderRotate(direction int) {
 func onEncoderClick() {
 	mutex.Lock()
 	defer mutex.Unlock()
+
+	noteActivity()
 
 	switch currentState {
 	case StateIdle:
@@ -754,6 +878,9 @@ func onEncoderClick() {
 	case StateMetering:
 		handleMeteringClick()
 
+	case StateDisplay:
+		handleDisplayClick()
+
 	case StateLogging:
 		handleLoggingClick()
 
@@ -765,6 +892,8 @@ func onEncoderClick() {
 func onEncoderHold() {
 	mutex.Lock()
 	defer mutex.Unlock()
+
+	noteActivity()
 
 	if currentState == StateCopying {
 		isCopying = false
@@ -796,6 +925,8 @@ func exitIdleBrowse() {
 func onButtonPress(buttonType hardware.ButtonType) {
 	mutex.Lock()
 	defer mutex.Unlock()
+
+	noteActivity()
 
 	switch buttonType {
 	case hardware.RecordButton:
@@ -875,16 +1006,41 @@ func adjustRecordTag(direction int) {
 	settingChanged()
 }
 
+// adjustOledBrightness moves the 0-100% display brightness by one step and
+// applies it live (under mutex from onEncoderRotate; rotations change the
+// panel immediately so the operator sees the effect as they adjust).
+func adjustOledBrightness(direction int) {
+	oledBrightnessPct += direction
+	if oledBrightnessPct < 0 {
+		oledBrightnessPct = 0
+	} else if oledBrightnessPct > 100 {
+		oledBrightnessPct = 100
+	}
+	if hwManager != nil {
+		hwManager.SetBrightness(oledBrightnessPct)
+	}
+	settingChanged()
+}
+
+// adjustAutoDim toggles the auto-dim-then-off behavior (a two-option cycle;
+// direction is ignored like other 2-option wraps).
+func adjustAutoDim(_ int) {
+	autoDimEnabled = !autoDimEnabled
+	settingChanged()
+}
+
 func navigateMenu(direction int) {
 	var maxItems int
 
 	switch currentState {
 	case StateSettings:
-		maxItems = 10 // Audio, Metering, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
+		maxItems = 11 // Audio, Metering, Display, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
 	case StateAudio:
 		maxItems = 4 // Sample Rate, Channel Count, Tag, Back
 	case StateMetering:
 		maxItems = 3 // Meter Range, Peak Hold, Back
+	case StateDisplay:
+		maxItems = 3 // Brightness, Auto Dim, Back
 	case StateLogging:
 		maxItems = len(logLevelNames) + 1 // Error, Warn, Info, Debug, Back
 	case StateCopyFiles:
@@ -922,38 +1078,42 @@ func handleSettingsClick() {
 		currentState = StateMetering
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 2: // Logging submenu (Error, Warn, Info, Debug)
+	case 2: // Display submenu (Brightness, Auto Dim)
+		currentState = StateDisplay
+		selectedMenu = 0
+		menuScrollOffset = 0
+	case 3: // Logging submenu (Error, Warn, Info, Debug)
 		currentState = StateLogging
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 3: // Copy Files
+	case 4: // Copy Files
 		if usbMounted {
 			loadFilesToCopy()
 			currentState = StateCopyFiles
 			selectedMenu = 0
 			menuScrollOffset = 0
 		}
-	case 4: // System Options
+	case 5: // System Options
 		currentState = StateSystemOptions
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 5: // Network Info
+	case 6: // Network Info
 		currentState = StateNetworkInfo
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 6: // Remote Access
+	case 7: // Remote Access
 		currentState = StateRemoteInfo
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 7: // Restart Inferno
+	case 8: // Restart Inferno
 		menuMode = InfernoRestartConfirm
 		currentState = StateConfirm
 		confirmOption = ConfirmNo
-	case 8: // WiFi submenu (enable/disable + QR)
+	case 9: // WiFi submenu (enable/disable + QR)
 		currentState = StateWifi
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 9: // Exit
+	case 10: // Exit
 		currentState = StateIdle
 		menuScrollOffset = 0
 	}
@@ -1003,6 +1163,24 @@ func handleLoggingClick() {
 	case 0, 1, 2, 3: // Error, Warn, Info, Debug
 		setLogLevel(LogLevel(selectedMenu))
 	case 4: // Back
+		currentState = StateSettings
+		selectedMenu = 3
+		menuScrollOffset = 0
+	}
+}
+
+// handleDisplayClick drives the Display submenu (StateDisplay): Brightness
+// and Auto Dim are press-to-edit / rotate-to-adjust rows plus Back, the same
+// interaction as the Audio/Metering parameter rows.
+func handleDisplayClick() {
+	if editingParameter {
+		editingParameter = false
+		return
+	}
+	switch selectedMenu {
+	case 0, 1: // Brightness, Auto Dim
+		editingParameter = true
+	case 2: // Back
 		currentState = StateSettings
 		selectedMenu = 2
 		menuScrollOffset = 0
@@ -1066,7 +1244,7 @@ func handleWifiClick() {
 		currentState = StateWifiQR
 	case 2: // Back to settings
 		currentState = StateSettings
-		selectedMenu = 8
+		selectedMenu = 9
 		menuScrollOffset = 0
 	}
 }
@@ -2186,6 +2364,11 @@ func render() {
 	hwManager.LEDs.Record.Set(isRecording)
 	hwManager.LEDs.Status.Set(infernoState == InfernoRunning)
 
+	// Auto-dim/off the panel when nobody has touched it for a while; done
+	// here (100ms render tick, under the app mutex) so the dim stage follows
+	// wall-clock idle with no extra timers.
+	applyAutoDimLocked(time.Now())
+
 	pushWaveformSample()
 
 	hwManager.ClearDisplay()
@@ -2224,6 +2407,8 @@ func render() {
 		renderAudioMenu()
 	case StateMetering:
 		renderMeteringMenu()
+	case StateDisplay:
+		renderDisplayMenu()
 	case StateLogging:
 		renderLoggingMenu()
 	case StateConfirm:
@@ -2641,6 +2826,7 @@ func renderSettingsMenu() {
 	allItems := []hardware.MenuItem{
 		{Label: "Audio →", Value: fmt.Sprintf("WAV %dch", channelCount)},
 		{Label: "Metering →", Value: fmt.Sprintf("%ddB", int(vuRangeOptions[vuRangeIdx]))},
+		{Label: "Display →", Value: fmt.Sprintf("%d%%", oledBrightnessPct)},
 		{Label: "Logging →", Value: logLevelNames[int(xlog.GetLevel())]},
 		{Label: "Copy Files →", Value: ""},
 		{Label: "System Options →", Value: ""},
@@ -3185,6 +3371,80 @@ func renderLoggingMenu() {
 		prefix := "  "
 		if i == visibleSelectedIndex {
 			prefix = "> "
+		}
+		labelText := prefix + item.Label
+		hwManager.DrawText(8, y, labelText)
+
+		if item.Value != "" {
+			valueWidth := hwManager.GetTextWidth(item.Value)
+			hwManager.DrawText(256-valueWidth-32, y, item.Value)
+		}
+		y += fontHeight
+	}
+
+	if totalItems > maxVisibleItems {
+		hwManager.SwitchToContext("details")
+		if menuScrollOffset > 0 {
+			hwManager.DrawText(240, 22, "↑")
+		}
+		if menuScrollOffset+maxVisibleItems < totalItems {
+			hwManager.DrawText(240, 61, "↓")
+		}
+	}
+}
+
+// renderDisplayMenu draws the Display submenu (StateDisplay): Brightness
+// (0-100%) and Auto Dim (On/Off) as press-to-edit rows plus Back - same
+// interaction as the Audio/Metering parameter rows.
+func renderDisplayMenu() {
+	items := []hardware.MenuItem{
+		{Label: "Brightness →", Value: fmt.Sprintf("%d%%", oledBrightnessPct)},
+		{Label: "Auto Dim →", Value: map[bool]string{true: "On", false: "Off"}[autoDimEnabled]},
+		{Label: "← Back", Value: ""},
+	}
+	totalItems := len(items)
+	maxVisibleItems := 4
+
+	if selectedMenu < menuScrollOffset {
+		menuScrollOffset = selectedMenu
+	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
+		menuScrollOffset = selectedMenu - maxVisibleItems + 1
+	}
+	if menuScrollOffset > totalItems-maxVisibleItems {
+		menuScrollOffset = totalItems - maxVisibleItems
+	}
+	if menuScrollOffset < 0 {
+		menuScrollOffset = 0
+	}
+
+	endIdx := menuScrollOffset + maxVisibleItems
+	if endIdx > totalItems {
+		endIdx = totalItems
+	}
+	visibleItems := items[menuScrollOffset:endIdx]
+	visibleSelectedIndex := selectedMenu - menuScrollOffset
+
+	y := 22
+	fontHeight := 13
+
+	for i, item := range visibleItems {
+		if i == visibleSelectedIndex {
+			if err := hwManager.SwitchToContext("selected"); err != nil {
+				return
+			}
+		} else {
+			if err := hwManager.SwitchToContext("menu"); err != nil {
+				return
+			}
+		}
+
+		prefix := "  "
+		if i == visibleSelectedIndex {
+			if editingParameter {
+				prefix = "» "
+			} else {
+				prefix = "> "
+			}
 		}
 		labelText := prefix + item.Label
 		hwManager.DrawText(8, y, labelText)

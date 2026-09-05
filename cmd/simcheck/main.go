@@ -124,12 +124,11 @@ func main() {
 	})
 
 	shot("settings_menu_scrolled", func() {
-		// selectedMenu=9 ("Exit") forces menuScrollOffset=6, showing Remote
-		// Access/Restart Inferno/WiFi/Exit with the up arrow visible - checks
-		// the up arrow at (240,22) doesn't collide with a right-aligned value.
+		// selectedMenu=10 ("Exit") forces menuScrollOffset=7, showing
+		// Restart Inferno / WiFi / Exit with the up arrow visible - checks the
+		// up arrow at (240,22) doesn't collide with a right-aligned value.
 		statusBar()
 		items := []hardware.MenuItem{
-			{Label: "Remote Access →", Value: ""},
 			{Label: "Restart Inferno", Value: "Running"},
 			{Label: "WiFi →", Value: "off"},
 			{Label: "Exit", Value: ""},
@@ -139,7 +138,7 @@ func main() {
 		for i, item := range items {
 			ctx := "menu"
 			prefix := "  "
-			if i == 3 {
+			if i == 2 {
 				ctx = "selected"
 				prefix = "> "
 			}
@@ -163,6 +162,39 @@ func main() {
 		statusBar()
 		items := []hardware.MenuItem{
 			{Label: "Metering →", Value: "60dB"},
+			{Label: "Display →", Value: "70%"},
+			{Label: "Logging →", Value: "Error"},
+			{Label: "Copy Files →", Value: ""},
+		}
+		y := 22
+		fh := 13
+		for i, item := range items {
+			ctx := "menu"
+			prefix := "  "
+			if i == 1 {
+				ctx = "selected"
+				prefix = "> "
+			}
+			hm.SwitchToContext(ctx)
+			hm.DrawText(8, y, prefix+item.Label)
+			if item.Value != "" {
+				w := hm.GetTextWidth(item.Value)
+				hm.DrawText(256-w-32, y, item.Value)
+			}
+			y += fh
+		}
+		hm.SwitchToContext("details")
+		hm.DrawText(240, 22, "↑")
+	})
+
+	shot("settings_menu_display_top", func() {
+		// The realistic scroll window that starts the current (11-row)
+		// Settings list at row 2: Display (value "70%") on top - the row that
+		// must not collide with the up arrow - then Logging, Copy Files,
+		// System Options. Cursor sits on Logging.
+		statusBar()
+		items := []hardware.MenuItem{
+			{Label: "Display →", Value: "70%"},
 			{Label: "Logging →", Value: "Error"},
 			{Label: "Copy Files →", Value: ""},
 			{Label: "System Options →", Value: ""},
@@ -186,6 +218,35 @@ func main() {
 		}
 		hm.SwitchToContext("details")
 		hm.DrawText(240, 22, "↑")
+	})
+
+	shot("display_menu", func() {
+		// Display submenu: Brightness row being edited (» prefix) with its
+		// right-aligned live 62%, Auto Dim below, then Back - the two
+		// press-to-edit rows plus the return row.
+		statusBar()
+		items := []hardware.MenuItem{
+			{Label: "Brightness →", Value: "62%"},
+			{Label: "Auto Dim →", Value: "On"},
+			{Label: "← Back", Value: ""},
+		}
+		y := 22
+		fh := 13
+		for i, item := range items {
+			ctx := "menu"
+			prefix := "  "
+			if i == 0 {
+				ctx = "selected"
+				prefix = "» "
+			}
+			hm.SwitchToContext(ctx)
+			hm.DrawText(8, y, prefix+item.Label)
+			if item.Value != "" {
+				w := hm.GetTextWidth(item.Value)
+				hm.DrawText(256-w-32, y, item.Value)
+			}
+			y += fh
+		}
 	})
 
 	shot("system_options", func() {

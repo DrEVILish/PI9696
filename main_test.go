@@ -945,3 +945,107 @@ func TestLogLevelSubmenuBackTarget(t *testing.T) {
 		t.Fatalf("expected Logging Back to go to Settings, got state=%d", currentState)
 	}
 }
+
+func TestOledBrightnessAdjustAndPersist(t *testing.T) {
+	origB, origAuto := oledBrightnessPct, autoDimEnabled
+	origCfg := os.Getenv("PI9696_CONFIG")
+	t.Cleanup(func() {
+		oledBrightnessPct, autoDimEnabled = origB, origAuto
+		os.Setenv("PI9696_CONFIG", origCfg)
+	})
+
+	// Clamping: going negative stops at 0, and going high stops at 100.
+	oledBrightnessPct = 2
+	adjustOledBrightness(-5)
+	if oledBrightnessPct != 0 {
+		t.Fatalf("expected brightness to clamp at 0, got %d", oledBrightnessPct)
+	}
+	adjustOledBrightness(500)
+	if oledBrightnessPct != 100 {
+		t.Fatalf("expected brightness to clamp at 100, got %d", oledBrightnessPct)
+	}
+
+	// A mid-scale value round-trips through the persisted config.
+	oledBrightnessPct = 37
+	tmpCfg := filepath.Join(t.TempDir(), "config.json")
+	os.Setenv("PI9696_CONFIG", tmpCfg)
+
+	persistConfig()
+	oledBrightnessPct = 0
+	loadPersistedConfig()
+	if oledBrightnessPct != 37 {
+		t.Fatalf("expected persisted brightness 37 to reload, got %d", oledBrightnessPct)
+	}
+}
+
+func TestDisplaySubmenuBackTarget(t *testing.T) {
+	origState, origMenu := currentState, selectedMenu
+	t.Cleanup(func() { currentState, selectedMenu = origState, origMenu })
+
+	mutex.Lock()
+	currentState = StateDisplay
+	selectedMenu = 2 // Back
+	mutex.Unlock()
+	onEncoderClick()
+
+	mutex.Lock()
+	got := currentState == StateSettings
+	mutex.Unlock()
+	if !got {
+		t.Fatalf("expected Display Back to go to Settings, got state=%d", currentState)
+	}
+}
+
+func TestAutoDimStateTransitions(t *testing.T) {
+	origB, origAuto, origLast, origDim := oledBrightnessPct, autoDimEnabled, lastInputTime, displayDimState
+	t.Cleanup(func() {
+		oledBrightnessPct, autoDimEnabled, lastInputTime, displayDimState = origB, origAuto, origLast, origDim
+	})
+
+	mutex.Lock()
+	oledBrightnessPct = 80
+	autoDimEnabled = true
+	displayDimState = -1                             // force an apply on the first call
+	lastInputTime = time.Now().Add(-5 * time.Minute) // long idle
+	mutex.Unlock()
+
+	// Long-idle clocks through dim (20%) then off (0) as time advances.
+	applyAutoDimLocked(time.Now())
+	if displayDimState != 2 || oledBrightnessPct != 80 {
+		t.Fatalf("expected long-idle to go fully off (state 2), got state=%d b=%d", displayDimState, oledBrightnessPct)
+	}
+	// Note: applyAutoDimLocked changes only the display value via the manager,
+	// which is nil in tests, so the user brightness (oledBrightnessPct) is a
+	// separate readiness check above and the actual transitions are asserted
+	// through displayDimState below.
+
+	mutex.Lock()
+	displayDimState = -1
+	lastInputTime = time.Now().Add(-dimTimeout - 10*time.Second) // past dim, before off
+	mutex.Unlock()
+	applyAutoDimLocked(time.Now())
+	if displayDimState != 1 {
+		t.Fatalf("expected dim-threshold idle to dim (state 1), got state=%d", displayDimState)
+	}
+
+	// Just-active: full brightness, and auto-dim disabled stays put too.
+	mutex.Lock()
+	displayDimState = -1
+	lastInputTime = time.Now()
+	autoDimEnabled = false
+	mutex.Unlock()
+	applyAutoDimLocked(time.Now())
+	if displayDimState != 0 {
+		t.Fatalf("expected active/disabled to be full brightness (state 0), got state=%d", displayDimState)
+	}
+
+	// Auto-dim disabled with a stale idle still must not dim or off.
+	mutex.Lock()
+	displayDimState = -1
+	lastInputTime = time.Now().Add(-10 * time.Minute)
+	mutex.Unlock()
+	applyAutoDimLocked(time.Now())
+	if displayDimState != 0 {
+		t.Fatalf("expected auto-dim disabled to ignore idle (state 0), got state=%d", displayDimState)
+	}
+}
