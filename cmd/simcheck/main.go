@@ -92,16 +92,46 @@ func main() {
 		hm.DrawText(240, 61, "↓")
 	})
 
-	shot("settings_menu_scrolled", func() {
-		// selectedMenu=6 ("Exit") forces menuScrollOffset=3, showing System
-		// Options/Network Info/Restart Inferno/Exit with the up arrow
-		// visible - checks the up arrow at (240,22) doesn't collide with
-		// "Restart Inferno"'s right-aligned "Running" value.
+	shot("logging_menu", func() {
+		// Logging submenu picker: active level (Info here) marked with ●,
+		// cursor on Debug, as a direct-select list - mirrors renderLoggingMenu.
 		statusBar()
 		items := []hardware.MenuItem{
-			{Label: "System Options →", Value: ""},
-			{Label: "Network Info →", Value: ""},
+			{Label: "Error", Value: " "},
+			{Label: "Warn", Value: " "},
+			{Label: "Info", Value: "●"},
+			{Label: "Debug", Value: " "},
+		}
+		y := 22
+		fh := 13
+		for i, item := range items {
+			ctx := "menu"
+			prefix := "  "
+			if i == 3 {
+				ctx = "selected"
+				prefix = "> "
+			}
+			hm.SwitchToContext(ctx)
+			hm.DrawText(8, y, prefix+item.Label)
+			if item.Value != "" {
+				w := hm.GetTextWidth(item.Value)
+				hm.DrawText(256-w-16, y, item.Value)
+			}
+			y += fh
+		}
+		hm.SwitchToContext("details")
+		hm.DrawText(240, 61, "↓")
+	})
+
+	shot("settings_menu_scrolled", func() {
+		// selectedMenu=9 ("Exit") forces menuScrollOffset=6, showing Remote
+		// Access/Restart Inferno/WiFi/Exit with the up arrow visible - checks
+		// the up arrow at (240,22) doesn't collide with a right-aligned value.
+		statusBar()
+		items := []hardware.MenuItem{
+			{Label: "Remote Access →", Value: ""},
 			{Label: "Restart Inferno", Value: "Running"},
+			{Label: "WiFi →", Value: "off"},
 			{Label: "Exit", Value: ""},
 		}
 		y := 22
@@ -126,14 +156,14 @@ func main() {
 	})
 
 	shot("settings_menu_offset1", func() {
-		// Audio (which carries a right-aligned "WAV Nch" value) lands as the
+		// Metering (which carries a right-aligned "NdB" value) lands as the
 		// top visible row with the up arrow showing - the exact collision this
 		// scrollable Settings menu can reach, where a value-bearing row ends
 		// up right under the arrow.
 		statusBar()
 		items := []hardware.MenuItem{
-			{Label: "Audio →", Value: "WAV 2ch"},
 			{Label: "Metering →", Value: "60dB"},
+			{Label: "Logging →", Value: "Error"},
 			{Label: "Copy Files →", Value: ""},
 			{Label: "System Options →", Value: ""},
 		}

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"pi9696/hardware"
+	"pi9696/xlog"
 )
 
 // TestMain starts the single infernoWorker every test in this file shares.
@@ -868,5 +869,79 @@ func TestDecayPeakHoldHoldsThenFalls(t *testing.T) {
 	decayPeakHold()
 	if meterChannelPeakHeld[0] >= -6 || meterChannelPeakHeld[0] < -40 {
 		t.Fatalf("expected held peak to have decayed between -40 and -6, got %v", meterChannelPeakHeld[0])
+	}
+}
+
+func TestLogLevelSetAndPersist(t *testing.T) {
+	origLevel, origState, origMenu := xlog.GetLevel(), currentState, selectedMenu
+	t.Cleanup(func() {
+		xlog.SetLevel(origLevel)
+		currentState, selectedMenu = origState, origMenu
+	})
+
+	mutex.Lock()
+	applyLogLevel(LogDebug)
+	mutex.Unlock()
+	if xlog.GetLevel() != LogDebug {
+		t.Fatalf("expected applyLogLevel to set Debug, got %d", xlog.GetLevel())
+	}
+
+	mutex.Lock()
+	currentState = StateLogging
+	selectedMenu = 2 // Info
+	mutex.Unlock()
+
+	onEncoderClick()
+	if xlog.GetLevel() != LogInfo {
+		t.Fatalf("expected click on Info row to set LogInfo, got %d", xlog.GetLevel())
+	}
+
+	mutex.Lock()
+	enteredSettingsBack := currentState == StateLogging
+	mutex.Unlock()
+	if !enteredSettingsBack {
+		t.Fatalf("expected level-selection click to stay on the Logging submenu, got state=%d", currentState)
+	}
+
+	// The Back row returns to Settings without changing the level.
+	mutex.Lock()
+	selectedMenu = 4
+	mutex.Unlock()
+	onEncoderClick()
+	mutex.Lock()
+	backToSettings := currentState == StateSettings && xlog.GetLevel() == LogInfo
+	mutex.Unlock()
+	if !backToSettings {
+		t.Fatalf("expected Back to return to Settings keeping Info, got state=%d level=%d", currentState, xlog.GetLevel())
+	}
+
+	// A raised level round-trips through the persisted config.
+	origCfg := os.Getenv("PI9696_CONFIG")
+	tmpCfg := filepath.Join(t.TempDir(), "config.json")
+	os.Setenv("PI9696_CONFIG", tmpCfg)
+	t.Cleanup(func() { os.Setenv("PI9696_CONFIG", origCfg) })
+
+	persistConfig()
+	loadPersistedConfig()
+	if xlog.GetLevel() != LogInfo {
+		t.Fatalf("expected persisted log level Info to reload, got %d", xlog.GetLevel())
+	}
+}
+
+func TestLogLevelSubmenuBackTarget(t *testing.T) {
+	origState, origMenu := currentState, selectedMenu
+	t.Cleanup(func() { currentState, selectedMenu = origState, origMenu })
+
+	mutex.Lock()
+	currentState = StateLogging
+	selectedMenu = 4 // Back
+	mutex.Unlock()
+	onEncoderClick()
+
+	mutex.Lock()
+	got := currentState == StateSettings
+	mutex.Unlock()
+	if !got {
+		t.Fatalf("expected Logging Back to go to Settings, got state=%d", currentState)
 	}
 }

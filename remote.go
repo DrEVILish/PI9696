@@ -25,6 +25,7 @@ import (
 	"golang.org/x/net/websocket"
 
 	"pi9696/hardware"
+	"pi9696/xlog"
 )
 
 // remoteToken gates every route except /login. It's generated fresh at each
@@ -349,6 +350,7 @@ type dashboardData struct {
 	ChannelCountFragment template.HTML
 	TagFragment          template.HTML
 	TransportFragment    template.HTML
+	LogLevelFragment     template.HTML
 	WifiEnabled          bool
 	WifiSSID             string
 	WifiPassword         string
@@ -434,6 +436,17 @@ var vuRangeFragmentTmpl = template.Must(template.New("vurange").Parse(`<div id="
 <label>Meter Range</label>
 <select name="idx" onchange="this.form.requestSubmit()">
 {{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}dBFS</option>{{end}}
+</select>
+</form>
+</div>
+</div>`))
+
+var logLevelFragmentTmpl = template.Must(template.New("loglevel").Parse(`<div id="loglevel" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/log-level" hx-target="#loglevel" hx-swap="outerHTML">
+<label>Log Level</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
 </select>
 </form>
 </div>
@@ -562,6 +575,21 @@ func handleAPISettingsVURange(w http.ResponseWriter, r *http.Request) {
 		mutex.Unlock()
 	}
 	vuRangeFragmentTmpl.Execute(w, vuRangeOptionsView())
+}
+
+func logLevelOptionsView() optionsView {
+	return optionsView{Options: logLevelNames, Idx: int(xlog.GetLevel())}
+}
+
+func handleAPISettingsLogLevel(w http.ResponseWriter, r *http.Request) {
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+		mutex.Lock()
+		if idx >= 0 && idx < len(logLevelNames) {
+			setLogLevel(LogLevel(idx))
+		}
+		mutex.Unlock()
+	}
+	logLevelFragmentTmpl.Execute(w, logLevelOptionsView())
 }
 
 func handleAPISettingsPeakHold(w http.ResponseWriter, r *http.Request) {
@@ -1165,6 +1193,11 @@ body.meters-collapsed{padding-bottom:4em}
       </section>
 
       <section class="settings-group">
+        <h3 class="settings-group-title">Logging</h3>
+        {{.LogLevelFragment}}
+      </section>
+
+      <section class="settings-group">
         <h3 class="settings-group-title">Network</h3>
         <div id="wifi-settings">
           {{.WifiQRFragment}}
@@ -1560,13 +1593,14 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	transportIcon := transportMode != "text"
 	mutex.Unlock()
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, transportBuf, qrBuf bytes.Buffer
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, transportBuf, logLevelBuf, qrBuf bytes.Buffer
 	vuRangeFragmentTmpl.Execute(&vuBuf, vuRangeOptionsView())
 	peakHoldFragmentTmpl.Execute(&holdBuf, peakHoldOptionsView())
 	sampleRateFragmentTmpl.Execute(&srBuf, sampleRateOptionsView())
 	channelCountFragmentTmpl.Execute(&chBuf, currentChannelCountView())
 	tagFragmentTmpl.Execute(&tagBuf, tagOptionsView())
 	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
+	logLevelFragmentTmpl.Execute(&logLevelBuf, logLevelOptionsView())
 
 	// Generate WiFi QR code as base64 PNG for the settings modal
 	var qrBase64 string
@@ -1587,6 +1621,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		ChannelCountFragment: template.HTML(chBuf.String()),
 		TagFragment:          template.HTML(tagBuf.String()),
 		TransportFragment:    template.HTML(transportBuf.String()),
+		LogLevelFragment:     template.HTML(logLevelBuf.String()),
 		WifiEnabled:          wifiEn,
 		WifiSSID:             wifiS,
 		WifiPassword:         wifiP,
@@ -1622,7 +1657,7 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 		deviceName = name
 		persistConfig()
 		mutex.Unlock()
-		log.Printf("Device name changed to %q via remote", name)
+		logInfof("Device name changed to %q via remote", name)
 	}
 
 	mutex.Lock()
@@ -1652,7 +1687,7 @@ func handleDisplayPNG(w http.ResponseWriter, r *http.Request) {
 	err := hwManager.EncodePNG(&buf)
 	mutex.Unlock()
 	if err != nil {
-		log.Printf("Failed to encode display PNG: %v", err)
+		logErrorf("Failed to encode display PNG: %v", err)
 		http.Error(w, "failed to encode display", http.StatusInternalServerError)
 		return
 	}
@@ -2098,6 +2133,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/device-name", requireAuth(handleAPIDeviceName))
 	mux.HandleFunc("POST /api/settings/vu-range", requireAuth(handleAPISettingsVURange))
 	mux.HandleFunc("POST /api/settings/peak-hold", requireAuth(handleAPISettingsPeakHold))
+	mux.HandleFunc("POST /api/settings/log-level", requireAuth(handleAPISettingsLogLevel))
 	mux.HandleFunc("POST /api/settings/sample-rate", requireAuth(handleAPISettingsSampleRate))
 	mux.HandleFunc("POST /api/settings/channels", requireAuth(handleAPISettingsChannels))
 	mux.HandleFunc("POST /api/settings/tag", requireAuth(handleAPISettingsTag))
@@ -2149,11 +2185,11 @@ func startRemoteServer(ip string) (*http.Server, error) {
 	srv := &http.Server{Handler: newRemoteMux()}
 	go func() {
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
-			log.Printf("Remote control server error: %v", err)
+			logErrorf("Remote control server error: %v", err)
 		}
 	}()
 
-	log.Printf("Remote control server listening on http://%s", listener.Addr())
+	logInfof("Remote control server listening on http://%s", listener.Addr())
 	return srv, nil
 }
 
@@ -2178,14 +2214,14 @@ func remoteControlLoop() {
 				currentServer.Shutdown(ctx)
 				cancel()
 				currentServer = nil
-				log.Printf("Remote control server stopped")
+				logInfof("Remote control server stopped")
 			}
 
 			currentIP = ip
 			if ip != "" {
 				srv, err := startRemoteServer(ip)
 				if err != nil {
-					log.Printf("Failed to start remote control server on %s: %v", ip, err)
+					logErrorf("Failed to start remote control server on %s: %v", ip, err)
 					currentIP = "" // retry on the next tick
 				} else {
 					currentServer = srv

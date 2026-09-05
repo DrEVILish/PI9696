@@ -166,15 +166,20 @@ sudo journalctl -u pi9696 -f   # view logs
 
 ### Menu System
 
-1. **Sample Rate**: 44.1kHz, 48kHz, 96kHz, 192kHz (auto-restarts Inferno server)
-2. **Channel Count**: Adjust from 1 to 128 channels (auto-restarts Inferno server)
-3. **Tag**: Attach a preset tag (Show, Rehearsal, Soundcheck, Interview, Backup, or None) to the next recording's metadata
+1. **Audio**: Submenu with Sample Rate (44.1/48/96/192kHz, auto-restarts Inferno server),
+   Channel Count (1-128, auto-restarts Inferno server), and Tag (attach a preset metadata
+   tag to the next recording; WAV is the sole fixed output format)
+2. **Metering**: Submenu with Meter Range and Peak Hold
+3. **Logging**: Submenu selecting the log verbosity - **Error** (default, quietest),
+   **Warn**, **Info**, or **Debug** (most verbose). Applied immediately and persisted; the
+   active level is also settable from the WebUI settings modal.
 4. **Copy Files**: Transfer recordings to USB drive
 5. **System Options**: System management submenu
 6. **Network Info**: Display network connection details
 7. **Remote Access**: Shows the URL and token for the web remote control
 8. **Restart Inferno**: Manually restart Inferno Audio over IP server
-9. **Exit**: Return to main display
+9. **WiFi**: Access Point submenu (enable/disable the AP, show the join QR code)
+10. **Exit**: Return to main display
 
 ### System Options Submenu
 1. **Delete All**: Remove all recordings with confirmation
