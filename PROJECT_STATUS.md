@@ -280,11 +280,11 @@ PI9696_SIM=1 ./pi9696
 - **Storage Expansion** - RAID or larger storage options
 
 #### Remote Control
-- **Web UI** - `remote.go` runs a `net/http` server bound to eth0's current IP only (never
-  `0.0.0.0`), auto-started/stopped by `remoteControlLoop` as eth0 comes up/down, mirroring
+- **Web UI** - `remote.go` runs a `net/http` server bound to `0.0.0.0` (every up interface), auto-
+  started/stopped by `remoteControlLoop` as any interface gains/loses an address, mirroring
   `networkMonitorLoop`'s polling approach but kept off the app mutex (binding/shutting down a
-  listener isn't instant). **Round 3 supersedes**: serve on any IP-based interface (eth0/wlan0),
-  no interface limitation
+  listener isn't instant). This serves the control surface on any IP-based interface (eth0/wlan0),
+  no interface limitation (Round 3 decision). Access is gated by token + session auth.
 - **OLED mirror** - `GET /api/display.png` encodes `TTFDisplay.bufferToImage()` (the same packed
   framebuffer real hardware receives, not a separate HTML/CSS reimplementation of the layout) to
   PNG; the dashboard polls it via a vanilla-JS interval (not htmx - refreshing an `<img>` isn't a
@@ -504,7 +504,8 @@ Third design-review pass: fills in the specifics needed to finish the build.
   monochrome OLED stays grayscale (differentiated via shading/segments).
 - **OLED brightness** - **Continuous slider** (0-100%).
 - **Auto-dim** - **Dim then off**: dim after N minutes of inactivity, then full screen-off;
-  any input wakes it.
+  any input wakes it. Applies to idle use only - an active recording/playback session keeps
+  the panel at full brightness.
 - **Seek/scrub** - **Click = play/pause**, **rotate while paused = seek**, **hold = exit**;
   position is shown as a relative offset on the 256x64 screen.
 
@@ -516,6 +517,14 @@ Third design-review pass: fills in the specifics needed to finish the build.
   unrelated edits.
 
 ### Feature History
+
+- **Fixes (2026-09-06).** Three correctness/design fixes: (1) the WebUI recordings list
+  showed durations 1000× too long because `recordingDuration` was fed the kHz figure instead
+  of Hz - now converted at the call site and pinned by a regression test; (2) auto-dim no
+  longer blanks the display during an active recording/playback session (it applies to idle
+  use only, since the OLED is the operator's live status surface there); (3) the remote
+  control server now binds `0.0.0.0` (every interface) instead of eth0's IP only, so the
+  WebUI is reachable over any interface (eth0/wlan0) per the Round 3 decision.
 
 - **1.13.0 - Recording filename prefix.** Recordings are now named
   `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` (default prefix `recording`, unchanged for
