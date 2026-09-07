@@ -349,6 +349,7 @@ type dashboardData struct {
 	SampleRateFragment   template.HTML
 	ChannelCountFragment template.HTML
 	TagFragment          template.HTML
+	PrefixFragment       template.HTML
 	TransportFragment    template.HTML
 	LogLevelFragment     template.HTML
 	BrightnessFragment   template.HTML
@@ -576,6 +577,48 @@ var tagFragmentTmpl = template.Must(template.New("tag").Parse(`<div id="tag" cla
 </form>
 </div>
 </div>`))
+
+// prefixView carries the current filename prefix for the free-text Prefix
+// field. A blank value renders an empty box with the default as placeholder;
+// submitting clears a custom prefix back to the default.
+type prefixView struct {
+	Prefix string
+}
+
+// filePrefixFragmentTmpl is the WebUI free-text Prefix field (the OLED gets
+// the preset-list picker instead, per the Round 3 design decision: WebUI
+// text field + OLED presets). It posts the literal prefix, validated to a
+// filename-safe charset server-side.
+var filePrefixFragmentTmpl = template.Must(template.New("fileprefix").Parse(`<div id="fileprefix" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/prefix" hx-target="#fileprefix" hx-swap="outerHTML">
+<label for="filePrefixInput">Prefix</label>
+<input id="filePrefixInput" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
+<span class="hint">file_YYYYMMDD…</span>
+<button type="submit" class="btn-primary">Save</button>
+</form>
+</div>
+</div>`))
+
+func filePrefixView() prefixView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return prefixView{Prefix: filePrefix}
+}
+
+func handleAPISettingsPrefix(w http.ResponseWriter, r *http.Request) {
+	prefix := strings.TrimSpace(r.FormValue("prefix"))
+	if prefix == "" || isValidFilePrefix(prefix) {
+		mutex.Lock()
+		filePrefix = prefix
+		settingChanged()
+		mutex.Unlock()
+		logInfof("recording prefix set to %q via remote", effectiveFilePrefix())
+	} else {
+		logWarnf("rejected invalid recording prefix %q via remote", prefix)
+	}
+	filePrefixFragmentTmpl.Execute(w, filePrefixView())
+}
 
 // transportFragmentTmpl switches the main transport buttons between icon
 // SVG glyphs and text labels (see the ICON/TEXT setting). A full fragment,
@@ -1276,6 +1319,7 @@ body.meters-collapsed{padding-bottom:4em}
 
       <section class="settings-group">
         <h3 class="settings-group-title">Metadata</h3>
+        {{.PrefixFragment}}
         {{.TagFragment}}
       </section>
 
@@ -1691,12 +1735,13 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	transportIcon := transportMode != "text"
 	mutex.Unlock()
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, qrBuf bytes.Buffer
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, qrBuf bytes.Buffer
 	vuRangeFragmentTmpl.Execute(&vuBuf, vuRangeOptionsView())
 	peakHoldFragmentTmpl.Execute(&holdBuf, peakHoldOptionsView())
 	sampleRateFragmentTmpl.Execute(&srBuf, sampleRateOptionsView())
 	channelCountFragmentTmpl.Execute(&chBuf, currentChannelCountView())
 	tagFragmentTmpl.Execute(&tagBuf, tagOptionsView())
+	filePrefixFragmentTmpl.Execute(&prefixBuf, filePrefixView())
 	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
 	logLevelFragmentTmpl.Execute(&logLevelBuf, logLevelOptionsView())
 	brightnessFragmentTmpl.Execute(&brightnessBuf, brightnessViewData())
@@ -1720,6 +1765,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		SampleRateFragment:   template.HTML(srBuf.String()),
 		ChannelCountFragment: template.HTML(chBuf.String()),
 		TagFragment:          template.HTML(tagBuf.String()),
+		PrefixFragment:       template.HTML(prefixBuf.String()),
 		TransportFragment:    template.HTML(transportBuf.String()),
 		LogLevelFragment:     template.HTML(logLevelBuf.String()),
 		BrightnessFragment:   template.HTML(brightnessBuf.String()),
@@ -2145,10 +2191,13 @@ type recordingRow struct {
 }
 
 // recFilenameRe matches the app's own recording filenames, e.g.
-// "recording_20240131_143022_ch2_48kHz.wav" - see startRecording in
-// main.go. Everything but duration/end time is recoverable straight from
-// the name; duration needs the file's actual content (see recordingDuration).
-var recFilenameRe = regexp.MustCompile(`^recording_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz\.(\w+)$`)
+// "recording_20240131_143022_ch2_48kHz.wav" or "Live_20240131_143022_ch2_48kHz.wav"
+// (prefix now precedes the fixed timestamp; see startRecording in main.go).
+// The prefix is validated to contain no underscore, so everything up to the
+// first _ before the timestamp is the prefix and the rest is unambiguous.
+// Everything but duration/end time is recoverable straight from the name;
+// duration needs the file's actual content (see recordingDuration).
+var recFilenameRe = regexp.MustCompile(`^([A-Za-z0-9 -]+)_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz\.(\w+)$`)
 
 func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	info, err := os.Stat(path)
@@ -2173,13 +2222,13 @@ func buildRecordingRow(path string) recordingRow {
 	if m == nil {
 		return row
 	}
-	start, err := time.ParseInLocation("20060102 150405", m[1]+" "+m[2], time.Local)
+	start, err := time.ParseInLocation("20060102 150405", m[2]+" "+m[3], time.Local)
 	if err != nil {
 		return row
 	}
-	channels, _ := strconv.Atoi(m[3])
-	sampleRate, _ := strconv.Atoi(m[4])
-	format := strings.ToUpper(m[5])
+	channels, _ := strconv.Atoi(m[4])
+	sampleRate, _ := strconv.Atoi(m[5])
+	format := strings.ToUpper(m[6])
 
 	row.Channels = channels
 	row.SampleRate = sampleRate
@@ -2241,6 +2290,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/sample-rate", requireAuth(handleAPISettingsSampleRate))
 	mux.HandleFunc("POST /api/settings/channels", requireAuth(handleAPISettingsChannels))
 	mux.HandleFunc("POST /api/settings/tag", requireAuth(handleAPISettingsTag))
+	mux.HandleFunc("POST /api/settings/prefix", requireAuth(handleAPISettingsPrefix))
 	mux.HandleFunc("POST /api/settings/transport-mode", requireAuth(handleAPISettingsTransportMode))
 	mux.HandleFunc("POST /api/settings/wifi", requireAuth(handleAPISettingsWiFi))
 	mux.HandleFunc("POST /api/record/start", requireAuth(handleAPIRecordStart))

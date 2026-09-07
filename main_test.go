@@ -1049,3 +1049,102 @@ func TestAutoDimStateTransitions(t *testing.T) {
 		t.Fatalf("expected auto-dim disabled to ignore idle (state 0), got state=%d", displayDimState)
 	}
 }
+
+func TestIsValidFilePrefix(t *testing.T) {
+	valid := []string{"Live", "My Show", "ABC-1", "a", "recording"}
+	for _, s := range valid {
+		if !isValidFilePrefix(s) {
+			t.Errorf("expected %q to be a valid prefix", s)
+		}
+	}
+	invalid := []string{"", "has_underscore", "toolong01234567890123456789012345", "bad/char", "spaces ", " leading"}
+	for _, s := range invalid {
+		if isValidFilePrefix(s) {
+			t.Errorf("expected %q to be rejected", s)
+		}
+	}
+}
+
+func TestAdjustRecordPrefixCycles(t *testing.T) {
+	orig := filePrefix
+	t.Cleanup(func() { filePrefix = orig })
+
+	// Empty -> step up -> first non-empty preset.
+	filePrefix = ""
+	adjustRecordPrefix(1)
+	if filePrefix != "Live" {
+		t.Fatalf("expected first preset after stepping up from default, got %q", filePrefix)
+	}
+
+	// Stepping up again moves to the next preset.
+	adjustRecordPrefix(1)
+	if filePrefix != "Rehearsal" {
+		t.Fatalf("expected Rehearsal after another step, got %q", filePrefix)
+	}
+
+	// Stepping down wraps back.
+	adjustRecordPrefix(-1)
+	if filePrefix != "Live" {
+		t.Fatalf("expected wrap back to Live, got %q", filePrefix)
+	}
+}
+
+func TestEffectiveFilePrefix(t *testing.T) {
+	orig := filePrefix
+	t.Cleanup(func() { filePrefix = orig })
+
+	filePrefix = ""
+	if got := effectiveFilePrefix(); got != defaultFilePrefix {
+		t.Fatalf("expected empty prefix to use default %q, got %q", defaultFilePrefix, got)
+	}
+	filePrefix = "StudioA"
+	if got := effectiveFilePrefix(); got != "StudioA" {
+		t.Fatalf("expected custom prefix, got %q", got)
+	}
+}
+
+func TestFilePrefixPersists(t *testing.T) {
+	origPrefix := filePrefix
+	origCfg := os.Getenv("PI9696_CONFIG")
+	t.Cleanup(func() { filePrefix = origPrefix; os.Setenv("PI9696_CONFIG", origCfg) })
+
+	tmpCfg := filepath.Join(t.TempDir(), "config.json")
+	os.Setenv("PI9696_CONFIG", tmpCfg)
+
+	filePrefix = "VenueB"
+	persistConfig()
+	filePrefix = ""
+	loadPersistedConfig()
+	if filePrefix != "VenueB" {
+		t.Fatalf("expected persisted prefix VenueB to reload, got %q", filePrefix)
+	}
+}
+
+func TestRecordingFilenameMatchesRegexWithPrefix(t *testing.T) {
+	// The name parser must read a recording back whether it used the default
+	// prefix or a custom one.
+	cases := []struct {
+		name       string
+		wantCh     int
+		wantRate   int
+		wantFormat string
+	}{
+		{"recording_20240131_143022_ch2_48kHz.wav", 2, 48, "WAV"},
+		{"Live_20240131_143022_ch8_96kHz.wav", 8, 96, "WAV"},
+		{"My Show_20240131_143022_ch1_192kHz.wav", 1, 192, "WAV"},
+	}
+	for _, c := range cases {
+		row := buildRecordingRow(c.name)
+		if row.Channels != c.wantCh || row.SampleRate != c.wantRate || row.Format != c.wantFormat {
+			t.Errorf("buildRecordingRow(%q) got ch=%d rate=%d fmt=%s, want ch=%d rate=%d fmt=%s",
+				c.name, row.Channels, row.SampleRate, row.Format, c.wantCh, c.wantRate, c.wantFormat)
+		}
+	}
+
+	// A non-matching file (e.g. from a third-party recorder) must not crash
+	// and should produce a bare row.
+	row := buildRecordingRow("other.wav")
+	if row.Name != "other.wav" || row.Format != "" || row.Channels != 0 {
+		t.Errorf("expected a bare row for non-matching name, got %+v", row)
+	}
+}

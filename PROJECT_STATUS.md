@@ -517,6 +517,16 @@ Third design-review pass: fills in the specifics needed to finish the build.
 
 ### Feature History
 
+- **1.13.0 - Recording filename prefix.** Recordings are now named
+  `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` (default prefix `recording`, unchanged for
+  existing units) via a new Audio → Prefix row on the OLED (a preset list, like the Tag
+  presets) and a free-text Prefix field in the WebUI settings modal (`POST
+  /api/settings/prefix`). The prefix is validated to a filename-safe charset (letters,
+  digits, spaces, hyphens; no underscores so the WebUI can still parse its own filenames),
+  persisted in the config (`filePrefix`, "" meaning default). The WebUI recordings parser
+  and `latestRecording` (now sorts by mtime) were updated so custom-prefixed files still
+  list and play back correctly.
+
 - **1.12.0 - OLED brightness + auto-dim.** The display's brightness is now a continuous
   0-100% setting (SSD1322 contrast current, command 0xC1) via a new Settings → Display
   submenu (Brightness press-to-edit row + Auto Dim toggle) and a Brightness group in the
@@ -589,7 +599,7 @@ Third design-review pass: fills in the specifics needed to finish the build.
 
 The PI9696 audio recorder is complete and ready for hardware assembly and deployment. All software components are implemented, tested (in simulation), and documented. The system provides a professional audio recording solution suitable for studio or live applications.
 
-**Last Updated:** 2026-09-05
-**Version:** 1.12.0 - OLED brightness (continuous 0-100% via Settings → Display and the
-WebUI slider) + auto-dim (dim after 30s, off after 2 min, wake on any input, persisted).
+**Last Updated:** 2026-09-06
+**Version:** 1.13.0 - Recording filename prefix (default `recording`, preset list on OLED
++ free-text WebUI field, validated and persisted).
 **Maintainer:** Development Team
