@@ -1093,8 +1093,8 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    height:auto keeps width -> height from the aspect-ratio, never fighting it. */
 .r2r{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
 .r2r .plate{fill:url(#deckBg)}
-.r2r .plate-bezel{fill:none;stroke:var(--border);stroke-width:2}
-.r2r .plate-screw{fill:#0a1628;stroke:var(--border);stroke-width:1}
+.r2r .plate-bezel{fill:none;stroke:rgba(0,217,255,0.28);stroke-width:1.5}
+.r2r .plate-screw{fill:#0d1c31;stroke:rgba(0,217,255,0.35);stroke-width:1}
 .r2r .deck-grid{fill:none;stroke:rgba(15,58,92,0.55);stroke-width:1}
 .r2r .deck-corner{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.45}
 /* Reels: a near-black engineering-grade flange disc (gradient so the face
@@ -1102,14 +1102,14 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    lights up as the reel spins, faint tape windings and a bright hub. Only
    the inner spindle group (.reel-spin) rotates so the winding looks like
    it's turning while the plate and take-off point stay put. */
-.r2r .reel-disc{fill:#0c1e33;stroke:var(--border);stroke-width:2}
-.r2r .reel-ring{fill:none;stroke:#143a5c;stroke-width:1}
+.r2r .reel-disc{fill:#112842;stroke:#1d5c8f;stroke-width:2}
+.r2r .reel-ring{fill:none;stroke:#1d5c8f;stroke-width:1.5}
 .r2r .reel-g.spinning .reel-ring{stroke:rgba(0,217,255,0.5);filter:drop-shadow(0 0 4px rgba(0,217,255,0.6))}
-.r2r .reel-wind{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.22}
+.r2r .reel-wind{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.35}
 .r2r .reel-hub{fill:#11304a;stroke:var(--glow);stroke-width:1.5;opacity:0.85}
 .r2r .reel-g.spinning .reel-hub{fill:var(--glow);filter:drop-shadow(0 0 5px rgba(0,217,255,0.6))}
-.r2r .reel-center{fill:#051020}
-.r2r .reel-spoke{fill:#10294a;stroke:rgba(0,217,255,0.4);stroke-width:1.2}
+.r2r .reel-center{fill:#071729}
+.r2r .reel-spoke{fill:#16345c;stroke:rgba(0,217,255,0.5);stroke-width:1.2}
 .r2r .reel-g.spinning .reel-spoke{stroke:rgba(0,217,255,0.75)}
 .r2r .reel-spin{transform-box:fill-box;transform-origin:center}
 .r2r .reel-g.spinning .reel-spin{animation:spin 2.2s linear infinite}
@@ -1120,8 +1120,8 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    tape depth; one stroked path carries the travelling pulse (dash animation)
    from supply reel, over the head, to the take-up reel exactly like real
    tape. */
-.r2r .tape-shadow{fill:none;stroke:#062033;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.6}
-.r2r .tape{fill:none;stroke:#0d3352;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;opacity:0.6}
+.r2r .tape-shadow{fill:none;stroke:#04121f;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.9}
+.r2r .tape{fill:none;stroke:#14507e;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.8}
 .r2r .tape.active{stroke:var(--glow);stroke-width:3;opacity:0.85;stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite;filter:drop-shadow(0 0 5px rgba(0,217,255,0.45))}
 @keyframes tapeflow{to{stroke-dashoffset:-36}}
 /* Guide idlers: dark spindle wells with a tiny lit bore so the tape path
@@ -1136,10 +1136,11 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    (.r2r.rec). */
 .r2r .head-plate{fill:url(#headFace);stroke:var(--border);stroke-width:1.5}
 .r2r .head-edge{fill:none;stroke:rgba(0,217,255,0.25);stroke-width:1}
-.r2r .head-gap{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;opacity:0.3}
+.r2r .head-gap{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;opacity:0.4}
 .r2r.run .head-gap{opacity:0.75}
 .r2r.rec .head-gap{stroke:var(--rec);opacity:0.95;filter:drop-shadow(0 0 5px rgba(255,51,85,0.8))}
-.r2r .head-window{fill:#02060d;stroke:var(--border);stroke-width:1.5}
+.r2r .head-window{fill:#050d1a;stroke:#16456e;stroke-width:1.5}
+.r2r .head-win-grid{fill:none;stroke:rgba(0,217,255,0.07);stroke-width:1}
 /* Bottom HUD band: a thin status rail with system lamps and micro labels,
    matching the larger panel HUD motif (corner brackets + glow). */
 .r2r .hud-band{fill:none;stroke:var(--border);stroke-width:1}
@@ -1153,9 +1154,9 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    reads as a proper 7-segment counter even for unlit digits. The whole display
    is skewed to the right for an italic, forward-leaning readout. */
 #seg7{font-style:italic}
-#seg7 .s7{stroke:rgba(0,180,255,0.10);stroke-width:2.5;stroke-linecap:round}
+#seg7 .s7{stroke:rgba(0,180,255,0.16);stroke-width:2.5;stroke-linecap:round}
 #seg7 .s7.on{stroke:var(--glow);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
-#seg7 .s7-dot{fill:rgba(0,180,255,0.10)}
+#seg7 .s7-dot{fill:rgba(0,180,255,0.16)}
 #seg7 .s7-dot.on{fill:var(--glow);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
 
 /* Pinned meter footer: always visible at the bottom of the viewport so the
@@ -1268,9 +1269,9 @@ body.meters-collapsed{padding-bottom:4em}
         <desc id="transportDesc">Two tape reels connected by an angled tape path and a read/write head time display.</desc>
         <defs>
           <linearGradient id="deckBg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#10233b"/>
-            <stop offset="55%" stop-color="#0a1628"/>
-            <stop offset="100%" stop-color="#081120"/>
+            <stop offset="0%" stop-color="#132947"/>
+            <stop offset="55%" stop-color="#0d1c31"/>
+            <stop offset="100%" stop-color="#0a1526"/>
           </linearGradient>
           <linearGradient id="headFace" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#142f4d"/>
@@ -1339,8 +1340,12 @@ body.meters-collapsed{padding-bottom:4em}
           <path class="head-edge" d="M284 198 V246 M536 198 V246"/>
           <path class="head-gap" d="M402 194 L418 194"/>
           <rect class="head-window" x="300" y="198" width="220" height="48" rx="3"/>
+          <path class="head-win-grid" d="M304 210 H516 M304 222 H516 M304 234 H516 M304 246 H516 M324 198 V246 M348 198 V246 M372 198 V246 M396 198 V246 M420 198 V246 M444 198 V246 M468 198 V246 M492 198 V246"/>
           <g id="seg7" transform="translate(312,202) skewX(-10) scale(2.12)"></g>
         </g>
+
+        <text class="hud-text" x="146" y="30">SUPPLY</text>
+        <text class="hud-text" x="614" y="30">TAKE-UP</text>
 
         <g class="hud">
           <path class="hud-band" d="M40 251 H780"/>

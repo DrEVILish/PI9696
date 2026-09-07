@@ -550,6 +550,17 @@ Third design-review pass: fills in the specifics needed to finish the build.
   brightens only while tape is moving (new deck `run` class from `applyMeter`). Guide
   bores, head edge, and the 7-segment glow were restrained.
 
+- **UI, pass 2 (2026-09-07).** Contrast pass on the transport deck after seeing it rendered:
+  the previous pass left it reading as a murky void - the plate sat darker than its panel,
+  the reels were faint rings barely darker than the background, the head window was a pure
+  black hole, and the tape was a hairline. The plate is lifted above the panel with a thin
+  cyan bezel, the reels are now solid objects (lighter disc, stronger edges, windings at
+  0.35, spokes that contrast), the tape path is a visible line at rest (its under-shadow
+  renders), and the head window carries a faint internal scanline grid so the "off" display
+  reads as a display. SUPPLY/TAKE-UP micro-labels and slightly more visible seg7 ghost
+  segments add the brief's fine telemetry detail. Verified by rendering the deck (idle +
+  running states) from the served markup with librsvg before shipping.
+
 - **Fixes (2026-09-07).** Stopping playback from the Paused state hung the transport:
   `pausePlayback` freezes ffmpeg with SIGSTOP, and a stopped process defers SIGTERM until it's
   continued, so `stopPlayback`'s lone SIGTERM sat pending forever — the UI stayed stuck in
