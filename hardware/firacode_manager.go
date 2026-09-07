@@ -485,11 +485,6 @@ type MenuItem struct {
 	Value string
 }
 
-// GetDisplay returns the underlying TTF display for direct access
-func (fcm *FiraCodeManager) GetDisplay() *TTFDisplay {
-	return fcm.display
-}
-
 // Close releases resources used by the FiraCode manager
 func (fcm *FiraCodeManager) Close() error {
 	for _, face := range fcm.fontFaces {

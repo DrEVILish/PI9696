@@ -208,13 +208,6 @@ func (hm *HardwareManager) SwitchToContext(context string) error {
 
 // Network utility methods
 
-func (hm *HardwareManager) GetNetworkInfo() (*NetworkInfo, error) {
-	if hm.Network != nil {
-		return hm.Network.GetNetworkInfo()
-	}
-	return nil, fmt.Errorf("network detector not initialized")
-}
-
 func (hm *HardwareManager) GetNetworkStatus() (bool, string) {
 	if hm.Network != nil {
 		return hm.Network.GetNetworkStatus()

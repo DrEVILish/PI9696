@@ -2,6 +2,7 @@ package hardware
 
 import (
 	"bufio"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"os"
@@ -172,7 +173,7 @@ func (nd *NetworkDetector) getGateway() string {
 			// Gateway is in field 2, convert from hex
 			gatewayHex := fields[2]
 			if len(gatewayHex) == 8 {
-				gateway := nd.hexToIP(gatewayHex)
+				gateway := hexToIP(gatewayHex)
 				if gateway != "" {
 					return gateway
 				}
@@ -182,21 +183,15 @@ func (nd *NetworkDetector) getGateway() string {
 	return ""
 }
 
-// hexToIP converts hex string to IP address
-func (nd *NetworkDetector) hexToIP(hexStr string) string {
-	if len(hexStr) != 8 {
+// hexToIP converts the little-endian hex gateway field from /proc/net/route
+// into dotted-quad form.
+func hexToIP(hexStr string) string {
+	raw, err := hex.DecodeString(hexStr)
+	if err != nil || len(raw) != 4 {
 		return ""
 	}
-
-	var ip [4]byte
-	for i := 0; i < 4; i++ {
-		hexByte := hexStr[i*2 : i*2+2]
-		var val int
-		fmt.Sscanf(hexByte, "%x", &val)
-		ip[3-i] = byte(val) // Reverse byte order
-	}
-
-	return fmt.Sprintf("%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3])
+	// /proc/net/route stores the gateway little-endian; reverse to big-endian.
+	return net.IP([]byte{raw[3], raw[2], raw[1], raw[0]}).String()
 }
 
 // getDNSServers attempts to get DNS server information
@@ -231,28 +226,4 @@ func (nd *NetworkDetector) getDNSServers() []string {
 func (nd *NetworkDetector) IsNetworkAvailable() bool {
 	info, err := nd.GetNetworkInfo()
 	return err == nil && info.Connected && info.IPAddress != ""
-}
-
-// GetNetworkSummary returns a brief network status for status displays
-func (nd *NetworkDetector) GetNetworkSummary() string {
-	info, err := nd.GetNetworkInfo()
-	if err != nil {
-		return "Net: Error"
-	}
-
-	if !info.LinkUp {
-		return "Net: Down"
-	}
-
-	if !info.Connected || info.IPAddress == "" {
-		return "Net: No IP"
-	}
-
-	// Return abbreviated IP
-	parts := strings.Split(info.IPAddress, ".")
-	if len(parts) >= 2 {
-		return fmt.Sprintf("Net: %s.%s.*", parts[0], parts[1])
-	}
-
-	return "Net: OK"
 }
