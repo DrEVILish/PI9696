@@ -1093,22 +1093,24 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    height:auto keeps width -> height from the aspect-ratio, never fighting it. */
 .r2r{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
 .r2r .plate{fill:url(#deckBg)}
-.r2r .plate-bezel{fill:none;stroke:#1b5380;stroke-width:2}
-.r2r .plate-screw{fill:#0a1628;stroke:#1b5380;stroke-width:1}
-.r2r .deck-grid{fill:none;stroke:#133050;stroke-width:1}
+.r2r .plate-bezel{fill:none;stroke:var(--border);stroke-width:2}
+.r2r .plate-screw{fill:#0a1628;stroke:var(--border);stroke-width:1}
+.r2r .deck-grid{fill:none;stroke:rgba(15,58,92,0.55);stroke-width:1}
 .r2r .deck-corner{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.45}
 /* Reels: a near-black engineering-grade flange disc (gradient so the face
    reads as machined metal rather than flat), with a thin trim ring that
    lights up as the reel spins, faint tape windings and a bright hub. Only
    the inner spindle group (.reel-spin) rotates so the winding looks like
    it's turning while the plate and take-off point stay put. */
-.r2r .reel-disc{fill:url(#reelFace);stroke:#1b5380;stroke-width:2.5}
+.r2r .reel-disc{fill:#0c1e33;stroke:var(--border);stroke-width:2}
 .r2r .reel-ring{fill:none;stroke:#143a5c;stroke-width:1}
 .r2r .reel-g.spinning .reel-ring{stroke:rgba(0,217,255,0.5);filter:drop-shadow(0 0 4px rgba(0,217,255,0.6))}
 .r2r .reel-wind{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.22}
-.r2r .reel-hub{fill:var(--glow);opacity:0.9}
+.r2r .reel-hub{fill:#11304a;stroke:var(--glow);stroke-width:1.5;opacity:0.85}
+.r2r .reel-g.spinning .reel-hub{fill:var(--glow);filter:drop-shadow(0 0 5px rgba(0,217,255,0.6))}
 .r2r .reel-center{fill:#051020}
-.r2r .reel-spoke{fill:#10294a;stroke:var(--glow);stroke-width:1.2;opacity:0.7}
+.r2r .reel-spoke{fill:#10294a;stroke:rgba(0,217,255,0.4);stroke-width:1.2}
+.r2r .reel-g.spinning .reel-spoke{stroke:rgba(0,217,255,0.75)}
 .r2r .reel-spin{transform-box:fill-box;transform-origin:center}
 .r2r .reel-g.spinning .reel-spin{animation:spin 2.2s linear infinite}
 .r2r .reel-g#reelL.spinning .reel-spin{animation-direction:reverse}
@@ -1119,27 +1121,28 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    from supply reel, over the head, to the take-up reel exactly like real
    tape. */
 .r2r .tape-shadow{fill:none;stroke:#062033;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.6}
-.r2r .tape{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.85}
-.r2r .tape.active{stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite}
+.r2r .tape{fill:none;stroke:#0d3352;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round;opacity:0.6}
+.r2r .tape.active{stroke:var(--glow);stroke-width:3;opacity:0.85;stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite;filter:drop-shadow(0 0 5px rgba(0,217,255,0.45))}
 @keyframes tapeflow{to{stroke-dashoffset:-36}}
 /* Guide idlers: dark spindle wells with a tiny lit bore so the tape path
    reads as engineering hardware instead of plain dots. */
-.r2r .guide{fill:#0a1830;stroke:#1b5380;stroke-width:2}
+.r2r .guide{fill:#0a1830;stroke:var(--border);stroke-width:2}
 .r2r .guide-in{fill:#071222;stroke:#16456e;stroke-width:1.5}
-.r2r .guide-bore{fill:rgba(0,217,255,0.4);filter:drop-shadow(0 0 3px rgba(0,217,255,0.6))}
+.r2r .guide-bore{fill:rgba(0,217,255,0.3);filter:drop-shadow(0 0 2px rgba(0,217,255,0.4))}
 /* The read/write head block: a chamfered angular castle rising out of the
    tape gap, with glowing trim rails on its mounting cheeks, the red centre
    gap line and the large 7-segment digital time counter in its display
    window. The centre gap line turns recording-red while a take is running
    (.r2r.rec). */
-.r2r .head-plate{fill:url(#headFace);stroke:#1b5380;stroke-width:1.5}
-.r2r .head-edge{fill:none;stroke:rgba(0,217,255,0.35);stroke-width:1}
-.r2r .head-gap{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;opacity:0.55}
+.r2r .head-plate{fill:url(#headFace);stroke:var(--border);stroke-width:1.5}
+.r2r .head-edge{fill:none;stroke:rgba(0,217,255,0.25);stroke-width:1}
+.r2r .head-gap{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;opacity:0.3}
+.r2r.run .head-gap{opacity:0.75}
 .r2r.rec .head-gap{stroke:var(--rec);opacity:0.95;filter:drop-shadow(0 0 5px rgba(255,51,85,0.8))}
-.r2r .head-window{fill:#02060d;stroke:#1d5c8f;stroke-width:1.5}
+.r2r .head-window{fill:#02060d;stroke:var(--border);stroke-width:1.5}
 /* Bottom HUD band: a thin status rail with system lamps and micro labels,
    matching the larger panel HUD motif (corner brackets + glow). */
-.r2r .hud-band{fill:none;stroke:#1b5380;stroke-width:1}
+.r2r .hud-band{fill:none;stroke:var(--border);stroke-width:1}
 .r2r .hud-lamp{fill:#11304a}
 .r2r .hud-lamp.on{fill:var(--idle);filter:drop-shadow(0 0 3px var(--idle))}
 .r2r .hud-lamp.rec{fill:var(--rec);filter:drop-shadow(0 0 3px var(--rec))}
@@ -1151,9 +1154,9 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    is skewed to the right for an italic, forward-leaning readout. */
 #seg7{font-style:italic}
 #seg7 .s7{stroke:rgba(0,180,255,0.10);stroke-width:2.5;stroke-linecap:round}
-#seg7 .s7.on{stroke:var(--glow);filter:drop-shadow(0 0 5px rgba(0,217,255,0.9))}
+#seg7 .s7.on{stroke:var(--glow);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
 #seg7 .s7-dot{fill:rgba(0,180,255,0.10)}
-#seg7 .s7-dot.on{fill:var(--glow);filter:drop-shadow(0 0 5px rgba(0,217,255,0.9))}
+#seg7 .s7-dot.on{fill:var(--glow);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
 
 /* Pinned meter footer: always visible at the bottom of the viewport so the
    VU levels stay on screen while you operate the transport, with a slim
@@ -1268,11 +1271,6 @@ body.meters-collapsed{padding-bottom:4em}
             <stop offset="0%" stop-color="#10233b"/>
             <stop offset="55%" stop-color="#0a1628"/>
             <stop offset="100%" stop-color="#081120"/>
-          </linearGradient>
-          <linearGradient id="reelFace" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stop-color="#142f4d"/>
-            <stop offset="50%" stop-color="#0b1d32"/>
-            <stop offset="100%" stop-color="#0f2c49"/>
           </linearGradient>
           <linearGradient id="headFace" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stop-color="#142f4d"/>
@@ -1765,7 +1763,7 @@ function applyMeter(m) {
   // Deck-level recording state: the head gap line and lamps go red while a
   // take is running, the sys lamp glows green whenever the unit is moving.
   var deck = document.querySelector('.r2r');
-  if (deck) deck.classList.toggle('rec', !!m.recording);
+  if (deck) { deck.classList.toggle('rec', !!m.recording); deck.classList.toggle('run', moving); }
   var sysLamp = document.getElementById('sysLamp');
   if (sysLamp) {
     sysLamp.classList.toggle('on', moving);
