@@ -2107,9 +2107,10 @@ func handleWSMeter(ws *websocket.Conn) {
 
 func handleAPIRecordStart(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
-	if currentState == StateIdle && !isRecording {
-		startRecording()
-	}
+	// Use the same gate as the physical Record button so the WebUI can't
+	// start a take that the hardware would refuse (low disk, or from a state
+	// other than idle) - see startRecordingGuarded.
+	startRecordingGuarded()
 	mutex.Unlock()
 	handleAPIStatus(w, r)
 }

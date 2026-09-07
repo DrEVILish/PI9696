@@ -264,6 +264,59 @@ func TestStopRecordingDoesNotBlockMutex(t *testing.T) {
 	stopInfernoAndWait()
 }
 
+// TestStartRecordingGuarded covers the shared gate used by both the physical
+// Record button and the WebUI /api/record/start endpoint. It must refuse to
+// start from a non-idle state or on top of an existing take, and allow a
+// clean idle start (the test env has no real disk, so lowDisk() is false -
+// zero free space is deliberately not treated as low).
+func TestStartRecordingGuarded(t *testing.T) {
+	origState, origRec := currentState, isRecording
+	origCfg := os.Getenv("PI9696_CONFIG")
+	t.Cleanup(func() { currentState, isRecording = origState, origRec; os.Setenv("PI9696_CONFIG", origCfg) })
+
+	initTestHardware(t)
+	tmpCfg := filepath.Join(t.TempDir(), "config.json")
+	os.Setenv("PI9696_CONFIG", tmpCfg)
+
+	// Refused: already recording.
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = true
+	mutex.Unlock()
+	if startRecordingGuarded() {
+		mutex.Lock()
+		got := isRecording
+		mutex.Unlock()
+		t.Fatalf("expected guarded start to refuse when already recording (still %v)", got)
+	}
+
+	// Refused: not in an idle state.
+	mutex.Lock()
+	currentState = StateSettings
+	isRecording = false
+	mutex.Unlock()
+	if startRecordingGuarded() {
+		t.Fatalf("expected guarded start to refuse from StateSettings")
+	}
+
+	// Allowed: idle, not recording, and (in test) not low on disk.
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = false
+	mutex.Unlock()
+	if !startRecordingGuarded() {
+		t.Fatalf("expected guarded start to succeed from idle")
+	}
+
+	// Clean up the started take (no real ffmpeg runs - startRecording spins
+	// a real exec.Command; just reset the flag for the rest of the suite).
+	mutex.Lock()
+	stopRecording()
+	isRecording = false
+	currentState = StateIdle
+	mutex.Unlock()
+}
+
 // TestRotationNavigatesUntilRowIsClicked is the regression test for the bug
 // where rotation directly adjusted whichever parameter row happened to be
 // selected, meaning the cursor could never advance past row 0: every
