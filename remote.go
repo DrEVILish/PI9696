@@ -153,7 +153,12 @@ func newSessionStore() *sessionStore {
 	return &sessionStore{sessions: make(map[string]time.Time)}
 }
 
-// create mints a new session ID valid for the given lifetime.
+// create mints a new session ID valid for the given lifetime. Each login
+// also sweeps out every already-expired entry: valid() only prunes lazily,
+// when the same expired ID is presented again, so entries that expire and
+// are never re-presented would otherwise sit in the map forever on this
+// long-running device. Sweeping here bounds the map to (live sessions +
+// logins since the last login) with no extra timer.
 func (s *sessionStore) create(ttl time.Duration) string {
 	id, err := generateRemoteSessionID()
 	if err != nil {
@@ -161,14 +166,21 @@ func (s *sessionStore) create(ttl time.Duration) string {
 		// here is fatal (there's no safe fallback for a bearer credential).
 		log.Fatalf("Failed to generate session ID: %v", err)
 	}
+	now := time.Now()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.sessions[id] = time.Now().Add(ttl)
+	for k, exp := range s.sessions {
+		if now.After(exp) {
+			delete(s.sessions, k)
+		}
+	}
+	s.sessions[id] = now.Add(ttl)
 	return id
 }
 
 // valid reports whether id is a live, unexpired session. Expired entries are
-// pruned lazily so the map doesn't grow unboundedly with use.
+// pruned lazily here when they're presented again; entries that expire and
+// are never re-presented are swept by the next login (see create).
 func (s *sessionStore) valid(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
