@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"pi9696/hardware"
 )
@@ -60,7 +61,7 @@ func main() {
 
 	shot("playing", func() {
 		statusBar()
-		hm.DrawPlaybackStatus("00:01:47", "recording_20240131_143022_ch2_48kHz.wav")
+		hm.DrawPlaybackStatus(107*time.Second, 187*time.Second, "recording_20240131_143022_ch2_48kHz.wav", false)
 	})
 
 	shot("settings_menu", func() {

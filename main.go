@@ -574,6 +574,7 @@ var (
 	monitoringOutput       bool          // playback's output-monitoring mode: the input monitor is stood down while a track plays (see startPlayback); UI shows "monitoring output" - no real output tap, so audio latency is untouched
 	autoMonitor            bool          // true if the input monitor was started automatically at startup (see doStartInferno) rather than by the idle-browse flow; it persists across idle-browse sessions and is only stood down for recording/playback
 	playbackPausedElapsed  time.Duration // frozen playback time captured the moment playback paused - see pausePlayback
+	playbackDuration       time.Duration // total duration of the file currently playing, used to clamp seeks and show position as a relative offset
 	demoMode               bool          // synthetic VU-only demo, no real audio - see startDemo/demoLoop
 	demoKind               string
 	demoStart              time.Time
@@ -863,6 +864,12 @@ func onEncoderRotate(direction int) {
 		selectedMenu = 0
 		menuScrollOffset = 0
 
+	case StatePaused:
+		// Rotate while paused scrubs the playhead (see seekPlayback). While
+		// actually playing, rotate is left alone so an accidental brush doesn't
+		// restart the track with an audible gap.
+		seekPlayback(direction)
+
 	case StateConfirm:
 		if confirmOption == ConfirmNo {
 			confirmOption = ConfirmYes
@@ -918,6 +925,12 @@ func onEncoderClick() {
 
 	case StateLogging:
 		handleLoggingClick()
+
+	case StatePlaying:
+		pausePlayback()
+
+	case StatePaused:
+		resumePlayback()
 
 	case StateConfirm:
 		handleConfirmClick()
@@ -2097,6 +2110,7 @@ func startPlayback() {
 		logWarnf("No recordings to play")
 		return
 	}
+	playbackDuration = playbackFileDuration(file)
 
 	// Playback switches the dashboard OLED/WebUI out of input-monitoring
 	// into output-monitoring mode: stand the FIFO input monitor down (it's
@@ -2208,6 +2222,104 @@ func stopPlayback() {
 	if playbackCmd != nil && playbackCmd.Process != nil {
 		playbackCmd.Process.Signal(syscall.SIGTERM)
 	}
+}
+
+// playbackFileDuration returns the total duration of a WAV recording by
+// parsing its channel count and sample rate from the filename and deriving
+// the length from the actual file size (see recordingDuration). It returns 0
+// if the name doesn't match the app's own convention or the file can't be
+// stat'd, in which case seeks are clamped to the running position and the
+// progress readout just shows elapsed without a total.
+func playbackFileDuration(path string) time.Duration {
+	name := filepath.Base(path)
+	m := recFilenameRe.FindStringSubmatch(name)
+	if m == nil {
+		return 0
+	}
+	channels, _ := strconv.Atoi(m[4])
+	sampleRate, _ := strconv.Atoi(m[5])
+	return recordingDuration(path, channels, sampleRate*1000)
+}
+
+// playbackPosition returns the current playhead as a file offset. While
+// playing it advances with the wall clock from playbackStart (which is slid
+// forward on resume to exclude the paused gap); while paused it's the frozen
+// playbackPausedElapsed.
+func playbackPosition() time.Duration {
+	if currentState == StatePaused {
+		return playbackPausedElapsed
+	}
+	return time.Since(playbackStart)
+}
+
+// seekPlayback moves the playhead by seekStep per encoder detent and restarts
+// ffmpeg at the new offset. Only reachable while a track is running (the
+// encoder routes to it from StatePaused/StatePlaying - see onEncoderRotate);
+// it restarts the process with -ss so the new position takes effect, keeping
+// the paused state paused and the playing state playing.
+func seekPlayback(direction int) {
+	if currentState != StatePaused && currentState != StatePlaying {
+		return
+	}
+	if playbackCmd == nil || playbackCmd.Process == nil || playbackFile == "" {
+		return
+	}
+
+	const seekStep = 5 * time.Second
+	pos := playbackPosition() + time.Duration(direction)*seekStep
+	if pos < 0 {
+		pos = 0
+	}
+	if playbackDuration > 0 && pos > playbackDuration {
+		pos = playbackDuration
+	}
+	restartPlaybackAt(pos)
+}
+
+// restartPlaybackAt starts a fresh ffmpeg at the given file offset. The
+// previous process (if any) is signalled to stop, but is not waited on here -
+// the goroutine that owns its cmd.Wait() reaps it, and because playbackCmd now
+// points at the new process that goroutine's playbackCmd==cmd check fails and
+// it leaves state alone. If the track was paused, the new process is
+// immediately SIGSTOP'd so the playhead lands at the seek point still paused.
+func restartPlaybackAt(pos time.Duration) {
+	if playbackCmd != nil && playbackCmd.Process != nil {
+		playbackCmd.Process.Signal(syscall.SIGTERM)
+	}
+
+	cmd := exec.Command("ffmpeg", "-nostdin", "-ss", fmt.Sprintf("%.3f", pos.Seconds()), "-i", playbackFile, "-f", "alsa", "default")
+	if err := cmd.Start(); err != nil {
+		logErrorf("Failed to seek playback: %v", err)
+		return
+	}
+
+	wasPaused := currentState == StatePaused
+	playbackCmd = cmd
+	if wasPaused {
+		playbackPausedElapsed = pos
+		cmd.Process.Signal(syscall.SIGSTOP)
+	} else {
+		playbackStart = time.Now()
+		playbackPausedElapsed = 0
+	}
+
+	done := make(chan struct{})
+	playbackDone = done
+	go func() {
+		cmd.Wait()
+		mutex.Lock()
+		if playbackCmd == cmd {
+			playbackCmd = nil
+			monitoringOutput = false
+			playbackPausedElapsed = 0
+			if currentState == StatePlaying || currentState == StatePaused {
+				currentState = StateIdle
+			}
+		}
+		maybeResumeInputMonitorLocked()
+		mutex.Unlock()
+		close(done)
+	}()
 }
 
 func loadFilesToCopy() {
@@ -2879,19 +2991,12 @@ func formatMeter() string {
 }
 
 func renderPlayingScreen() {
-	elapsed := playbackPausedElapsed
-	if currentState == StatePlaying {
-		elapsed = time.Since(playbackStart)
-	}
+	pos := playbackPosition()
 	filename := ""
 	if playbackFile != "" {
 		filename = filepath.Base(playbackFile)
 	}
-	if currentState == StatePaused {
-		hwManager.DrawPlaybackStatus(formatDuration(elapsed), filename+"  [PAUSED]")
-		return
-	}
-	hwManager.DrawPlaybackStatus(formatDuration(elapsed), filename)
+	hwManager.DrawPlaybackStatus(pos, playbackDuration, filename, currentState == StatePaused)
 }
 
 func renderSettingsMenu() {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"time"
 
 	"pi9696/xlog"
 
@@ -324,14 +325,36 @@ func (fcm *FiraCodeManager) DrawRecordingStatus(elapsed, remaining, filename str
 	return nil
 }
 
-// DrawPlaybackStatus shows playback information, mirroring DrawRecordingStatus's
-// layout without the "remaining" row: playback has no space math to display.
-func (fcm *FiraCodeManager) DrawPlaybackStatus(elapsed, filename string) error {
+// DrawPlaybackStatus shows playback information: a title line with the play
+// state and elapsed/total position, a progress bar showing the playhead as a
+// relative offset, and the filename below. It mirrors DrawRecordingStatus's
+// layout but adds the position readout (Round 3 seek/scrub) - a bar plus
+// elapsed/total is how the operator sees where in the take they are.
+func (fcm *FiraCodeManager) DrawPlaybackStatus(elapsed, total time.Duration, filename string, paused bool) error {
 	if err := fcm.SwitchToContext("recording"); err != nil {
 		return err
 	}
-	playText := fmt.Sprintf("▶ PLAY %s", elapsed)
-	fcm.display.DrawTextCentered(playText, 24)
+	state := "▶ PLAY"
+	if paused {
+		state = "⏸ PAUSED"
+	}
+	title := fmt.Sprintf("%s %s", state, formatPlaybackTime(elapsed))
+	if total > 0 {
+		title = fmt.Sprintf("%s / %s", title, formatPlaybackTime(total))
+	}
+	fcm.display.DrawTextCentered(title, 24)
+
+	// Progress bar: the playhead as a relative offset through the take.
+	progress := 0.0
+	if total > 0 {
+		progress = float64(elapsed) / float64(total)
+		if progress < 0 {
+			progress = 0
+		} else if progress > 1 {
+			progress = 1
+		}
+	}
+	fcm.display.DrawProgressBar(0, 34, 256, 6, progress)
 
 	if err := fcm.SwitchToContext("details"); err != nil {
 		return err
@@ -345,10 +368,17 @@ func (fcm *FiraCodeManager) DrawPlaybackStatus(elapsed, filename string) error {
 				filename = filename[:maxChars] + "..."
 			}
 		}
-		fcm.display.DrawTextCentered(filename, 40)
+		fcm.display.DrawTextCentered(filename, 46)
 	}
 
 	return nil
+}
+
+// formatPlaybackTime renders a duration as HH:MM:SS (the same shape as
+// formatDuration in the main package) for the playback position readout.
+func formatPlaybackTime(d time.Duration) string {
+	secs := int(d.Seconds())
+	return fmt.Sprintf("%02d:%02d:%02d", secs/3600, (secs%3600)/60, secs%60)
 }
 
 // EncodePNG writes the current display frame as a PNG.

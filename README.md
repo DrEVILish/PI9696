@@ -230,8 +230,11 @@ Press **Play** while idle to play back the most recently created recording (WAV)
 currently sent to the local ALSA output device (`ffmpeg -f alsa default`). Note this does **not**
 yet match the product decision that playback should go out through **Inferno** (AES67/Dante) onto
 the network — that routing is not yet implemented on the Inferno side (see PROJECT_STATUS.md).
-Press **Stop** or hold the encoder to stop playback early. Playback and recording are mutually
-exclusive - each button is a no-op while the other is active.
+Press **Stop** or hold the encoder to stop playback early. While a track is playing, the encoder
+(or the on-screen buttons in the WebUI) doubles as the transport: **click** toggles play/pause,
+**rotate while paused** scrubs the playhead (5s per detent), and **hold** exits. The playing
+screen shows the position as a relative offset — a progress bar plus elapsed/total. Playback and
+recording are mutually exclusive - each button is a no-op while the other is active.
 
 ### Remote Control
 
