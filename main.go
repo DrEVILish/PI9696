@@ -970,16 +970,7 @@ func onButtonPress(buttonType hardware.ButtonType) {
 		// Record after checking levels goes straight into recording -
 		// startRecording stops the monitor itself before taking over the
 		// FIFO (see its own comment).
-		if (currentState == StateIdle || currentState == StateIdleBrowse) && !isRecording {
-			if lowDisk() {
-				// Refuse to start a take there isn't room to finish: flash a
-				// warning on the idle screen instead (see renderIdleScreen).
-				diskWarnUntil = time.Now().Add(5 * time.Second)
-				logWarnf("Refusing to record: less than 30 minutes of space remains")
-			} else {
-				startRecording()
-			}
-		}
+		startRecordingGuarded()
 	case hardware.StopButton:
 		if isRecording {
 			stopRecording()
@@ -1005,6 +996,28 @@ func onButtonPress(buttonType hardware.ButtonType) {
 			startPlayback()
 		}
 	}
+}
+
+// startRecordingGuarded is the single gate for starting a take, shared by the
+// physical Record button (onButtonPress) and the WebUI start endpoint
+// (handleAPIRecordStart) so both control surfaces enforce the same rules: a
+// take can only begin from an idle state, never on top of another take, and
+// never when low on space - less than diskWarnMinutes at the current rate
+// would refuse to finish (see lowDisk). It returns true if a take actually
+// started, false if it was refused.
+func startRecordingGuarded() bool {
+	if (currentState == StateIdle || currentState == StateIdleBrowse) && !isRecording {
+		if lowDisk() {
+			// Refuse to start a take there isn't room to finish: flash a
+			// warning on the idle screen instead (see renderIdleScreen).
+			diskWarnUntil = time.Now().Add(5 * time.Second)
+			logWarnf("Refusing to record: less than 30 minutes of space remains")
+			return false
+		}
+		startRecording()
+		return true
+	}
+	return false
 }
 
 func adjustSampleRate(direction int) {
