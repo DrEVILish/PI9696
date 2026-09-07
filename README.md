@@ -167,8 +167,10 @@ sudo journalctl -u pi9696 -f   # view logs
 ### Menu System
 
 1. **Audio**: Submenu with Sample Rate (44.1/48/96/192kHz, auto-restarts Inferno server),
-   Channel Count (1-128, auto-restarts Inferno server), and Tag (attach a preset metadata
-   tag to the next recording; WAV is the sole fixed output format)
+   Channel Count (1-128, auto-restarts Inferno server), Tag (attach a preset metadata
+   tag to the next recording; WAV is the sole fixed output format), and Prefix (filename
+   prefix, via preset list; a free-text field in the WebUI). Filenames are
+   `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` (default prefix `recording`).
 2. **Metering**: Submenu with Meter Range and Peak Hold
 3. **Display**: Submenu with Brightness (continuous 0-100% adjust row) and Auto Dim
    (dim after 30s of inactivity, off after 2 min; any input wakes it). Also settable

@@ -69,6 +69,7 @@ func main() {
 			{Label: "Sample Rate →", Value: "48kHz"},
 			{Label: "Channel Count →", Value: "2"},
 			{Label: "Tag →", Value: "None"},
+			{Label: "Prefix →", Value: "Default"},
 			{Label: "← Back", Value: ""},
 		}
 		y := 22

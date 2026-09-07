@@ -132,6 +132,9 @@ func loadPersistedConfig() {
 	if c.TagPresetIdx >= 0 && c.TagPresetIdx < len(tagPresets) {
 		tagPresetIdx = c.TagPresetIdx
 	}
+	if c.FilePrefix == "" || isValidFilePrefix(c.FilePrefix) {
+		filePrefix = c.FilePrefix
+	}
 	if c.VURangeIdx >= 0 && c.VURangeIdx < len(vuRangeOptions) {
 		vuRangeIdx = c.VURangeIdx
 	}
@@ -168,6 +171,7 @@ func persistConfig() {
 		SampleRateIdx:     sampleRateIdx,
 		ChannelCount:      channelCount,
 		TagPresetIdx:      tagPresetIdx,
+		FilePrefix:        filePrefix,
 		VURangeIdx:        vuRangeIdx,
 		PeakHoldIdx:       peakHoldIdx,
 		TransportMode:     transportMode,
@@ -466,7 +470,7 @@ const (
 	StateIdleBrowse // encoder-driven idle browsing: paged VU meters, then a network/token page - see onEncoderRotate's StateIdle case
 	StateWifi       // WiFi access-point submenu (enable/disable, show QR)
 	StateWifiQR     // full-screen QR code for joining the WiFi AP
-	StateAudio      // Audio submenu: Sample Rate, Channel Count, Tag
+	StateAudio      // Audio submenu: Sample Rate, Channel Count, Tag, Prefix
 	StateMetering   // Metering submenu: Meter Range, Peak Hold
 	StateDisplay    // Display submenu: Brightness, Auto Dim, Back
 	StateLogging    // Logging submenu: Error, Warn, Info, Debug, Back
@@ -482,6 +486,20 @@ const (
 // no-keyboard hardware doesn't have; a preset list is the practical
 // alternative. "" (first entry) means no tag is written.
 var tagPresets = []string{"", "Show", "Rehearsal", "Soundcheck", "Interview", "Backup"}
+
+// filePrefixPresets are the OLED preset-list values for the filename prefix
+// (see defaultFilePrefix below): the WebUI has a free-text Prefix field, and
+// the encoder-only OLED hardware gets a preset picker instead (same "preset
+// list like the Tag presets" pattern from the Round 3 design decision, which
+// gave the WebUI the text field and the OLED the presets). "" (first entry)
+// resets to the default prefix.
+var filePrefixPresets = []string{"", "Live", "Rehearsal", "Show", "Soundcheck", "Interview"}
+
+// defaultFilePrefix is what files are called when no custom prefix has been
+// set; filePrefix (persisted) overrides it. Keeping "recording" as the
+// default means an untouched unit keeps producing exactly the filenames it
+// always has (and the WebUI's name parser stays correct for existing files).
+const defaultFilePrefix = "recording"
 
 type MenuMode int
 
@@ -520,6 +538,7 @@ var (
 	sampleRateIdx          = 1 // Default to 48kHz
 	channelCount           = 2
 	tagPresetIdx           = 0
+	filePrefix             = "" // "" means defaultFilePrefix; see effectiveFilePrefix
 	isRecording            = false
 	isCopying              = false
 	recordStart            time.Time
@@ -593,6 +612,10 @@ type PersistedConfig struct {
 	SampleRateIdx int    `json:"sampleRateIdx"`
 	ChannelCount  int    `json:"channelCount"`
 	TagPresetIdx  int    `json:"tagPresetIdx"`
+	// FilePrefix is the recording filename prefix (see effectiveFilePrefix);
+	// "" means the default. Empty, so old configs without the field are
+	// already correct.
+	FilePrefix    string `json:"filePrefix"`
 	VURangeIdx    int    `json:"vuRangeIdx"`
 	PeakHoldIdx   int    `json:"peakHoldIdx"`
 	TransportMode string `json:"transportMode"`
@@ -783,6 +806,8 @@ func onEncoderRotate(direction int) {
 			adjustChannelCount(direction)
 		case 2: // Tag
 			adjustRecordTag(direction)
+		case 3: // Prefix
+			adjustRecordPrefix(direction)
 		}
 
 	case StateMetering:
@@ -1006,6 +1031,27 @@ func adjustRecordTag(direction int) {
 	settingChanged()
 }
 
+// adjustRecordPrefix cycles through filePrefixPresets, wrapping in both
+// directions. The empty first preset resets filePrefix to "" which means the
+// built-in default (see effectiveFilePrefix); the WebUI's free-text Prefix
+// field sets arbitrary values, and when the current prefix isn't on the OLED
+// list the next step lands on the first preset in the stepped direction.
+func adjustRecordPrefix(direction int) {
+	current := -1
+	for i, p := range filePrefixPresets {
+		if p == "" && filePrefix == "" || p != "" && p == filePrefix {
+			current = i
+			break
+		}
+	}
+	next := (current + direction) % len(filePrefixPresets)
+	if next < 0 {
+		next += len(filePrefixPresets)
+	}
+	filePrefix = filePrefixPresets[next]
+	settingChanged()
+}
+
 // adjustOledBrightness moves the 0-100% display brightness by one step and
 // applies it live (under mutex from onEncoderRotate; rotations change the
 // panel immediately so the operator sees the effect as they adjust).
@@ -1036,7 +1082,7 @@ func navigateMenu(direction int) {
 	case StateSettings:
 		maxItems = 11 // Audio, Metering, Display, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
 	case StateAudio:
-		maxItems = 4 // Sample Rate, Channel Count, Tag, Back
+		maxItems = 5 // Sample Rate, Channel Count, Tag, Prefix, Back
 	case StateMetering:
 		maxItems = 3 // Meter Range, Peak Hold, Back
 	case StateDisplay:
@@ -1119,7 +1165,7 @@ func handleSettingsClick() {
 	}
 }
 
-// handleAudioClick drives the Audio submenu (StateAudio): the three
+// handleAudioClick drives the Audio submenu (StateAudio): the four
 // parameter rows behave exactly like they did when they were top-level
 // settings - a click enters edit mode, rotate adjusts, click again confirms.
 func handleAudioClick() {
@@ -1128,9 +1174,9 @@ func handleAudioClick() {
 		return
 	}
 	switch selectedMenu {
-	case 0, 1, 2: // Sample Rate, Channel Count, Tag
+	case 0, 1, 2, 3: // Sample Rate, Channel Count, Tag, Prefix
 		editingParameter = true
-	case 3: // Back
+	case 4: // Back
 		currentState = StateSettings
 		selectedMenu = 0
 		menuScrollOffset = 0
@@ -1635,8 +1681,11 @@ func startRecording() {
 	recordStart = time.Now()
 	timestamp := recordStart.Format("20060102_150405")
 	sampleRate := sampleRates[sampleRateIdx]
+	// Filename prefix comes from the WebUI text field or the OLED preset
+	// list (Round 3 design: prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav); an
+	// unset prefix keeps the historical "recording_..." default.
 	recordingFile = filepath.Join(recordingSubdir(recordStart),
-		fmt.Sprintf("recording_%s_ch%d_%dkHz.wav", timestamp, channelCount, sampleRate/1000))
+		fmt.Sprintf("%s_%s_ch%d_%dkHz.wav", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000))
 
 	// Create recording directory
 	os.MkdirAll(filepath.Dir(recordingFile), 0755)
@@ -1997,15 +2046,23 @@ func recordingFiles() []string {
 	return files
 }
 
-// latestRecording returns the most recently created recording, relying on
-// the fixed-width YYYYMMDD_HHMMSS timestamp in the filename sorting
-// chronologically regardless of extension.
+// latestRecording returns the most recently created recording, sorted by
+// modification time rather than name: with a custom filename prefix the
+// fixed-width timestamp no longer sits at the start of every filename, so
+// lexicographic order would not be chronological across prefixes.
 func latestRecording() string {
 	files := recordingFiles()
 	if len(files) == 0 {
 		return ""
 	}
-	sort.Strings(files)
+	sort.Slice(files, func(i, j int) bool {
+		fi, errI := os.Stat(files[i])
+		fj, errJ := os.Stat(files[j])
+		if errI != nil || errJ != nil {
+			return files[i] < files[j]
+		}
+		return fi.ModTime().Before(fj.ModTime())
+	})
 	return files[len(files)-1]
 }
 
@@ -2935,6 +2992,47 @@ func tagStatusText() string {
 	return tagPresets[tagPresetIdx]
 }
 
+// effectiveFilePrefix returns the filename prefix recordings are actually
+// given: "" on the global means "use the default" (so an untouched unit keeps
+// producing recording_... names and old configs need no migration), while any
+// real prefix - from the WebUI text field or an OLED preset - is returned
+// verbatim.
+func effectiveFilePrefix() string {
+	if filePrefix == "" {
+		return defaultFilePrefix
+	}
+	return filePrefix
+}
+
+// prefixStatusText is the OLED row value for "Prefix": the default prefix is
+// shown as "Default" so it's clear the "" global means "not customized", and
+// a set prefix is shown as-is.
+func prefixStatusText() string {
+	if filePrefix == "" {
+		return "Default"
+	}
+	return filePrefix
+}
+
+// isValidFilePrefix constrains what a custom prefix may contain. It ends up
+// as a literal filename segment, the first field of every recording, so it
+// must be filesystem-safe and unambiguous to parse: the char set is the same
+// safe set the device name uses (letters/digits/space/hyphen), but the
+// underscore is excluded because "_" is the leader-suffix separator the
+// recFilenameRe parser keys on (keeping the WebUI recordings list able to
+// read its own files back). 1-32 chars.
+func isValidFilePrefix(s string) bool {
+	if s == "" || len(s) > 32 || s != strings.TrimSpace(s) {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 // Get Inferno server status text for display
 func getInfernoStatusText() string {
 	switch infernoState {
@@ -3168,6 +3266,7 @@ func renderAudioMenu() {
 		{Label: "Sample Rate →", Value: fmt.Sprintf("%dkHz", sampleRates[sampleRateIdx]/1000)},
 		{Label: "Channel Count →", Value: fmt.Sprintf("%d", channelCount)},
 		{Label: "Tag →", Value: tagStatusText()},
+		{Label: "Prefix →", Value: prefixStatusText()},
 		{Label: "← Back", Value: ""},
 	}
 	totalItems := len(items)
