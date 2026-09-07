@@ -694,6 +694,42 @@ func TestRemoteDownloadWhitelistsAgainstRealFiles(t *testing.T) {
 	if rec.Body.String() != "fake wav data" {
 		t.Fatalf("unexpected download body: %q", rec.Body.String())
 	}
+
+	// A recording in a per-day subfolder is downloadable by its relative path
+	// (the RelPath key), and that path is unique even though the basename is
+	// shared - the download is keyed on the folder-relative path, not the name.
+	subFile := filepath.Join(RecordPath, "2026-01-01", "recording_20260101_000003_ch2_48kHz.wav")
+	os.MkdirAll(filepath.Dir(subFile), 0755)
+	os.WriteFile(subFile, []byte("subfolder data"), 0644)
+	t.Cleanup(func() { os.Remove(subFile) })
+
+	req = httptest.NewRequest("GET", "/download/2026-01-01/recording_20260101_000003_ch2_48kHz.wav", nil)
+	req.AddCookie(sessionCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for a subfolder recording by rel path, got %d", rec.Code)
+	}
+	if rec.Body.String() != "subfolder data" {
+		t.Fatalf("unexpected subfolder download body: %q", rec.Body.String())
+	}
+
+	// Path traversal in the request is rejected outright, not sanitized. Go's
+	// ServeMux cleans the path (redirecting `..` segments), and handleDownload
+	// independently rejects any `..` in the value - either way it must never
+	// serve the file.
+	for _, evil := range []string{"../etc/passwd", "..", "2026-01-01/../../etc/passwd"} {
+		req = httptest.NewRequest("GET", "/download/"+evil, nil)
+		req.AddCookie(sessionCookie)
+		rec = httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code == http.StatusOK {
+			t.Fatalf("expected traversal %q to be rejected (non-200), got 200", evil)
+		}
+		if strings.Contains(rec.Body.String(), "root:") {
+			t.Fatalf("expected traversal %q to never serve file content, got %q", evil, rec.Body.String())
+		}
+	}
 }
 
 func waitForPlaybackIdle(t *testing.T) {
