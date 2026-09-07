@@ -2175,7 +2175,7 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <td>{{.StartStr}}</td>
 <td>{{.EndStr}}</td>
 <td>{{.DurationStr}}</td>
-<td><a href="/download/{{.Name}}">download</a></td>
+<td><a href="/download/{{.RelPath}}">download</a></td>
 </tr>{{end}}
 {{end}}
 </table>
@@ -2183,6 +2183,7 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 
 type recordingRow struct {
 	Name        string
+	RelPath     string
 	Channels    int
 	Format      string
 	SampleRate  int
@@ -2218,6 +2219,14 @@ func recordingDuration(path string, channels, sampleRate int) time.Duration {
 func buildRecordingRow(path string) recordingRow {
 	name := filepath.Base(path)
 	row := recordingRow{Name: name}
+	// RelPath is the path relative to RecordPath (e.g. "2026-08-30/Live_...wav"),
+	// the unique key for download - recordingFiles() globs both the top level
+	// and per-day subfolders, so basename alone could collide across days.
+	if rel, err := filepath.Rel(RecordPath, path); err == nil {
+		row.RelPath = rel
+	} else {
+		row.RelPath = name
+	}
 
 	m := recFilenameRe.FindStringSubmatch(name)
 	if m == nil {
@@ -2261,11 +2270,18 @@ func handleAPIRecordings(w http.ResponseWriter, r *http.Request) {
 // handleDownload only serves files that appear in the app's own current
 // recordingFiles() listing - whitelisting against reality rather than just
 // filepath.Base()-sanitizing the request, so a path like "../../etc/passwd"
-// is rejected outright rather than relying on string-cleaning alone.
+// is rejected outright rather than relying on string-cleaning alone. It keys
+// on the path relative to RecordPath (the recordingRow.RelPath the list uses
+// for its download link), which is unique even though the basename may be
+// shared across per-day subfolders.
 func handleDownload(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("filename")
+	rel := r.PathValue("filepath")
+	if rel == "" || strings.Contains(rel, "..") {
+		http.NotFound(w, r)
+		return
+	}
 	for _, f := range recordingFiles() {
-		if filepath.Base(f) == name {
+		if relPath, err := filepath.Rel(RecordPath, f); err == nil && relPath == rel {
 			http.ServeFile(w, r, f)
 			return
 		}
@@ -2304,7 +2320,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/demo/start/{kind}", requireAuth(handleAPIDemoStart))
 	mux.HandleFunc("POST /api/demo/stop", requireAuth(handleAPIDemoStop))
 	mux.HandleFunc("GET /api/recordings", requireAuth(handleAPIRecordings))
-	mux.HandleFunc("GET /download/{filename}", requireAuth(handleDownload))
+	mux.HandleFunc("GET /download/{filepath...}", requireAuth(handleDownload))
 
 	mux.HandleFunc("GET /api/display.png", requireAuth(handleDisplayPNG))
 	mux.HandleFunc("POST /api/input/encoder/left", requireAuth(handleInputEncoderRotate(-1)))
