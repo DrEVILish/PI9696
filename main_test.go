@@ -913,6 +913,93 @@ func TestPlaybackAndRecordingAreMutuallyExclusive(t *testing.T) {
 	}
 }
 
+// Covers the Round 3 seek/scrub design: encoder click toggles play/pause,
+// rotate while paused seeks (restarting ffmpeg at a new offset), and the
+// playhead is reported as a clamped offset. Also pins playbackFileDuration
+// (the total used to clamp seeks and drive the progress readout).
+func TestPlaybackSeekAndPauseToggle(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	os.MkdirAll(RecordPath, 0755)
+	// A 60-second 48kHz stereo 24-bit WAV: 44-byte header + 60*48000*2*3 data.
+	recFile := filepath.Join(RecordPath, "recording_20260101_000000_ch2_48kHz.wav")
+	dataBytes := 60 * 48000 * 2 * 3
+	if err := os.WriteFile(recFile, make([]byte, 44+dataBytes), 0644); err != nil {
+		t.Fatalf("write fake recording: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(recFile) })
+
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = false
+	mutex.Unlock()
+
+	// playbackFileDuration must derive the total from the file size.
+	mutex.Lock()
+	playbackDuration = playbackFileDuration(recFile)
+	mutex.Unlock()
+	if playbackDuration != 60*time.Second {
+		t.Fatalf("expected 60s total, got %v", playbackDuration)
+	}
+
+	onButtonPress(hardware.PlayButton)
+	mutex.Lock()
+	if currentState != StatePlaying {
+		t.Fatalf("expected StatePlaying, got %v", currentState)
+	}
+	mutex.Unlock()
+
+	// Encoder click pauses.
+	onEncoderClick()
+	mutex.Lock()
+	if currentState != StatePaused {
+		t.Fatalf("expected StatePaused after click, got %v", currentState)
+	}
+	mutex.Unlock()
+
+	// Rotate while paused seeks forward ~5s and stays paused.
+	onEncoderRotate(1)
+	mutex.Lock()
+	if currentState != StatePaused {
+		t.Fatalf("expected still StatePaused after seek, got %v", currentState)
+	}
+	fwd := playbackPausedElapsed
+	mutex.Unlock()
+	if fwd < 5*time.Second || fwd > 6*time.Second {
+		t.Fatalf("expected position ~5s after one forward detent, got %v", fwd)
+	}
+
+	// Rotate back seeks toward the start.
+	onEncoderRotate(-1)
+	mutex.Lock()
+	back := playbackPausedElapsed
+	mutex.Unlock()
+	if back > 1*time.Second {
+		t.Fatalf("expected position near start after seeking back, got %v", back)
+	}
+
+	// Rotate while paused clamps at the total duration, not past it.
+	onEncoderRotate(100)
+	mutex.Lock()
+	clamped := playbackPausedElapsed
+	mutex.Unlock()
+	if clamped != 60*time.Second {
+		t.Fatalf("expected position clamped to total (60s), got %v", clamped)
+	}
+
+	// Encoder click resumes.
+	onEncoderClick()
+	mutex.Lock()
+	if currentState != StatePlaying {
+		t.Fatalf("expected StatePlaying after resume click, got %v", currentState)
+	}
+	mutex.Unlock()
+
+	onButtonPress(hardware.StopButton)
+	waitForPlaybackIdle(t)
+}
+
 func TestIdleBrowseNavigatesPagesAndReturnsToIdle(t *testing.T) {
 	origState, origChannels, origPage, origOwned := currentState, channelCount, idleBrowsePage, idleBrowseMonitorOwned
 	t.Cleanup(func() {

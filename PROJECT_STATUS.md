@@ -540,6 +540,19 @@ Third design-review pass: fills in the specifics needed to finish the build.
   control server now binds `0.0.0.0` (every interface) instead of eth0's IP only, so the
   WebUI is reachable over any interface (eth0/wlan0) per the Round 3 decision.
 
+- **1.16.0 - Playback seek/scrub.** Per the Round 3 decision, the encoder (and the WebUI's
+  on-screen encoder buttons, which route through the same handlers) drives the transport while a
+  track is running: **click toggles play/pause** (`onEncoderClick` → `pausePlayback`/`resumePlayback`),
+  **rotate while paused scrubs** the playhead (`onEncoderRotate` → `seekPlayback`, 5s per detent),
+  and **hold exits** (already present). Seeking restarts `ffmpeg` at the new offset with `-ss`
+  (`restartPlaybackAt`), keeping a paused track paused and a playing one playing; the process is
+  reaped by the same single-owner `cmd.Wait()` goroutine, and the playhead is clamped to
+  `[0, playbackDuration]`. The playing screen now shows the position as a **relative offset** — a
+  progress bar plus `elapsed / total` (`DrawPlaybackStatus` gained the total, progress bar, and a
+  `[PAUSED]` indicator). `playbackFileDuration` derives the total from the WAV size; the WebUI
+  encoder buttons already call the shared handlers, so seek/scrub works from the dashboard too.
+  Pinned by `TestPlaybackSeekAndPauseToggle`.
+
 - **1.15.0 - WebUI meter colors (level-accurate).** Per the Round 3 decision, green/yellow/red
   meter coloring applies to the WebUI only (the monochrome OLED stays grayscale). The dashboard's
   per-channel fill already had a green→yellow→red gradient, but it was sized to the fill's own
