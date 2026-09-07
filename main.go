@@ -2294,6 +2294,15 @@ func seekPlayback(direction int) {
 func restartPlaybackAt(pos time.Duration) {
 	if playbackCmd != nil && playbackCmd.Process != nil {
 		playbackCmd.Process.Signal(syscall.SIGTERM)
+		// Seek only ever happens while paused, so the outgoing process is
+		// usually SIGSTOP'd - and a stopped process defers SIGTERM until
+		// it's continued (the same trap stopPlayback hit; see its comment).
+		// Without the SIGCONT the old ffmpeg would stay frozen forever:
+		// one leaked stopped process per seek detent, each still holding
+		// the ALSA output open - on an exclusive (non-dmix) ALSA device
+		// that would stop the new process from opening the output at all.
+		// SIGCONT is a harmless no-op if it's already running.
+		playbackCmd.Process.Signal(syscall.SIGCONT)
 	}
 
 	cmd := exec.Command("ffmpeg", "-nostdin", "-ss", fmt.Sprintf("%.3f", pos.Seconds()), "-i", playbackFile, "-f", "alsa", "default")

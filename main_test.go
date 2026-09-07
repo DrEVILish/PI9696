@@ -3,7 +3,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"fmt"
 	"image/png"
 	"io"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -836,21 +836,26 @@ func waitProcessStopped(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
-		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-		if err == nil {
-			s := string(data)
-			if i := strings.LastIndex(s, ")"); i >= 0 && i+2 < len(s) {
-				fields := strings.Fields(s[i+2:])
-				if len(fields) > 0 && fields[0] == "T" {
-					return
-				}
-			}
+		if state := procState(pid); state == "T" {
+			return
+		} else if state == "gone" {
+			t.Fatalf("process %d exited before reaching stopped (T) state", pid)
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("process %d never reached stopped (T) state", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// procState returns "gone" when the pid no longer exists, otherwise the ps
+// state letter (e.g. "T" stopped, "S" sleeping) - or "" if unparseable.
+func procState(pid int) string {
+	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).CombinedOutput()
+	if err != nil {
+		return "gone"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func TestPlaybackLifecycle(t *testing.T) {
@@ -1127,6 +1132,69 @@ func TestStopWhilePausedAwakensStoppedFFmpeg(t *testing.T) {
 	pid := playbackCmd.Process.Pid
 	mutex.Unlock()
 	waitProcessStopped(t, pid)
+
+	onButtonPress(hardware.StopButton)
+	waitForPlaybackIdle(t)
+}
+
+// Regression for the seek-while-paused process leak: restartPlaybackAt
+// signals the outgoing ffmpeg with SIGTERM only, but seek happens while the
+// process is SIGSTOP'd - and a stopped process defers SIGTERM until it's
+// continued. Each seek detent therefore left a frozen ffmpeg behind: never
+// reaped, still holding the ALSA output open (which on an exclusive ALSA
+// device would stop the replacement process from opening the output at
+// all). restartPlaybackAt must follow the TERM with SIGCONT. Like the
+// stop-while-paused test above, it waits for kernel state 'T' first so it
+// deterministically reproduces the hang conditions.
+func TestSeekWhilePausedReapsOldFFmpeg(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	os.MkdirAll(RecordPath, 0755)
+	recFile := filepath.Join(RecordPath, "recording_20260101_000000_ch2_48kHz.wav")
+	if err := os.WriteFile(recFile, []byte("fake"), 0644); err != nil {
+		t.Fatalf("write fake recording: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(recFile) })
+
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = false
+	mutex.Unlock()
+
+	onButtonPress(hardware.PlayButton)
+	onEncoderClick() // pause -> SIGSTOP
+
+	mutex.Lock()
+	oldPid := playbackCmd.Process.Pid
+	mutex.Unlock()
+	waitProcessStopped(t, oldPid)
+
+	onEncoderRotate(1) // seek forward: restartPlaybackAt replaces the process
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if procState(oldPid) == "gone" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("old ffmpeg still alive after seek, state=%q (leaked stopped process)", procState(oldPid))
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The replacement must be running and still paused.
+	mutex.Lock()
+	paused, fresh := currentState == StatePaused, playbackCmd != nil && playbackCmd.Process.Pid != oldPid
+	freshPid := 0
+	if fresh {
+		freshPid = playbackCmd.Process.Pid
+	}
+	mutex.Unlock()
+	if !paused || !fresh {
+		t.Fatalf("after seek expected StatePaused with a replacement process, got paused=%v fresh=%v", paused, fresh)
+	}
+	waitProcessStopped(t, freshPid) // new process frozen at the seek point
 
 	onButtonPress(hardware.StopButton)
 	waitForPlaybackIdle(t)
