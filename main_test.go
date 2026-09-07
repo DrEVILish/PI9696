@@ -56,6 +56,28 @@ func initTestHardware(t *testing.T) {
 	}
 }
 
+// testSessionCookie logs in through the real login flow and returns a valid
+// session cookie. Since a session is a server-side ID (not the token), tests
+// must not fabricate a cookie with the token value - they authenticate the
+// same way a user does.
+func testSessionCookie(t *testing.T) *http.Cookie {
+	t.Helper()
+	mux := newRemoteMux()
+	form := "token=" + remoteToken
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "192.0.2.1:12345"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == remoteSessionCookie {
+			return c
+		}
+	}
+	t.Fatalf("login did not set a session cookie")
+	return nil
+}
+
 func withFakeInfernoProject(t *testing.T) {
 	t.Helper()
 	if err := os.MkdirAll("inferno", 0755); err != nil {
@@ -476,6 +498,58 @@ func TestRemoteLoginWrongTokenThenCorrectToken(t *testing.T) {
 	}
 }
 
+func TestRemoteSessionCookieIsNotTokenAndRevokes(t *testing.T) {
+	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
+	remoteToken = "TESTTOKEN2"
+	loginLimit = newLoginLimiter()
+	sessions = newSessionStore()
+	t.Cleanup(func() { remoteToken, loginLimit, sessions = origToken, origLimiter, origSessions })
+
+	mux := newRemoteMux()
+
+	// Log in and capture the session cookie.
+	form := "token=" + remoteToken
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "192.0.2.1:12345"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var sessionCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == remoteSessionCookie {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatalf("expected session cookie")
+	}
+	if sessionCookie.Value == remoteToken {
+		t.Fatalf("session cookie must not equal the access token")
+	}
+
+	// The session authorizes a request.
+	req = httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(sessionCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 with a live session, got %d", rec.Code)
+	}
+
+	// Logout revokes server-side: the same cookie is now rejected.
+	logoutReq := httptest.NewRequest("GET", "/logout", nil)
+	logoutReq.AddCookie(sessionCookie)
+	mux.ServeHTTP(httptest.NewRecorder(), logoutReq)
+
+	req = httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(sessionCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected redirect after logout (revoked session), got %d", rec.Code)
+	}
+}
+
 func TestRemoteLoginRateLimitsRepeatedFailures(t *testing.T) {
 	origToken, origLimiter := remoteToken, loginLimit
 	remoteToken = "TESTTOKEN3"
@@ -550,7 +624,7 @@ func TestDisplayPNGDoesNotBlockMutex(t *testing.T) {
 	sw := newSlowWriter(rec)
 
 	req := httptest.NewRequest("GET", "/api/display.png", nil)
-	req.AddCookie(&http.Cookie{Name: remoteSessionCookie, Value: remoteToken})
+	req.AddCookie(testSessionCookie(t))
 
 	done := make(chan struct{})
 	go func() {
@@ -590,7 +664,7 @@ func TestRemoteDisplayPNGEndpoint(t *testing.T) {
 
 	mux := newRemoteMux()
 	req := httptest.NewRequest("GET", "/api/display.png", nil)
-	req.AddCookie(&http.Cookie{Name: remoteSessionCookie, Value: remoteToken})
+	req.AddCookie(testSessionCookie(t))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -622,7 +696,7 @@ func TestRemoteInputEndpointsDriveStateMachine(t *testing.T) {
 	mutex.Unlock()
 
 	mux := newRemoteMux()
-	sessionCookie := &http.Cookie{Name: remoteSessionCookie, Value: remoteToken}
+	sessionCookie := testSessionCookie(t)
 
 	post := func(path string) int {
 		req := httptest.NewRequest("POST", path, nil)
@@ -664,7 +738,7 @@ func TestRemoteDownloadWhitelistsAgainstRealFiles(t *testing.T) {
 	t.Cleanup(func() { os.Remove(realFile) })
 
 	mux := newRemoteMux()
-	sessionCookie := &http.Cookie{Name: remoteSessionCookie, Value: remoteToken}
+	sessionCookie := testSessionCookie(t)
 
 	// A file that exists on disk but wasn't returned by recordingFiles()
 	// (wrong extension) must be rejected, same as an outright bogus name -

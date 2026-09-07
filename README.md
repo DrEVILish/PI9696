@@ -238,8 +238,8 @@ A web UI is served on **any IP-based interface** (eth0, or wlan0 once the WiFi A
 up) on port 8080 once the interface has an IP - started/stopped automatically as the interface
 comes up or down. Settings → Remote Access shows the URL and an 8-character access token
 (shown, and enterable at `/login`, as two groups of 4 - e.g. `K7M2 QX9F` - for readability;
-the separator is optional when typing it in). A correct token gets a session cookie good for 12
-hours.
+the separator is optional when typing it in). A correct token is exchanged for a session cookie
+good for 12 hours (the session ID is distinct from the token and expires server-side).
 
 The dashboard mirrors the physical device: the OLED display itself (a live PNG snapshot of the
 actual framebuffer, not a redrawn approximation) plus the rotary encoder and all three buttons

@@ -306,8 +306,10 @@ PI9696_SIM=1 ./pi9696
 - **Auth** - An 8-character token (crypto/rand, ~40 bits of entropy, regenerated every process
   start, never written to disk) shown on the OLED via Settings → Remote Access as two groups of
   4 (`formatToken`) for readability; `/login` accepts the token with or without a separator
-  (`normalizeToken`) and exchanges it for an `HttpOnly`/`SameSite=Strict` session cookie; a
-  per-IP rate limiter locks out after 5 failed attempts for 60s
+  (`normalizeToken`) and exchanges it for an `HttpOnly`/`SameSite=Strict` session cookie. The
+  cookie value is a distinct random session ID stored server-side (`sessionStore`) with a 12h
+  lifetime, so it never carries the token and actually expires on the server (logout revokes
+  it). A per-IP rate limiter locks out after 5 failed attempts for 60s
 - **Scope** - Start/stop recording, full menu navigation (via the encoder/button endpoints),
   live status (polled via htmx), and recording downloads - deliberately no upload, no arbitrary
   file access (downloads are checked against `recordingFiles()`'s live listing, not just
