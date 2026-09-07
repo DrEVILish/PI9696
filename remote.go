@@ -456,15 +456,79 @@ type dashboardData struct {
 	TransportIcon        bool
 }
 
-// optionsView is the shared shape behind the Meter Range/Peak Hold select
-// fragments - both the initial dashboard render and their own htmx POST
-// handlers execute the same fragment templates against this, so there's
-// exactly one place that builds their markup (see vuRangeFragmentTmpl/
-// peakHoldFragmentTmpl).
+// optionsView is the shared shape behind the settings-dropdown option lists
+// - both the initial dashboard render and each setting's htmx POST handler
+// read the same options through this, so there's exactly one place that
+// builds each list (see the selectView descriptors below).
 type optionsView struct {
 	Options []string
 	Idx     int
 }
+
+// selectView carries one settings-dropdown fragment. The six select-based
+// settings (meter range, peak hold, sample rate, tag, transport mode, log
+// level) render identical markup, differing only in anchor id, endpoint,
+// label, option labels, and selected index - so one template serves them all.
+// Suffix is appended verbatim to every option label (vuRange's "dBFS").
+// Transport keeps its own fragment: its original markup hardcodes two
+// options, one per line, which this single-option-per-line-free layout
+// can't express byte-identically.
+type selectView struct {
+	Id      string
+	Post    string
+	Label   string
+	Suffix  string
+	Options []string
+	Idx     int
+}
+
+func settingSelect(id, post, label, suffix string, opts func() optionsView) selectView {
+	v := opts()
+	return selectView{Id: id, Post: post, Label: label, Suffix: suffix, Options: v.Options, Idx: v.Idx}
+}
+
+func vuRangeSelect() selectView {
+	return settingSelect("vurange", "/api/settings/vu-range", "Meter Range", "dBFS", vuRangeOptionsView)
+}
+
+func peakHoldSelect() selectView {
+	return settingSelect("peakhold", "/api/settings/peak-hold", "Peak Hold", "", peakHoldOptionsView)
+}
+
+func sampleRateSelect() selectView {
+	return settingSelect("samplerate", "/api/settings/sample-rate", "Sample Rate", "", sampleRateOptionsView)
+}
+
+func tagSelect() selectView {
+	return settingSelect("tag", "/api/settings/tag", "Tag", "", tagOptionsView)
+}
+
+var transportFragmentTmpl = template.Must(template.New("transport").Parse(`<div id="transportmode" class="setting-cell">
+<div class="setting-row">
+<form hx-post="/api/settings/transport-mode" hx-target="#transportmode" hx-swap="outerHTML">
+<label>Transport Buttons</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+<option value="0" {{if eq .Idx 0}}selected{{end}}>Icon</option>
+<option value="1" {{if eq .Idx 1}}selected{{end}}>Text</option>
+</select>
+</form>
+</div>
+</div>`))
+
+func logLevelSelect() selectView {
+	return settingSelect("loglevel", "/api/settings/log-level", "Log Level", "", logLevelOptionsView)
+}
+
+var selectFragmentTmpl = template.Must(template.New("setting-select").Parse(`<div id="{{.Id}}" class="setting-cell">
+<div class="setting-row">
+<form hx-post="{{.Post}}" hx-target="#{{.Id}}" hx-swap="outerHTML">
+<label>{{.Label}}</label>
+<select name="idx" onchange="this.form.requestSubmit()">
+{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}{{$.Suffix}}</option>{{end}}
+</select>
+</form>
+</div>
+</div>`))
 
 func vuRangeOptionsView() optionsView {
 	mutex.Lock()
@@ -527,28 +591,6 @@ func tagOptionsView() optionsView {
 	}
 	return optionsView{Options: opts, Idx: tagPresetIdx}
 }
-
-var vuRangeFragmentTmpl = template.Must(template.New("vurange").Parse(`<div id="vurange" class="setting-cell">
-<div class="setting-row">
-<form hx-post="/api/settings/vu-range" hx-target="#vurange" hx-swap="outerHTML">
-<label>Meter Range</label>
-<select name="idx" onchange="this.form.requestSubmit()">
-{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}dBFS</option>{{end}}
-</select>
-</form>
-</div>
-</div>`))
-
-var logLevelFragmentTmpl = template.Must(template.New("loglevel").Parse(`<div id="loglevel" class="setting-cell">
-<div class="setting-row">
-<form hx-post="/api/settings/log-level" hx-target="#loglevel" hx-swap="outerHTML">
-<label>Log Level</label>
-<select name="idx" onchange="this.form.requestSubmit()">
-{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
-</select>
-</form>
-</div>
-</div>`))
 
 // brightnessFragmentTmpl is the Display -> Brightness setting: a 0-100
 // slider (the OLED's continuous brightness control) that live-updates its
@@ -630,45 +672,12 @@ func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
 	autoDimFragmentTmpl.Execute(w, autoDimViewData())
 }
 
-var peakHoldFragmentTmpl = template.Must(template.New("peakhold").Parse(`<div id="peakhold" class="setting-cell">
-<div class="setting-row">
-<form hx-post="/api/settings/peak-hold" hx-target="#peakhold" hx-swap="outerHTML">
-<label>Peak Hold</label>
-<select name="idx" onchange="this.form.requestSubmit()">
-{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
-</select>
-</form>
-</div>
-</div>`))
-
-var sampleRateFragmentTmpl = template.Must(template.New("samplerate").Parse(`<div id="samplerate" class="setting-cell">
-<div class="setting-row">
-<form hx-post="/api/settings/sample-rate" hx-target="#samplerate" hx-swap="outerHTML">
-<label>Sample Rate</label>
-<select name="idx" onchange="this.form.requestSubmit()">
-{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
-</select>
-</form>
-</div>
-</div>`))
-
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
 <div class="setting-row">
 <form hx-post="/api/settings/channels" hx-target="#channelcount" hx-swap="outerHTML">
 <label for="channelsInput">Channels</label>
 <input id="channelsInput" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
 <span class="hint">1–{{.Max}}</span>
-</form>
-</div>
-</div>`))
-
-var tagFragmentTmpl = template.Must(template.New("tag").Parse(`<div id="tag" class="setting-cell">
-<div class="setting-row">
-<form hx-post="/api/settings/tag" hx-target="#tag" hx-swap="outerHTML">
-<label>Tag</label>
-<select name="idx" onchange="this.form.requestSubmit()">
-{{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}</option>{{end}}
-</select>
 </form>
 </div>
 </div>`))
@@ -715,20 +724,9 @@ func handleAPISettingsPrefix(w http.ResponseWriter, r *http.Request) {
 	filePrefixFragmentTmpl.Execute(w, filePrefixView())
 }
 
-// transportFragmentTmpl switches the main transport buttons between icon
+// transportSelect switches the main transport buttons between icon
 // SVG glyphs and text labels (see the ICON/TEXT setting). A full fragment,
 // so the settings modal stays consistent with the other setting rows.
-var transportFragmentTmpl = template.Must(template.New("transport").Parse(`<div id="transportmode" class="setting-cell">
-<div class="setting-row">
-<form hx-post="/api/settings/transport-mode" hx-target="#transportmode" hx-swap="outerHTML">
-<label>Transport Buttons</label>
-<select name="idx" onchange="this.form.requestSubmit()">
-<option value="0" {{if eq .Idx 0}}selected{{end}}>Icon</option>
-<option value="1" {{if eq .Idx 1}}selected{{end}}>Text</option>
-</select>
-</form>
-</div>
-</div>`))
 
 func transportOptionsView() optionsView {
 	idx := 0
@@ -794,7 +792,7 @@ func handleAPISettingsVURange(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	vuRangeFragmentTmpl.Execute(w, vuRangeOptionsView())
+	selectFragmentTmpl.Execute(w, vuRangeSelect())
 }
 
 func logLevelOptionsView() optionsView {
@@ -809,7 +807,7 @@ func handleAPISettingsLogLevel(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	logLevelFragmentTmpl.Execute(w, logLevelOptionsView())
+	selectFragmentTmpl.Execute(w, logLevelSelect())
 }
 
 func handleAPISettingsPeakHold(w http.ResponseWriter, r *http.Request) {
@@ -821,7 +819,7 @@ func handleAPISettingsPeakHold(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	peakHoldFragmentTmpl.Execute(w, peakHoldOptionsView())
+	selectFragmentTmpl.Execute(w, peakHoldSelect())
 }
 
 func handleAPISettingsSampleRate(w http.ResponseWriter, r *http.Request) {
@@ -834,7 +832,7 @@ func handleAPISettingsSampleRate(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	sampleRateFragmentTmpl.Execute(w, sampleRateOptionsView())
+	selectFragmentTmpl.Execute(w, sampleRateSelect())
 }
 
 func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
@@ -863,7 +861,7 @@ func handleAPISettingsTag(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	tagFragmentTmpl.Execute(w, tagOptionsView())
+	selectFragmentTmpl.Execute(w, tagSelect())
 }
 
 // handleAPISettingsWiFi updates the WiFi access point configuration from the
@@ -1835,14 +1833,14 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	mutex.Unlock()
 
 	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, qrBuf bytes.Buffer
-	vuRangeFragmentTmpl.Execute(&vuBuf, vuRangeOptionsView())
-	peakHoldFragmentTmpl.Execute(&holdBuf, peakHoldOptionsView())
-	sampleRateFragmentTmpl.Execute(&srBuf, sampleRateOptionsView())
+	selectFragmentTmpl.Execute(&vuBuf, vuRangeSelect())
+	selectFragmentTmpl.Execute(&holdBuf, peakHoldSelect())
+	selectFragmentTmpl.Execute(&srBuf, sampleRateSelect())
 	channelCountFragmentTmpl.Execute(&chBuf, currentChannelCountView())
-	tagFragmentTmpl.Execute(&tagBuf, tagOptionsView())
+	selectFragmentTmpl.Execute(&tagBuf, tagSelect())
 	filePrefixFragmentTmpl.Execute(&prefixBuf, filePrefixView())
 	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
-	logLevelFragmentTmpl.Execute(&logLevelBuf, logLevelOptionsView())
+	selectFragmentTmpl.Execute(&logLevelBuf, logLevelSelect())
 	brightnessFragmentTmpl.Execute(&brightnessBuf, brightnessViewData())
 	autoDimFragmentTmpl.Execute(&autoDimBuf, autoDimViewData())
 
