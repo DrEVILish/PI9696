@@ -104,19 +104,21 @@ This document provides the complete wiring reference for connecting all componen
   indication. Status details (USB, Network, WiFi if enabled, Inferno) display on the OLED's
   status screen.
 - Anode (long leg) → resistor → GPIO pin; cathode (short leg) → GND
-- Software-side pins are set in `hardware/leds.go`; the app is inert
-  without these wired (LED.Set on an unconfigured pin is skipped in
-  simulator/dev mode, and simply does nothing useful if the pins aren't
-  physically connected)
+- **Software status: not yet implemented.** Per the Round 3 design the former GPIO12/16
+  status LEDs were removed from the codebase; driving these three backlights is the
+  recorded follow-up (see PROJECT_STATUS, Known Gaps #3). The wiring above is the
+  builder's reference for when the software support lands.
 
 ### 5. Audio (AoIP / Ethernet)
 
 **Source & playback: audio is carried over the network via Inferno (AES67/Dante).**
 There is **no analog or USB audio I/O** in the build:
 
-- Inferno sends and receives audio bidirectionally over the Ethernet link.
-- Recording subscribes the Inferno stream into the FIFO pipeline; playback goes back out
-  through Inferno onto the network.
+- Recording captures the Inferno stream into the FIFO pipeline (AES67/Dante -> FIFO ->
+  ffmpeg -> WAV).
+- Playback currently goes to the **local ALSA output** (`ffmpeg -f alsa default`). Routing
+  playback back out through Inferno is the design target but is not yet implemented - the
+  Inferno server contract is receive-only today (see PROJECT_STATUS, Known Gaps #4).
 - No USB audio interface, no DAC/HAT, no XLR/TRS analog inputs.
 
 ## Power Requirements
@@ -129,7 +131,7 @@ There is **no analog or USB audio I/O** in the build:
 | OLED Display | 50-150 | Varies with brightness |
 | Encoder | 5 | Minimal |
 | Buttons | <1 | When not pressed |
-| Status LEDs | 2-20 | Depends on resistor value, per LED |
+| Button lamps (3, planned) | 6-60 | Depends on resistor value, per lamp |
 | **Total** | **~1000mA** | **At 5V (5W)** |
 
 **Power Supply Recommendation:**
@@ -297,6 +299,7 @@ There is **no analog or USB audio I/O** in the build:
 | 2024-01-XX | 1.0 | Initial wiring specification |
 | 2026-08-28 | 1.1 | Added Status LEDs (GPIO12/16); Play button no longer marked future |
 | 2026-09-04 | 1.2 | Analog/USB audio I/O dropped (AoIP-only); LEDs → REC/STOP/PLAY button lamps; PLAY lamp GPIO TBD |
+| 2026-09-07 | 1.3 | GPIO12/16 status LEDs removed from code (button lamps pending in software); playback documented as local ALSA (Inferno out = target, not implemented) |
 
 ---
 

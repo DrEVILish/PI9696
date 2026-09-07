@@ -1,426 +1,250 @@
-# PI9696 Audio Recorder - Project Status
+# PI9696 Audio Recorder — Project Status & Design Record
 
-## Overview
+This file is the **design record**: what is implemented, what is deliberately not, the
+product decisions behind the behaviour, and the per-feature history. For setup and usage
+see `README.md`; for hardware see `WIRING.md`.
 
-The PI9696 is a professional 1U rack-mounted audio recorder based on the Raspberry Pi 5. It features a 256x64 OLED display, rotary encoder navigation, dedicated record/stop/play buttons, and support for multi-channel audio recording up to 192kHz/24-bit using a persistent Inferno Audio over IP server with automatic network-based startup and settings synchronization.
+**Last updated:** 2026-09-07 · **Version:** 1.16.0 (plus the over-engineering audit cuts)
 
-## Project Completion Status
+---
 
-### ✅ Completed Components
+## Current Status
 
-#### Hardware Interface Layer
-- **Display Driver (SSD1322)** - Complete SPI-based OLED driver with 256x64 resolution
-- **Rotary Encoder (EC11)** - Full encoder support with rotation detection and button handling
-- **GPIO Buttons** - Support for Record, Stop, and Play buttons with debouncing
-- **Status LEDs** - Record (GPIO12) and Inferno-status (GPIO16) indicators, driven each render
-  tick from `isRecording`/`infernoState`; inert (no-op `LED.Set`) in simulator mode. **Round 3
-  supersedes**: these become REC/STOP/PLAY button backlight lamps (PLAY GPIO TBD)
-- **Hardware Manager** - Unified interface for all hardware components
+**Working end-to-end** (verified by the test suite and the live sim instance):
 
-#### Core Application Features
-- **Menu System** - Complete hierarchical menu with encoder navigation
-- **Recording Engine** - Persistent Inferno Audio over IP server with automatic network startup and FFmpeg conversion pipeline
-- **File Management** - USB detection, file copying, and deletion with progress tracking
-- **Display Layout** - Split-screen design with status and menu areas
-- **State Management** - Robust state machine handling idle, recording, menu, and copy states
+- Recording: Inferno → FIFO → ffmpeg → 24-bit WAV in `/rec/YYYY-MM-DD/`, with start-time
+  naming (`prefix_..._chN_NNkHz.wav`), tag presets, low-disk start refusal (30-min rule)
+- Playback of the latest take to local ALSA, with encoder click = play/pause,
+  rotate-while-paused = seek (5 s/detent), hold = exit, progress bar + elapsed/total
+- OLED UI: full menu system, status bar `[ETH] [INF] [USB]`, VU/waveform/info idle-browse
+  pages, brightness (0–100 %) + auto-dim (30 s → dim, 2 min → off, wake on input, skipped
+  while a take or playback is running)
+- WebUI: dashboard mirroring the OLED (live PNG + on-screen encoder/buttons driving the
+  same handlers as hardware), settings modal, per-channel meters over a 100 ms WebSocket,
+  recordings browser with per-file download and Download-ALL streaming ZIP + manifest
+- Auth: 8-char token (shown on the OLED, sim prints it to stderr) → 12 h server-side
+  session (distinct random ID, lazily + on-login swept), per-IP login rate limiting,
+  constant-time token compare
+- Files: copy to USB (per-day structure preserved), delete with confirmation, format USB
+- Logging: `log/slog`, Error/Warn/Info/Debug (default Error-only), journald + app.log,
+  level changeable from OLED and WebUI, persisted
 
-#### System Integration
-- **Auto-mount** - USB drive detection and mounting
-- **Service Integration** - Systemd service configuration
-- **Network Monitoring** - Automatic eth0 interface monitoring and Inferno server management
-  (Round 3 supersedes: monitoring will cover any active IP interface, incl. wlan0 once WiFi AP
-  is enabled)
-- **Remote Control** - Web UI for status/start/stop/download (see Remote Control below);
-  currently binds eth0 only, Round 3 supersedes to any IP-based interface
-- **Audio Configuration** - ALSA optimization for low-latency recording
-- **Permission Management** - Proper user/group configurations
+**Deliberately not in the build** (product decisions): scheduling, FLAC/MP3, analog/USB
+audio I/O, local monitor output, HTTPS, user accounts, mirroring/RAID, OTA (future),
+language toggle (future), power-source monitoring.
 
-#### Build System
-- **Go Modules** - Proper dependency management
-- **Installation Scripts** - Automated setup and configuration (`setup.sh`)
-- **Simulator Mode** - `PI9696_SIM=1` runs the app and dev tools without real SPI/GPIO
+## Known Gaps & Backlog
 
-### 🚧 Implementation Details
+Prioritized. Items marked *(design promise)* contradict a recorded decision and should be
+fixed before release; the rest are recorded as future work.
 
-#### Menu System Features
-- **Sample Rate Selection** - 44.1kHz, 48kHz, 96kHz, 192kHz with automatic Inferno server restart
-- **Channel Count** - Adjustable from 1 to 128 channels with automatic Inferno server restart
-- **File Copy Management** - Select individual files or copy all with progress bar
-- **USB Format** - Format attached USB drives (FAT32)
-- **System Control** - Shutdown, restart, and Inferno server restart with confirmation
-- **Network Information** - Display eth0 interface status and IP details
-- **Inferno Management** - Manual server restart with status display
-- **Delete Protection** - Confirmation dialog for deleting all recordings
+1. **Auto-stop when storage runs out mid-take** *(design promise — "auto-stop gracefully
+   when less than 1 minute of space remains")*. Only the start-time refusal exists today;
+   a take that runs into a full card ends in ffmpeg write errors and a truncated file.
+2. **fsync the finished WAV** after the encoder exits, so a power cut right after "stop"
+   cannot lose buffered data.
+3. **Button lamps** (Round 3: REC/STOP/PLAY backlights instead of status LEDs). The GPIO
+   status LEDs are removed from the code; the lamps are not yet driven by software.
+4. **Playback via Inferno/AoIP** — the recorded target. Blocked: the Inferno server
+   contract is receive-only today (no input/stream command to feed a WAV back out).
+   Playback currently goes to local ALSA.
+5. **Config export/import to USB** *(future)* — non-secret JSON (WiFi password and
+   access token excluded) so units can be cloned; `persistConfig` already exists, so
+   this is now a small feature.
+6. **INFERNO-LINK lamp on the WebUI deck is static** — it should reflect Inferno state
+   (needs an Inferno field in the meter payload).
+7. **Sim-mode OLED input** — the token logging fixed sim authentication, but there is
+   still no way to drive the OLED menus from a dev box (only the WebUI's on-screen
+   encoder, which needs auth). Add only when actually needed.
+8. **Recordings list at scale** — the WebUI globs and re-renders every 15 s; fine to
+   hundreds of takes, degrades at thousands. Accepted ceiling; revisit with pagination
+   only if real use hits it.
 
-#### Recording Features
-- **Format** - WAV (PCM 24-bit) only; FLAC/MP3 deliberately removed - the recording engine is
-  WAV-only, see Recording Format below. 32-bit internal capture pipeline finalized to 24-bit
-  PCM on disk.
-- **File Naming** - Timestamped files with sample rate, channel info, and `.wav` extension
-- **Real-time Display** - Shows elapsed time, remaining time, and storage
-- **Storage Management** - Automatic free space calculation and display (exact for WAV's
-  fixed uncompressed PCM rate)
-- **Path Management** - Records to /rec by default, USB when selected
+Superseded design notes kept for the record: scheduled recording was **removed from the
+product design** (Round 3) and is fully removed from the codebase; the two GPIO status
+LEDs (GPIO12/16) were **removed** in the same round in favour of button backlights.
 
-#### Level Metering
-- **Peak/RMS Readout** - `astats=metadata=1:reset=1,ametadata=print:file=-` runs as a
-  pass-through audio filter alongside the recording encode (verified: identical file
-  duration/size with and without it); `meterReader` parses the resulting
-  `lavfi.astats.Overall.{Peak,RMS}_level` lines off ffmpeg's stdout into `meterPeakDB`/
-  `meterRMSDB`
-  under `mutex`
-- **Display** - Shown on the recording screen's third line (replacing the filename, which there's
-  no room to show alongside it) and on the remote dashboard's status panel
+## Implementation Status by Subsystem
 
-#### Playback
-- **Play Button** - Plays back the most recently created recording through **Inferno (AoIP)**
-  onto the network (local ALSA playback retired - no analog output); mutually exclusive with
-  recording in both directions
-- **Stop/Cancel** - Stop button or encoder hold stops playback early
+### Hardware Interface Layer
+- **Display (SSD1322, 256×64, SPI)** — complete; FiraCode TTF rendering with named font
+  contexts (statusbar/header/recording/menu/details/alert); brightness via contrast
+  command 0xC1; inert no-op paths in simulator mode.
+- **Rotary encoder (EC11)** — rotate / click / hold with debouncing.
+- **GPIO buttons** — Record (GPIO5), Stop (GPIO6), Play (GPIO13), internal pull-ups.
+- **Button lamps** — *not yet implemented* (Round 3 target; the old GPIO12/16 status LEDs
+  were removed from code and design).
+- **Hardware manager** — unified init/close over the sub-managers + network detection.
 
-#### Scheduled Recording
-- **Removed from the product design** (Round 3 decision). The Schedule menu item, schedule
-  data model (`schedule*` vars), and `scheduleLoop` are slated for removal; recording is
-  manual start/stop only.
+### Recording Engine
+- Persistent **Inferno** server (fetched/pinned by `setup.sh` from the official repos),
+  auto-started when any IP interface gains an address, auto-restarted on sample-rate or
+  channel-count changes, manual restart in Settings; single serialized worker goroutine
+  owns the lifecycle.
+- Pipeline: Inferno → FIFO (`rec/raw/`) → ffmpeg (`s32le` → WAV PCM 24-bit) →
+  `/rec/YYYY-MM-DD/prefix_...wav`. 32-bit internal capture, 24-bit on disk.
+- **Metering tap**: pass-through `astats=metadata=1:reset=1,ametadata=print:file=-`
+  alongside the encode (verified: identical file size with and without it); `meterReader`
+  parses `lavfi.astats.*` lines into peak/RMS globals under the app mutex; peak-hold
+  ballistics (hold + 20 dB/s decay) feed every display.
+- **Start gating** shared by the Record button and the WebUI: only from idle, never over
+  an active take, refused when less than 30 minutes of space remains (with an on-screen
+  warning). Free space always measures `/rec` (the recording media), never the USB stick.
+- WAV INFO chunk via ffmpeg `-metadata` (`date`, `comment`) — verified round-trip via
+  `ffprobe` (WAV INFO silently drops arbitrary keys, hence the fixed field set).
 
-#### Metadata
-- **Tag Presets** - Settings → Tag cycles a fixed preset list (Show, Rehearsal, Soundcheck,
-  Interview, Backup, None); no free-text entry, since the hardware has no keyboard
-- **Auto Date Stamp** - Every recording is tagged with its start time regardless of Tag setting
-- **WAV INFO Chunk** - Written via ffmpeg's `-metadata`, verified round-tripping (via `ffprobe`)
-  on WAV's LIST/INFO chunk. WAV's INFO chunk only maps a fixed field set and silently drops
-  arbitrary keys, which is why only `date`/`comment` are used here rather than a wider set of
-  fields
+### Playback
+- Plays the **most recent** recording (mtime-sorted) through **local ALSA**
+  (`ffmpeg -f alsa default`). Mutually exclusive with recording in both directions.
+- Encoder click toggles play/pause (SIGSTOP/SIGCONT); rotate while paused scrubs 5 s per
+  detent — implemented by restarting ffmpeg with `-ss` at the new offset, keeping a paused
+  track paused; hold exits. Playhead is clamped to `[0, duration]`; duration derives from
+  the WAV size.
+- Stopping always follows SIGTERM with SIGCONT (a SIGSTOP'd process defers SIGTERM —
+  without this, stop-while-paused hangs; same for the seek path).
+- The playing screen shows a progress bar + `elapsed / total` with a `[PAUSED]` marker.
+- **Routing playback out through Inferno/AoIP is the design target, not implemented** —
+  blocked on the Inferno server exposing an input/stream command (see Known Gaps).
 
-#### Display Interface
-- **Status Display** - Current time, remaining time, storage info with enhanced status bar
-- **Menu Navigation** - Hierarchical menu with visual selection indicators
-- **Progress Tracking** - Copy operations show progress bar and percentage
-- **Confirmation Dialogs** - Safety prompts for destructive operations
-- **Status Bar Indicators** - Bracketed text status for USB, Network, and Inferno server (`[USB]`, `[ETH]`, `[INF]`)
+### Level Metering
+- Peak/RMS per channel from the recording/monitor pipeline; WebUI bars colour
+  green/yellow/red by level (−18 dBFS / −6 dBFS breakpoints, sized to the full track so
+  the colour switches at the right level); the OLED stays grayscale (shading + segments).
+- Configurable meter range (floor) and peak-hold decay; WebSocket push every 100 ms with
+  JSON-safe (non-finite-free) dB values.
 
-### 🔧 Hardware Requirements
+### OLED Interface
+- Status bar (time, remaining, storage, `[ETH] [INF] [USB]`), split-screen menu system
+  with scroll, confirmation dialogs for destructive actions, per-day Copy Files browser,
+  idle-browse flow (paged VU meters → waveform → network/token page), Network Info and
+  Remote Access screens (URL + formatted token), WiFi QR screen.
+- Settings menu: Audio (sample rate, channels, tag, prefix), Metering (range, peak hold),
+  Display (brightness, auto-dim), Logging (level), Copy Files, System Options, Network
+  Info, Remote Access, Restart Inferno, WiFi, Exit.
+- Low-disk warning flashes on the idle screen when a record press is refused.
 
-#### Core Components
-- Raspberry Pi 5 (main processor)
-- 2.7" 256×64 OLED Display (SSD1322) via SPI
-- Rotary Encoder (EC11) with push button
-- 3x Momentary buttons (Record, Stop, Play) with backlight lamps
-- Audio is Inferno AoIP (AES67/Dante) over Ethernet - no analog/USB audio I/O
+### Remote Control (WebUI)
+- `remote.go` runs `net/http` on `0.0.0.0` (every up interface, no eth0-only limitation —
+  Round 3), started/stopped by a 5 s poll loop as interfaces come and go; graceful drain
+  with force-close fallback.
+- Auth: token + session cookie. Sessions are distinct random IDs (16-byte) with 12 h
+  server-side expiry, swept on each login and on logout; login is rate-limited per IP;
+  token comparison is constant-time. The cookie never carries the token.
+- Dashboard: OLED PNG mirror (`/api/display.png`, encoded without holding the app mutex —
+  pinned by a stalled-writer regression test), on-screen encoder/buttons calling the exact
+  hardware handlers, settings modal (all persisted settings), status panel, config summary,
+  recordings table (path-keyed download links), **Download ALL** streaming ZIP + manifest.
+- Metering: `/api/meter` one-shot + `/ws/meter` push every 100 ms with a 5 s write
+  deadline per frame (a vanished client can no longer pin the loop) — headroom to tighten
+  the interval later without per-request HTTP overhead.
+- Input endpoints map 1:1 onto the physical controls (`/api/input/encoder/{left,right,
+  click,hold}`, `/api/input/button/{record,stop,play}`), so every guard (mutual exclusion,
+  confirmations, low-disk refusal) applies identically.
 
-#### Wiring Specifications
-```
-OLED Display (SPI):
-  VCC → 3.3V, GND → GND
-  SCLK → GPIO11, MOSI → GPIO10, CS → GPIO8
-  DC → GPIO25, RES → GPIO24
+### Files & Storage
+- Recordings always land on `/rec` (the SD card) in per-day folders; USB is only a
+  copy/export target. Free-space math (30-min rule, remaining readouts) measures `/rec`.
+- Copy to USB recreates the per-day structure; delete-all and format-USB require
+  confirmation; USB format remounts (previously it never did).
+- Download keying is path-relative to `/rec` (basenames can collide across days); the
+  download whitelist checks against the app's own file listing (no path traversal).
 
-Rotary Encoder:
-  A → GPIO17, B → GPIO27, SW → GPIO22
-  VCC → 3.3V, GND → GND
+### Logging
+- `log/slog` with a `slog.LevelVar` threshold: Error/Warn/Info/Debug, **default
+  Error-only** (Round 2). Dual sink: stderr (journald via systemd) +
+  `/var/log/pi9696/app.log` (best-effort; logrotate). Level changeable from the OLED
+  Settings → Logging submenu and the WebUI settings modal; persisted (`logLevelIdx`).
 
-Control Buttons:
-  Record → GPIO5, Stop → GPIO6, Play → GPIO13
-  Common → GND (with internal pull-ups)
+### Persistence
+- `/etc/pi9696/config.json` (path overridable for dev/sim), atomic temp+rename writes:
+  device name, sample rate, channels, tag, prefix, meter range, peak hold, transport
+  mode, log level, OLED brightness, auto-dim, WiFi settings. Applied at boot.
 
-Button Lamps:
-  REC → GPIO12, STOP → GPIO16, PLAY → GPIO TBD
-  Common → GND (via current-limiting resistor)
-```
+## Performance & Deployment
 
-### 📁 Project Structure
+**System**: Pi 5 (RP1 GPIO needs periph v3.8.3+ — pinned newer), Raspberry Pi OS 64-bit
+Trixie+, root for GPIO/SPI/ALSA/USB, port 8080 reachable if the WebUI is used, an Inferno
+AES67/Dante subscription on the network for recording. Idle CPU minimal, ~50 MB RAM,
+~5 W.
 
-```
-PI9696/
-├── main.go                 # Main application with state machine and Inferno management
-├── hardware/               # Hardware abstraction layer
-│   ├── display_ttf.go     # SSD1322 OLED driver with TTF/FiraCode support
-│   ├── firacode_manager.go # Font context/size management, font-face cache
-│   ├── network.go         # Network interface monitoring
-│   ├── encoder.go         # Rotary encoder with button
-│   ├── buttons.go         # GPIO button manager
-│   └── manager.go         # Hardware initialization and coordination
-├── inferno/               # Inferno Audio over IP server directory (not in this repo - see below)
-│   ├── Cargo.toml        # Rust project configuration
-│   └── src/              # Inferno server source code
-├── fonts/                # FiraCode TTF files, downloaded by setup.sh (gitignored)
-├── rec/                  # Final recording output directory
-├── rec/raw/              # Temporary FIFO files for audio pipeline
-├── cmd/
-│   ├── font-converter.go  # Dev tool: converts a TTF into a bitmap font table
-│   └── simcheck/          # Dev tool: renders each screen to PNG via PI9696_SIM
-├── go.mod                 # Go module dependencies
-├── setup.sh              # Complete system setup with Inferno integration
-├── README.md             # Detailed documentation
-├── WIRING.md             # Hardware wiring reference
-└── PROJECT_STATUS.md     # This status document
-```
+**Audio**: up to 192 kHz / 24-bit / 128 ch (top end pending stress testing); ~8.3 MB/min
+at 48 kHz stereo; latency is AoIP-transport dependent.
 
-### 🛠️ Build and Installation
+**Deployment checklist**
+- [ ] Hardware assembled per `WIRING.md`; SPI enabled
+- [ ] `sudo bash setup.sh` (builds Inferno, installs the systemd unit)
+- [ ] Recording verified end-to-end (Inferno reachable; check `[INF]` in the status bar)
+- [ ] USB copy/download verified; WebUI login verified from a browser
+- [ ] Log level left at Error (default) unless debugging
 
-#### Quick Start
-```bash
-# Complete system setup (Raspberry Pi only)
-chmod +x setup.sh
-bash setup.sh
-```
+## Product Decisions (2026-09-04)
 
-#### Development
-```bash
-# Build application
-go build -o pi9696 .
-
-# Build dev tools
-go build -o font-converter ./cmd/font-converter.go
-go build -o simcheck ./cmd/simcheck
-
-# Format code
-gofmt -w .
-
-# Run on a non-Pi dev machine (no SPI/GPIO) - see README "Developing
-# without a Raspberry Pi"
-PI9696_SIM=1 ./pi9696
-```
-
-### 🎯 Key Features Implemented
-
-#### User Interface
-- **Encoder Navigation** - Rotate to navigate, click to select, hold to cancel
-- **Button Controls** - Dedicated record/stop/play buttons
-- **Visual Feedback** - Real-time status updates with a bracketed-text status bar
-- **Menu Protection** - Recording prevents menu access for safety
-- **Inferno Integration** - Visual server status and manual restart capability
-
-#### Audio Processing
-- **High Quality** - Support for 24-bit/192kHz recording (32-bit internal pipeline)
-- **Multi-channel** - Up to 128 channels (hardware dependent)
-- **WAV-only Output** - Fixed WAV (PCM 24-bit) output; no FLAC/MP3 option
-- **Real-time Monitoring** - Live recording time, remaining space, and Peak/RMS level metering
-
-#### File Management
-- **Smart Copying** - Select specific files or copy all
-- **Progress Tracking** - Visual progress bar with percentage
-- **USB Integration** - Auto-detection and mounting
-- **Safety Features** - Confirmation dialogs for destructive operations
-
-#### System Integration
-- **Service Management** - Systemd integration for automatic startup
-- **Network Management** - Automatic eth0 monitoring and Inferno server lifecycle
-- **Audio Optimization** - ALSA configuration for low latency
-- **Resource Management** - Proper permissions and user groups
-- **Process Management** - Persistent Inferno server with automatic restart
-- **Logging** - Structured logging with rotation (journald + `/var/log/pi9696/app.log`).
-  Multi-tier (Error / Warn / Info / Debug), default Error-only, level set from the OLED
-  Settings → Logging submenu and the WebUI settings modal and persisted (Round 2 decision;
-  implemented in `xlog` package)
-
-### 🚀 Deployment Status
-
-#### Ready for Production
-- All core functionality implemented
-- Hardware drivers complete and tested (simulated)
-- Build system functional
-- Installation scripts ready
-- Documentation complete
-
-#### Deployment Requirements
-- Raspberry Pi 5 with Raspberry Pi OS (64-bit), Trixie release or newer.
-  Pi 5's GPIO is handled by a separate RP1 southbridge chip via the modern
-  Linux GPIO character-device API (`/dev/gpiochip*`), not the older
-  memory-mapped register access earlier Pi models used - periph.io/x/host/v3
-  only gained Pi 5 support in v3.8.3 (Jan 2025); this project requires v3.8.3
-  or newer (currently pinned to a later patch release) for GPIO to work at
-  all on real Pi 5 hardware.
-- Hardware components wired per WIRING.md
-- Root access for GPIO and system service installation
-- Port 8080 reachable on the connected interface(s) if the web remote control is going to be
-  used (see the Remote Control section above for the plain-HTTP/no-TLS caveat before exposing
-  this beyond a trusted LAN)
-- An Inferno (AES67/Dante) source/subscription reachable via Ethernet for recording
-
-### 🔍 Testing Status
-
-#### Hardware Testing
-- Display test utility - tests SPI communication and rendering
-- Encoder test - rotation detection and button handling
-- Button test - GPIO input with debouncing
-- Comprehensive test - all components simultaneously
-
-#### Software Testing
-- State machine transitions
-- Menu navigation logic
-- File operations (copy, delete, format)
-- Audio recording workflow
-- USB mount/unmount handling
-
-### 📊 Performance Characteristics
-
-#### System Requirements
-- CPU: Minimal load during idle, moderate during recording
-- Memory: ~50MB RAM usage typical
-- Storage: Depends on recording length and quality
-- Power: ~5W total system consumption
-
-#### Audio Performance
-- Latency: AoIP network transport dependent (Inferno AES67/Dante over Ethernet)
-- Quality: Up to 24-bit/192kHz with 32-bit internal processing pipeline
-- Channels: 1-128 (configurable; Pi 5 throughput at the top end to be confirmed by stress testing)
-- File Size: ~8.3MB/minute for stereo 48kHz/24-bit
-- Network: Requires Ethernet connectivity for Inferno Audio over IP server
-- Pipeline: Inferno Server → FIFO → FFmpeg → WAV file
-
-### 🔮 Future Enhancements
-
-#### Potential Additions
-- **Load Balancing** - Multiple Inferno server instances (not recommended - see below)
-
-#### Hardware Expansion
-- **Additional I/O** - More buttons or controls
-- **Network Connectivity** - Ethernet or WiFi integration
-- **Storage Expansion** - RAID or larger storage options
-
-#### Remote Control
-- **Web UI** - `remote.go` runs a `net/http` server bound to `0.0.0.0` (every up interface), auto-
-  started/stopped by `remoteControlLoop` as any interface gains/loses an address, mirroring
-  `networkMonitorLoop`'s polling approach but kept off the app mutex (binding/shutting down a
-  listener isn't instant). This serves the control surface on any IP-based interface (eth0/wlan0),
-  no interface limitation (Round 3 decision). Access is gated by token + session auth.
-- **OLED mirror** - `GET /api/display.png` encodes `TTFDisplay.bufferToImage()` (the same packed
-  framebuffer real hardware receives, not a separate HTML/CSS reimplementation of the layout) to
-  PNG; the dashboard polls it via a vanilla-JS interval (not htmx - refreshing an `<img>` isn't a
-  fragment swap). Encodes into an in-memory buffer under `mutex` and writes to the client only
-  after releasing it - encoding directly into the `http.ResponseWriter` while holding the lock
-  would freeze `render()` and every button/encoder callback for as long as a slow/stalled
-  client's network write took (caught before release; regression test
-  `TestDisplayPNGDoesNotBlockMutex` uses a `Write()`-blocking `http.ResponseWriter` to prove the
-  lock is free during a stalled client write, and was confirmed to fail against the original
-  buggy version before the fix)
-- **Remote encoder/buttons** - `POST /api/input/{encoder/{left,right,click,hold},button/{record,stop,play}}`
-  call the exact same `onEncoderRotate`/`onEncoderClick`/`onEncoderHold`/`onButtonPress`
-  functions physical hardware calls, so every existing guard (recording/playback mutual
-  exclusion, confirmation dialogs before Delete All/Format USB/Shutdown/Restart) applies
-  identically - no parallel control path that could drift out of sync or skip a safety check
-- **Config panel** - `GET /api/config` is a read-only summary (sample rate, channels, format,
-  tag, schedule, Inferno status, network); mutating settings goes through the encoder/button
-  controls above, not a second settings form
-- **Auth** - An 8-character token (crypto/rand, ~40 bits of entropy, regenerated every process
-  start, never written to disk) shown on the OLED via Settings → Remote Access as two groups of
-  4 (`formatToken`) for readability; `/login` accepts the token with or without a separator
-  (`normalizeToken`) and exchanges it for an `HttpOnly`/`SameSite=Strict` session cookie. The
-  cookie value is a distinct random session ID stored server-side (`sessionStore`) with a 12h
-  lifetime, so it never carries the token and actually expires on the server (logout revokes
-  it). A per-IP rate limiter locks out after 5 failed attempts for 60s
-- **Scope** - Start/stop recording, full menu navigation (via the encoder/button endpoints),
-  live status (polled via htmx), and recording downloads - deliberately no upload, no arbitrary
-  file access (downloads are checked against `recordingFiles()`'s live listing, not just
-  sanitized user input). Destructive actions (delete/format/shutdown/restart) are reachable
-  remotely, same as physically, and still require navigating to and confirming their dialog -
-  see the security note below
-- **Frontend** - htmx 4.0.0 (vendored via setup.sh with a pinned version + checksum, not loaded
-  from a CDN at runtime - this device shouldn't need internet access to serve its own LAN control
-  page); cookie-based auth was chosen specifically because it sidesteps htmx 4's new
-  `hx-headers`-needs-`:inherited`-to-cascade behavior entirely (no custom auth header needed)
-- **Dashboard transport** - The status section leads with a stylised rack-mount reel-to-reel deck
-  (one responsive SVG, `remote.go`'s `dashboardTmpl`): two NAB reels whose inner spindle groups
-  spin during playback/recording (reverse on the supply reel), an angled tape path (supply reel → 
-  guide idlers → read/write head → take-up reel) with a travelling-dash "tape moving" pulse, and a
-  skewed-italic 7-segment digital time counter (rendered inline as SVG segment lines, lit
-  by `setSeg7` from the same `elapsed` the status panel shows) set in the head block's window.
-  Paused freezes the reels and tape while the time counter keeps showing the frozen elapsed time.
-  The deck lives INSIDE the centre "Transport Status" panel, so the reel interface is the visual
-  state of the transport: the live/text status fragment (`/api/status`, 2s poll) and its action
-  buttons sit directly beneath the reels, and the "Status" panel keeps only the static
-  configuration table (`/api/config`, 3s poll). The grid centre column is widened (`1fr 1.6fr 1fr`)
-  to give the reels room, and the standalone full-width deck section below the grid was removed.
-- **Level meters** - One meter per channel (a shared VU log-taper dB-FS scale alongside the
-  per-channel tracks, fed over a WebSocket at ~100ms with a slow-poll fallback) pinned to the
-  bottom of the viewport as a collapsible footer (`.meter-footer`, state remembered in
-  `localStorage`) so the levels stay visible while operating the transport; the header shows a
-  live STEREO/MONO/N-channel badge. The page's reserved bottom padding and the meter footer both
-  collapse/expand together, and `prefers-reduced-motion` disables the reel/tape/collapse
-  animations.
-- **Settings modal** - The settings sheet is a HUD-styled panel with a fixed header bar (title +
-  close) and a scrollable body, so the long setting list never runs past the viewport. Settings
-  are grouped into sections (Device, Audio, Metadata, Metering, Transport, Network), each laid
-  out as a responsive two-column grid of consistent `.setting-row` cards (label + control), the
-  WiFi panel included. The same htmx fragments power the rows, so changes still round-trip
-  through the same handlers as before.
-- **Known limitations** - Plain HTTP, no TLS (no realistic cert story on a device with no stable
-  hostname), documented in README as unsuitable for untrusted/shared networks as-is. Token
-  possession is now equivalent to physical presence at the front panel (not just recording
-  control), since the encoder/button endpoints reach the full menu system including destructive
-  confirmations - also documented in README next to the plain-HTTP caveat.
-
-#### Notes on Remaining Items
-- **Load Balancing / Multiple Inferno Instances** - Confirmed out of scope: exactly one Inferno
-  instance should run at a time. The current architecture (`infernoWorker`, a single
-  `infernoCmd`, a single `fifoPath`) already enforces that and is not being changed.
-
-## 📌 Product Decisions (2026-09-04)
-
-Product-behaviour decisions captured from the design review. Items marked *(future)* are noted
-for later releases; everything else reflects the intended current behaviour of the device.
+Product-behaviour decisions captured from the design review. Items marked *(future)* are
+noted for later releases; everything else reflects the intended current behaviour.
 
 ### Boot Behaviour
-- **Default on power-on: auto-monitor input.** The unit should begin monitoring audio input
-  (level meters) by default rather than sitting on a pure idle/standby screen.
+- **Default on power-on: auto-monitor input.** The unit begins monitoring audio input
+  (level meters) rather than sitting on a pure idle/standby screen.
 
 ### Recording Backups & Data Protection
 - **Recordings stay on `/rec`**; the user copies files to USB via the OLED interface or
   downloads them via the WebUI.
-- **Low-space warning:** warn the user when there is **less than 30 minutes** of recording
-  space remaining at the current settings (already implemented - see `diskWarnMinutes`).
+- **Low-space warning:** warn when there is **less than 30 minutes** of recording space
+  remaining at the current settings (implemented — `diskWarnMinutes`).
 
 ### WebUI Recordings Download
-- **Single-file download** one recording at a time from the file browser, **plus an option to
-  download ALL recordings** in one action.
+- **Single-file download** plus **download ALL** in one action (implemented as a single
+  streaming ZIP with a manifest).
 
 ### WebUI Localization
-- **Add a language toggle** to let users switch the dashboard interface language *(future)*.
+- **Language toggle** for the dashboard interface *(future)*.
 
 ### Clock & Timestamps
 - **24-hour (HH:MM)** time format throughout the device and WebUI.
 
 ### Level Meters
-- **Add color coding** (green/yellow/red) near clipping: green below -18dBFS, yellow between
-  -18 and -6dBFS, red above -6dBFS.
+- **Color coding** near clipping: green below −18 dBFS, yellow −18…−6 dBFS, red above
+  −6 dBFS — **WebUI only** (Round 2 keeps the OLED grayscale).
 
 ### Power Handling
-- **Graceful shutdown prompt**: a confirmation dialog before shutting down or restarting
-  (already the current behaviour via the System Options menu).
+- **Graceful shutdown prompt**: a confirmation dialog before shutdown/restart.
 
 ### Recording Length
-- **No user recording time limit**; the device records until manually stopped or storage is
-  exhausted. **Auto-stop gracefully when less than 1 minute of space remains** to avoid an
-  unrecoverable/corrupt take.
+- **No user recording time limit**; records until manually stopped or storage is
+  exhausted. **Auto-stop gracefully when less than 1 minute of space remains** to avoid
+  an unrecoverable/corrupt take. *(Not yet implemented — see Known Gaps #1.)*
 
 ### Power Source Monitoring
-- **Not needed** - assume mains power, no battery/UPS monitoring *(out of scope)*.
+- **Not needed** — mains power assumed; no battery/UPS monitoring *(out of scope)*.
 
 ### Software Updates
-- OTA/software updates are **out of scope for initial development** but will be part of the
-  final release *(future)*.
+- OTA/software updates are **out of scope for initial development**, part of the final
+  release *(future)*.
 
 ### WebUI Visual Style (authoritative spec)
 - **Dark, futuristic SciFi HUD** on a predominantly **black and deep-navy** palette.
-- **Electric blue + cyan** as the primary accent colours; **white** for important information.
-- Should feel like an advanced spacecraft computer / AI operating system / high-end industrial
-  control system - **not** a cyberpunk website.
-- Clean geometric layouts, dark panels, thin blue/cyan borders, subtle transparency, technical
-  icons, precise information hierarchy.
+- **Electric blue + cyan** as the primary accent colours; **white** for important
+  information.
+- Should feel like an advanced spacecraft computer / AI operating system / high-end
+  industrial control system — **not** a cyberpunk website.
+- Clean geometric layouts, dark panels, thin blue/cyan borders, subtle transparency,
+  technical icons, precise information hierarchy.
 - Typography: modern, highly legible; technical/monospaced for system information.
-- Uncluttered, generous dark space, clear separation between navigation / data / controls /
-  status.
-- Blue/cyan glow used **sparingly** to highlight active controls, selections, system activity,
-  and important data.
-- Subtle futuristic details (fine grid patterns, small status indicators, telemetry, restrained
-  holographic effects) but **no excessive neon, heavy gradients, visual clutter, or bright
-  glow everywhere**.
+- Uncluttered, generous dark space, clear separation between navigation / data /
+  controls / status.
+- Blue/cyan glow used **sparingly** to highlight active controls, selections, system
+  activity, and important data.
+- Subtle futuristic details (fine grid patterns, small status indicators, telemetry,
+  restrained holographic effects) but **no excessive neon, heavy gradients, visual
+  clutter, or bright glow everywhere**.
 - Overall: sophisticated, functional, precise, technologically advanced.
 
 ### Playback
 - **Add seek/scrub, only during playback** (pause + forward/rewind within a recording).
-
+  *(Implemented in 1.16.0 — encoder click = play/pause, rotate-while-paused = seek.)*
+- **Target path**: playback goes out through **Inferno/AoIP**; local ALSA playback is
+  retired eventually. **Not yet implemented** — the Inferno contract is receive-only
+  today, so playback still goes to local ALSA (see Known Gaps #4).
 ### Product Decisions - Round 2 (2026-09-04)
 
 Second design-review pass. Items marked *(future)* are noted for later releases.
@@ -523,6 +347,18 @@ Third design-review pass: fills in the specifics needed to finish the build.
   unrelated edits.
 
 ### Feature History
+
+- **Audit cuts (2026-09-07).** Whole-tree over-engineering audit; ~800 lines removed in
+  eight commits with zero feature change (full suite green after each): dead
+  HardwareManager/FiraCodeManager surface (self-test utilities, JSON diagnostics, unused
+  getters), the WebUI demo mode (synthetic VU, absent from every design round), the GPIO
+  status LEDs (per Round 3), cmd/font-converter (abandoned bitmap-embed tool), the xlog
+  package (replaced by stdlib log/slog — see the logging change above), dead NetworkDetector
+  surface, and five near-identical settings-dropdown templates consolidated into one shared
+  template (byte-identical output, verified by rendering before/after). Also: the Download
+  ALL button got a visible label and an explanatory empty-state page instead of a 404, and
+  sim mode now prints the WebUI access token to stderr (the OLED screen that shows it is
+  unreachable without input in sim).
 
 - **Docs (2026-09-06).** Corrected the playback documentation to match the code. The README
   and design notes claimed playback is sent out through Inferno/AoIP, but `startPlayback`
@@ -638,54 +474,33 @@ Third design-review pass: fills in the specifics needed to finish the build.
   fixes a pre-existing bug where the WiFi submenu's Back returned to Settings row 12 (now
   9, matching the renumbered menu instead of wrapping oddly).
 
+
 ### ✅ Quality Assurance
 
-#### Code Quality
-- Proper error handling throughout
-- Concurrent programming with mutexes
-- Clean separation of concerns
-- Comprehensive documentation
+- `go build ./...`, `go vet ./...` and the full `go test ./...` suite are green on every
+  commit (one feature/fix per commit; see the history above).
+- The suite runs the app's real handlers over `httptest` (auth flows, recordings API,
+  download ZIP, settings endpoints), the playback/seek lifecycle against a fake ffmpeg,
+  and the Inferno worker concurrency paths against a stub server.
+- Display regressions are checked visually via `cmd/simcheck` (renders every OLED screen
+  to PNG) and, for the WebUI deck, by rendering the served SVG markup.
+- Hardware behaviour beyond sim (SPI/GPIO timing, ALSA device naming, real AoIP) is
+  verified on the unit during deployment — see the checklist above.
 
-#### Hardware Integration
-- Robust GPIO handling
-- SPI communication with error recovery
-- Hardware abstraction for testability
-- Graceful degradation on hardware failures
+### 📞 Documentation Map
 
-### 📋 Deployment Checklist
-
-- [ ] Hardware assembled per WIRING.md
-- [ ] Raspberry Pi OS installed and updated
-- [ ] SPI interface enabled in raspi-config
-- [ ] Audio interface connected and tested
-- [ ] Run setup.sh script
-- [ ] Test hardware with test utilities
-- [ ] Verify recording functionality
-- [ ] Configure as system service
-- [ ] Test USB mount/unmount
-- [ ] Verify all menu functions
-
-### 📞 Support Information
-
-#### Documentation
-- README.md - Complete setup and usage guide, including `PI9696_SIM` dev workflow
-- WIRING.md - Hardware connection reference
-- setup.sh - Automated setup with Inferno server support
-- Comments throughout source code
-
-#### Troubleshooting
-- `cmd/simcheck` for checking display layout without hardware
-- Detailed error messages and logging
-- System diagnostic commands in documentation
-- Common issues and solutions documented
+- `README.md` — specifications, features, system architecture, build & install, usage,
+  remote control + security posture, troubleshooting, repository layout
+- `WIRING.md` — pinouts, wiring, power budget, construction and bring-up testing
+- `setup.sh` — automated install (system prep, fonts, Inferno build, systemd unit)
+- Source comments carry the design rationale alongside the code they explain
 
 ---
 
-**Project Status: READY FOR DEPLOYMENT**
+**Project Status: feature-complete per the Round 3 design; deployment blocked only on
+hardware bring-up. The known gaps list above is the honest remainder.**
 
-The PI9696 audio recorder is complete and ready for hardware assembly and deployment. All software components are implemented, tested (in simulation), and documented. The system provides a professional audio recording solution suitable for studio or live applications.
-
-**Last Updated:** 2026-09-06
-**Version:** 1.13.0 - Recording filename prefix (default `recording`, preset list on OLED
-+ free-text WebUI field, validated and persisted).
-**Maintainer:** Development Team
+**Version:** 1.16.0 — playback seek/scrub (encoder click = play/pause, rotate-while-paused
+= seek, relative-offset position display), plus the over-engineering audit cuts
+(~800 lines: dead manager surface, demo mode, GPIO status LEDs, font-converter tool,
+xlog → log/slog, dead network code, template consolidation).
