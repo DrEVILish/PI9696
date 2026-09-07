@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"pi9696/hardware"
-	"pi9696/xlog"
 
 	"golang.org/x/net/websocket"
 )
@@ -1326,17 +1325,17 @@ func TestDecayPeakHoldHoldsThenFalls(t *testing.T) {
 }
 
 func TestLogLevelSetAndPersist(t *testing.T) {
-	origLevel, origState, origMenu := xlog.GetLevel(), currentState, selectedMenu
+	origLevel, origState, origMenu := currentLogLevel(), currentState, selectedMenu
 	t.Cleanup(func() {
-		xlog.SetLevel(origLevel)
+		applyLogLevel(origLevel)
 		currentState, selectedMenu = origState, origMenu
 	})
 
 	mutex.Lock()
 	applyLogLevel(LogDebug)
 	mutex.Unlock()
-	if xlog.GetLevel() != LogDebug {
-		t.Fatalf("expected applyLogLevel to set Debug, got %d", xlog.GetLevel())
+	if currentLogLevel() != LogDebug {
+		t.Fatalf("expected applyLogLevel to set Debug, got %d", currentLogLevel())
 	}
 
 	mutex.Lock()
@@ -1345,8 +1344,8 @@ func TestLogLevelSetAndPersist(t *testing.T) {
 	mutex.Unlock()
 
 	onEncoderClick()
-	if xlog.GetLevel() != LogInfo {
-		t.Fatalf("expected click on Info row to set LogInfo, got %d", xlog.GetLevel())
+	if currentLogLevel() != LogInfo {
+		t.Fatalf("expected click on Info row to set LogInfo, got %d", currentLogLevel())
 	}
 
 	mutex.Lock()
@@ -1362,10 +1361,10 @@ func TestLogLevelSetAndPersist(t *testing.T) {
 	mutex.Unlock()
 	onEncoderClick()
 	mutex.Lock()
-	backToSettings := currentState == StateSettings && xlog.GetLevel() == LogInfo
+	backToSettings := currentState == StateSettings && currentLogLevel() == LogInfo
 	mutex.Unlock()
 	if !backToSettings {
-		t.Fatalf("expected Back to return to Settings keeping Info, got state=%d level=%d", currentState, xlog.GetLevel())
+		t.Fatalf("expected Back to return to Settings keeping Info, got state=%d level=%d", currentState, currentLogLevel())
 	}
 
 	// A raised level round-trips through the persisted config.
@@ -1376,8 +1375,8 @@ func TestLogLevelSetAndPersist(t *testing.T) {
 
 	persistConfig()
 	loadPersistedConfig()
-	if xlog.GetLevel() != LogInfo {
-		t.Fatalf("expected persisted log level Info to reload, got %d", xlog.GetLevel())
+	if currentLogLevel() != LogInfo {
+		t.Fatalf("expected persisted log level Info to reload, got %d", currentLogLevel())
 	}
 }
 

@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"pi9696/xlog"
+	"log/slog"
 
 	"golang.org/x/image/font"
 )
@@ -76,7 +76,7 @@ func NewFiraCodeManager() (*FiraCodeManager, error) {
 	}
 	manager.fontFaces[fontFaceKey(config.Regular, config.sizes["MainContent"])] = display.font
 
-	xlog.Infof("FiraCode manager initialized successfully")
+	slog.Info("FiraCode manager initialized successfully")
 	return manager, nil
 }
 
@@ -121,10 +121,10 @@ func (fc *FiraCodeConfig) ValidateInstallation() error {
 	}
 
 	if len(missingOptional) > 0 {
-		xlog.Warnf("Optional FiraCode fonts not found: %v", missingOptional)
+		slog.Warn(fmt.Sprintf("Optional FiraCode fonts not found: %v", missingOptional))
 	}
 
-	xlog.Infof("FiraCode fonts validated: Regular=%s, Bold=%s", fc.Regular, fc.Bold)
+	slog.Info(fmt.Sprintf("FiraCode fonts validated: Regular=%s, Bold=%s", fc.Regular, fc.Bold))
 	return nil
 }
 

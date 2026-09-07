@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"pi9696/hardware"
-	"pi9696/xlog"
 
 	"github.com/skip2/go-qrcode"
 )
@@ -161,7 +160,7 @@ func loadPersistedConfig() {
 	wifiPassword = c.WifiPassword
 
 	logInfof("Loaded persisted config from %s (device %q, %dkHz %dch WAV, log=%s)",
-		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount, logLevelNames[int(xlog.GetLevel())])
+		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount, logLevelNames[int(currentLogLevel())])
 }
 
 // persistConfig snapshots the current non-destructive settings to ConfigPath.
@@ -177,7 +176,7 @@ func persistConfig() {
 		VURangeIdx:        vuRangeIdx,
 		PeakHoldIdx:       peakHoldIdx,
 		TransportMode:     transportMode,
-		LogLevelIdx:       int(xlog.GetLevel()),
+		LogLevelIdx:       int(currentLogLevel()),
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
 		WifiEnabled:       wifiEnabled,
@@ -2963,7 +2962,7 @@ func renderSettingsMenu() {
 		{Label: "Audio →", Value: fmt.Sprintf("WAV %dch", channelCount)},
 		{Label: "Metering →", Value: fmt.Sprintf("%ddB", int(vuRangeOptions[vuRangeIdx]))},
 		{Label: "Display →", Value: fmt.Sprintf("%d%%", oledBrightnessPct)},
-		{Label: "Logging →", Value: logLevelNames[int(xlog.GetLevel())]},
+		{Label: "Logging →", Value: logLevelNames[int(currentLogLevel())]},
 		{Label: "Copy Files →", Value: ""},
 		{Label: "System Options →", Value: ""},
 		{Label: "Network Info →", Value: ""},
@@ -3504,7 +3503,7 @@ func renderLoggingMenu() {
 	items := make([]hardware.MenuItem, 0, len(logLevelNames)+1)
 	for i, name := range logLevelNames {
 		mark := " "
-		if LogLevel(i) == xlog.GetLevel() {
+		if LogLevel(i) == currentLogLevel() {
 			mark = "●"
 		}
 		items = append(items, hardware.MenuItem{Label: name, Value: mark})

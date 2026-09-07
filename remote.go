@@ -28,7 +28,6 @@ import (
 	"golang.org/x/net/websocket"
 
 	"pi9696/hardware"
-	"pi9696/xlog"
 )
 
 // remoteToken gates every route except /login. It's generated fresh at each
@@ -796,7 +795,7 @@ func handleAPISettingsVURange(w http.ResponseWriter, r *http.Request) {
 }
 
 func logLevelOptionsView() optionsView {
-	return optionsView{Options: logLevelNames, Idx: int(xlog.GetLevel())}
+	return optionsView{Options: logLevelNames, Idx: int(currentLogLevel())}
 }
 
 func handleAPISettingsLogLevel(w http.ResponseWriter, r *http.Request) {
