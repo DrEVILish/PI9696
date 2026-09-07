@@ -1846,7 +1846,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Generate WiFi QR code as base64 PNG for the settings modal
 	var qrBase64 string
 	if wifiEn && wifiS != "" {
-		if code, err := qrcode.New(fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", wifiS, wifiP), qrcode.Medium); err == nil {
+		if code, err := qrcode.New(wifiQRContent(), qrcode.Medium); err == nil {
 			png, _ := code.PNG(256)
 			qrBase64 = base64.StdEncoding.EncodeToString(png)
 		}
