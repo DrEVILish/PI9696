@@ -80,8 +80,10 @@ func isSimMode() bool {
 // dimDimBrightnessPct, after dimOffTimeout it goes to 0 (effectively off),
 // and any input (encoder or buttons, including the WebUI equivalents, which
 // flow through the same handlers) wakes it back to the user's brightness.
-// It is a display-saver, not a recording/playback control - it applies
-// regardless of state, per the design decision.
+// It is a display-saver for idle use only: during an active recording or
+// playback session the panel stays at full brightness (see
+// displaySessionActive), because the OLED is the operator's live status
+// surface there and must not go dark on its own.
 const (
 	dimTimeout          = 30 * time.Second
 	dimOffTimeout       = 2 * time.Minute
@@ -218,7 +220,7 @@ func applyAutoDimLocked(now time.Time) {
 		lastInputTime = now
 	}
 	target := 0
-	if autoDimEnabled {
+	if autoDimEnabled && !displaySessionActive() {
 		idle := now.Sub(lastInputTime)
 		if idle > dimOffTimeout {
 			target = 2
@@ -241,6 +243,15 @@ func applyAutoDimLocked(now time.Time) {
 	default:
 		hwManager.SetBrightness(oledBrightnessPct)
 	}
+}
+
+// displaySessionActive reports whether the unit is in an active take or
+// playback: states where the OLED is the operator's primary status surface
+// (meters, transport, timecode) and must not dim/off just because the
+// encoder hasn't been touched. Auto-dim is a display-saver for idle use, not
+// for a live session the operator is watching.
+func displaySessionActive() bool {
+	return isRecording || playbackCmd != nil
 }
 
 // noteActivity records an input and wakes a dimmed/off display back to the
