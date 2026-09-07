@@ -2221,6 +2221,15 @@ func stopPlayback() {
 	playbackPausedElapsed = 0
 	if playbackCmd != nil && playbackCmd.Process != nil {
 		playbackCmd.Process.Signal(syscall.SIGTERM)
+		// A paused track is frozen with SIGSTOP (see pausePlayback), and a
+		// stopped process defers signal delivery until it's continued: the
+		// SIGTERM above would sit pending forever, ffmpeg would never exit,
+		// the reaping goroutine would never run, and the UI would be stuck
+		// in Paused (gracefulShutdown waits on that goroutine, so
+		// shutdown-while-paused would hang the whole app). SIGCONT wakes it
+		// so the TERM is delivered; for a running process SIGCONT is a
+		// harmless no-op.
+		playbackCmd.Process.Signal(syscall.SIGCONT)
 	}
 }
 
