@@ -226,7 +226,9 @@ available on the remote control dashboard.
 ### Playback
 
 Press **Play** while idle to play back the most recently created recording (WAV). Playback is
-sent **out through Inferno** (AES67/Dante) onto the network - there is no local analog output.
+currently sent to the local ALSA output device (`ffmpeg -f alsa default`). Note this does **not**
+yet match the product decision that playback should go out through **Inferno** (AES67/Dante) onto
+the network — that routing is not yet implemented on the Inferno side (see PROJECT_STATUS.md).
 Press **Stop** or hold the encoder to stop playback early. Playback and recording are mutually
 exclusive - each button is a no-op while the other is active.
 
