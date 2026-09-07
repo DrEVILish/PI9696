@@ -663,6 +663,13 @@ func main() {
 	lastInputTime = time.Now()
 
 	remoteToken = generateRemoteToken()
+	// Sim mode has no hardware input path, so the OLED's Remote Access screen
+	// (the only place the token is displayed) is unreachable - print it
+	// directly to stderr instead (not through the leveled logger, which
+	// defaults to Error-only). Real hardware keeps the token OLED-only.
+	if isSimMode() {
+		fmt.Fprintln(os.Stderr, "sim mode: remote access token", formatToken(remoteToken))
+	}
 
 	setupHardwareCallbacks()
 	go infernoWorker()
