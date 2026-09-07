@@ -490,39 +490,6 @@ func (fcm *FiraCodeManager) GetDisplay() *TTFDisplay {
 	return fcm.display
 }
 
-// GetCurrentFont returns the currently active font path
-func (fcm *FiraCodeManager) GetCurrentFont() string {
-	return fcm.currentFont
-}
-
-// GetCurrentSize returns the currently active font size
-func (fcm *FiraCodeManager) GetCurrentSize() float64 {
-	return fcm.currentSize
-}
-
-// GetAvailableFonts returns a list of available FiraCode variants
-func (fcm *FiraCodeManager) GetAvailableFonts() map[string]string {
-	fonts := make(map[string]string)
-
-	variants := map[string]string{
-		"Regular":  fcm.config.Regular,
-		"Bold":     fcm.config.Bold,
-		"Light":    fcm.config.Light,
-		"Medium":   fcm.config.Medium,
-		"SemiBold": fcm.config.SemiBold,
-		"Retina":   fcm.config.Retina,
-	}
-
-	// Only include fonts that exist
-	for name, path := range variants {
-		if _, err := os.Stat(path); err == nil {
-			fonts[name] = path
-		}
-	}
-
-	return fonts
-}
-
 // Close releases resources used by the FiraCode manager
 func (fcm *FiraCodeManager) Close() error {
 	for _, face := range fcm.fontFaces {
