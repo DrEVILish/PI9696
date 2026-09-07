@@ -540,6 +540,14 @@ Third design-review pass: fills in the specifics needed to finish the build.
   control server now binds `0.0.0.0` (every interface) instead of eth0's IP only, so the
   WebUI is reachable over any interface (eth0/wlan0) per the Round 3 decision.
 
+- **1.15.0 - WebUI meter colors (level-accurate).** Per the Round 3 decision, green/yellow/red
+  meter coloring applies to the WebUI only (the monochrome OLED stays grayscale). The dashboard's
+  per-channel fill already had a green→yellow→red gradient, but it was sized to the fill's own
+  height, so the top of every bar was red regardless of level and it never actually "switched"
+  at the −18dBFS point. The gradient is now sized to the full meter-track height and pinned to
+  the bottom (`background-size:100% var(--meter-h)`), so a bar reveals only the color band up to
+  its current level: low reads green, mid reads yellow, hot reads red. No OLED or backend change.
+
 - **1.14.0 - Download-all ZIP bundle.** The WebUI "Download ALL" control (a new button beside the
   Recordings heading) streams every finished recording into a single ZIP archive via a new
   `GET /download-all` endpoint (`handleDownloadAll`). It writes the archive streaming - each file

@@ -221,7 +221,8 @@ While recording, the third line of the recording screen shows Peak and RMS level
 still visible via Copy Files). Levels come from ffmpeg's own `astats` filter running alongside
 the encode (a pass-through filter - it doesn't touch the audio, just reads and reports it), so
 there's no separate metering pipeline to keep in sync with the recording. The same reading is
-available on the remote control dashboard.
+available on the remote control dashboard, where the meter bars are color-coded green/yellow/red
+by level (the OLED stays grayscale).
 
 ### Playback
 
