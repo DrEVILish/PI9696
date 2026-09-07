@@ -575,13 +575,10 @@ var (
 	autoMonitor            bool          // true if the input monitor was started automatically at startup (see doStartInferno) rather than by the idle-browse flow; it persists across idle-browse sessions and is only stood down for recording/playback
 	playbackPausedElapsed  time.Duration // frozen playback time captured the moment playback paused - see pausePlayback
 	playbackDuration       time.Duration // total duration of the file currently playing, used to clamp seeks and show position as a relative offset
-	demoMode               bool          // synthetic VU-only demo, no real audio - see startDemo/demoLoop
-	demoKind               string
-	demoStart              time.Time
-	idleBrowsePage         int        // current page within StateIdleBrowse - see onEncoderRotate
-	idleBrowseMonitorOwned bool       // true if entering idle-browse started the monitor itself, so it knows to stop it again on exit rather than killing a monitor session started deliberately from the web UI
-	editingParameter       bool       // true once a parameter row (Sample Rate/Channel/Tag in Settings) has been clicked into - only then does rotation adjust its value instead of navigating
-	deviceName             = "PI9696" // unit name shown on the login/dashboard and passed to Inferno as INFERNO_NAME; changeable only from the authenticated dashboard
+	idleBrowsePage         int           // current page within StateIdleBrowse - see onEncoderRotate
+	idleBrowseMonitorOwned bool          // true if entering idle-browse started the monitor itself, so it knows to stop it again on exit rather than killing a monitor session started deliberately from the web UI
+	editingParameter       bool          // true once a parameter row (Sample Rate/Channel/Tag in Settings) has been clicked into - only then does rotation adjust its value instead of navigating
+	deviceName             = "PI9696"    // unit name shown on the login/dashboard and passed to Inferno as INFERNO_NAME; changeable only from the authenticated dashboard
 	currentState           = StateIdle
 	menuMode               = SettingsMenu
 	selectedMenu           = 0
@@ -674,7 +671,6 @@ func main() {
 	go detectUSB()
 	go updateLoop()
 	go networkMonitorLoop()
-	go demoLoop()
 	go peakHoldLoop()
 	go mdnsLoop()
 
@@ -1593,8 +1589,8 @@ func doStartInferno() {
 	// the Inferno server is up, start the lightweight FIFO reader that feeds
 	// the live VU meters. startMonitor is expected to run under the app
 	// mutex (same as every other caller) and guards itself against
-	// recording/demo/duplicate sessions, so this never steps on a take.
-	if !isRecording && !demoMode {
+	// recording/duplicate sessions, so this never steps on a take.
+	if !isRecording {
 		startMonitor()
 		if monitoring {
 			autoMonitor = true
@@ -1712,7 +1708,6 @@ func startRecording() {
 	if monitoring {
 		stopMonitor()
 	}
-	demoMode = false
 
 	recordStart = time.Now()
 	timestamp := recordStart.Format("20060102_150405")
@@ -1926,7 +1921,6 @@ func startMonitor() {
 	if infernoState != InfernoRunning || isRecording || monitoring {
 		return
 	}
-	demoMode = false
 
 	cmd := exec.Command("ffmpeg", "-nostdin",
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRates[sampleRateIdx]),
@@ -1984,64 +1978,6 @@ func startMonitor() {
 func stopMonitor() {
 	if monitorCmd != nil && monitorCmd.Process != nil {
 		monitorCmd.Process.Signal(syscall.SIGTERM)
-	}
-}
-
-// startDemo/stopDemo/demoLoop drive a synthetic, no-audio-hardware-required
-// VU display for showing off the UI (dashboard reels/VFD/meter bridge, and
-// eventually the OLED's own VU pages) without Inferno or a real input
-// signal. demoKind only changes how the dashboard labels it ("recording"
-// vs "playback") - the generated levels are identical either way.
-func startDemo(kind string) {
-	if isRecording || monitoring || demoMode {
-		return
-	}
-	demoMode = true
-	demoKind = kind
-	demoStart = time.Now()
-	meterChannelPeak = make([]float64, channelCount)
-	meterChannelRMS = make([]float64, channelCount)
-}
-
-func stopDemo() {
-	demoMode = false
-	meterPeakDB = meterSilence
-	meterRMSDB = meterSilence
-	meterChannelPeak = nil
-	meterChannelRMS = nil
-}
-
-// demoLoop generates a gently wandering, per-channel-phase-offset signal
-// (sine-based rather than random, so it's smooth and repeatable rather than
-// jittery) whenever demoMode is active. Runs for the app's lifetime; a
-// real recording or monitor session always wins and clears demoMode (see
-// startRecording/startMonitor), so this never fights over the meter vars
-// with an actual audio path.
-func demoLoop() {
-	ticker := time.NewTicker(150 * time.Millisecond)
-	defer ticker.Stop()
-	for range ticker.C {
-		mutex.Lock()
-		if demoMode {
-			t := time.Since(demoStart).Seconds()
-			if len(meterChannelPeak) != channelCount {
-				meterChannelPeak = make([]float64, channelCount)
-				meterChannelRMS = make([]float64, channelCount)
-			}
-			for i := range meterChannelPeak {
-				phase := float64(i) * 0.7
-				rms := -16 + 10*math.Sin(t*0.6+phase) + 3*math.Sin(t*2.3+phase*1.7)
-				peak := rms + 4 + 2*math.Sin(t*4.1+phase*0.3)
-				if peak > -1 {
-					peak = -1
-				}
-				meterChannelRMS[i] = rms
-				meterChannelPeak[i] = peak
-			}
-			meterRMSDB = meterChannelRMS[0]
-			meterPeakDB = meterChannelPeak[0]
-		}
-		mutex.Unlock()
 	}
 }
 
@@ -2197,7 +2133,7 @@ func resumePlayback() {
 // metering returns automatically rather than staying dark after a take ends
 // or a track plays through.
 func maybeResumeInputMonitorLocked() {
-	if monitoring || isRecording || demoMode {
+	if monitoring || isRecording {
 		return
 	}
 	if currentState != StateIdle && currentState != StateIdleBrowse {
@@ -2752,7 +2688,7 @@ func idleVUPct(db float64) float64 {
 }
 
 // decayPeakHold applies peak-hold ballistics to meterChannelPeakHeld: a
-// fresh instantaneous peak from meterReader/demoLoop always wins
+// fresh instantaneous peak from meterReader always wins
 // immediately, but a falling level holds at its peak for
 // peakHoldOptions[peakHoldIdx] before decaying back down at a fixed
 // ~20dB/s rate - the classic "peak lamp" behavior on a real meter, rather
