@@ -1148,3 +1148,32 @@ func TestRecordingFilenameMatchesRegexWithPrefix(t *testing.T) {
 		t.Errorf("expected a bare row for non-matching name, got %+v", row)
 	}
 }
+
+func TestRecordingDurationUsesHzNotKHz(t *testing.T) {
+	// Regression: recordingDuration must be fed the actual sample rate in Hz.
+	// A 1-second 48kHz stereo 24-bit WAV is 44-byte header + 48000*2*3 data
+	// bytes; if the kHz value (48) were used as the rate the reported
+	// duration would be 1000x too long.
+	dir := t.TempDir()
+	p := filepath.Join(dir, "recording_20240131_143022_ch2_48kHz.wav")
+	dataBytes := 48000 * 2 * 3
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Write(make([]byte, 44+dataBytes)); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+
+	got := recordingDuration(p, 2, 48000)
+	if got < 950*time.Millisecond || got > 1050*time.Millisecond {
+		t.Fatalf("expected ~1s duration, got %v", got)
+	}
+
+	// The kHz value (48) must yield ~1000x the true duration - the bug that
+	// used to be shipped - so the fix is pinned to the correct unit.
+	if big := recordingDuration(p, 2, 48); big < 15*time.Minute {
+		t.Fatalf("kHz value should give a 1000x-inflated duration for the test to be meaningful, got %v", big)
+	}
+}

@@ -2235,7 +2235,10 @@ func buildRecordingRow(path string) recordingRow {
 	row.Format = format
 	row.StartStr = start.Format("2006-01-02 15:04:05")
 
-	dur := recordingDuration(path, channels, sampleRate)
+	// sampleRate here is the kHz value parsed from the filename (m[5] is the
+	// "48" in 48kHz) and is stored for display; recordingDuration computes
+	// bytes-per-second from the actual sample rate, so convert kHz -> Hz.
+	dur := recordingDuration(path, channels, sampleRate*1000)
 	if dur > 0 {
 		row.DurationStr = formatDuration(dur)
 		row.EndStr = start.Add(dur).Format("2006-01-02 15:04:05")
