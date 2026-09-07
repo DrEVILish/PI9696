@@ -998,8 +998,10 @@ func TestDisplaySubmenuBackTarget(t *testing.T) {
 
 func TestAutoDimStateTransitions(t *testing.T) {
 	origB, origAuto, origLast, origDim := oledBrightnessPct, autoDimEnabled, lastInputTime, displayDimState
+	origRec, origPlay := isRecording, playbackCmd
 	t.Cleanup(func() {
 		oledBrightnessPct, autoDimEnabled, lastInputTime, displayDimState = origB, origAuto, origLast, origDim
+		isRecording, playbackCmd = origRec, origPlay
 	})
 
 	mutex.Lock()
@@ -1047,6 +1049,30 @@ func TestAutoDimStateTransitions(t *testing.T) {
 	applyAutoDimLocked(time.Now())
 	if displayDimState != 0 {
 		t.Fatalf("expected auto-dim disabled to ignore idle (state 0), got state=%d", displayDimState)
+	}
+
+	// An active take or playback must hold the panel at full brightness even
+	// after a long idle - the OLED is the operator's live status surface.
+	mutex.Lock()
+	displayDimState = -1
+	autoDimEnabled = true
+	lastInputTime = time.Now().Add(-10 * time.Minute)
+	isRecording = true
+	playbackCmd = nil
+	mutex.Unlock()
+	applyAutoDimLocked(time.Now())
+	if displayDimState != 0 {
+		t.Fatalf("expected active recording to stay at full brightness (state 0), got state=%d", displayDimState)
+	}
+
+	mutex.Lock()
+	isRecording = false
+	playbackCmd = &exec.Cmd{} // non-nil = playback running
+	displayDimState = -1
+	mutex.Unlock()
+	applyAutoDimLocked(time.Now())
+	if displayDimState != 0 {
+		t.Fatalf("expected active playback to stay at full brightness (state 0), got state=%d", displayDimState)
 	}
 }
 
