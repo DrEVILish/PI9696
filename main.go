@@ -3781,14 +3781,17 @@ func getRemainingStorage() string {
 	}
 }
 
+// getFreeSpace returns the free bytes on the recording media (RecordPath).
+// It always measures RecordPath, never the USB stick: recordings are written
+// to /rec (the SD card) regardless of whether a USB drive is mounted, and USB
+// is only a copy/export target (startCopyOperation). lowDisk() gates whether
+// recording is allowed at all, and getRemainingStorage() is what the idle
+// screen / WebUI report - both must reflect the volume a new take will
+// actually land on. If the recording path can't be stat'd (unmounted/unwritable)
+// it returns 0, which lowDisk() deliberately doesn't treat as "low".
 func getFreeSpace() uint64 {
 	var stat syscall.Statfs_t
-	path := RecordPath
-	if usbMounted {
-		path = USBMountPoint
-	}
-
-	if err := syscall.Statfs(path, &stat); err != nil {
+	if err := syscall.Statfs(RecordPath, &stat); err != nil {
 		return 0
 	}
 	return stat.Bavail * uint64(stat.Bsize)

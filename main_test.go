@@ -1239,6 +1239,29 @@ func TestAutoDimStateTransitions(t *testing.T) {
 	}
 }
 
+// TestGetFreeSpaceAlwaysMeasuresRecordPath is the regression test for the bug
+// where getFreeSpace switched to the USB mountpoint when a drive was plugged
+// in. Recordings are always written to RecordPath (/rec); USB is only a
+// copy/export target. So the free-space used by lowDisk() (which gates whether
+// recording is allowed) and getRemainingStorage() (the idle/WebUI readout)
+// must be the recording media's, regardless of usbMounted. Before the fix the
+// two states returned different volumes' free space; now they must be equal.
+func TestGetFreeSpaceAlwaysMeasuresRecordPath(t *testing.T) {
+	origUSB := usbMounted
+	t.Cleanup(func() { usbMounted = origUSB })
+
+	mutex.Lock()
+	usbMounted = false
+	withoutUSB := getFreeSpace()
+	usbMounted = true
+	withUSB := getFreeSpace()
+	mutex.Unlock()
+
+	if withoutUSB != withUSB {
+		t.Fatalf("getFreeSpace changed when usbMounted toggled: without=%d withUSB=%d (must always measure RecordPath)", withoutUSB, withUSB)
+	}
+}
+
 func TestIsValidFilePrefix(t *testing.T) {
 	valid := []string{"Live", "My Show", "ABC-1", "a", "recording"}
 	for _, s := range valid {
