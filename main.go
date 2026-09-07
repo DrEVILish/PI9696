@@ -2507,9 +2507,6 @@ func render() {
 	mutex.Lock()
 	defer mutex.Unlock()
 
-	hwManager.LEDs.Record.Set(isRecording)
-	hwManager.LEDs.Status.Set(infernoState == InfernoRunning)
-
 	// Auto-dim/off the panel when nobody has touched it for a while; done
 	// here (100ms render tick, under the app mutex) so the dim stage follows
 	// wall-clock idle with no extra timers.

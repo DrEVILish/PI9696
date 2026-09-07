@@ -15,7 +15,6 @@ type HardwareManager struct {
 	Encoder  *Encoder
 	Buttons  *ButtonManager
 	Network  *NetworkDetector
-	LEDs     *LEDManager
 }
 
 func NewHardwareManager() (*HardwareManager, error) {
@@ -69,23 +68,11 @@ func NewHardwareManager() (*HardwareManager, error) {
 	}
 	hm.Buttons = buttons
 
-	// Initialize status LEDs
-	leds, err := NewLEDManager()
-	if err != nil {
-		hm.FiraCode.Close()
-		return nil, fmt.Errorf("failed to initialize LEDs: %v", err)
-	}
-	hm.LEDs = leds
-
 	xlog.Infof("Hardware initialized successfully with FiraCode support")
 	return hm, nil
 }
 
 func (hm *HardwareManager) Close() error {
-	if hm.LEDs != nil {
-		hm.LEDs.Record.Set(false)
-		hm.LEDs.Status.Set(false)
-	}
 	if hm.FiraCode != nil {
 		return hm.FiraCode.Close()
 	}
