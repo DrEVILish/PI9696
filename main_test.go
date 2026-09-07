@@ -1,7 +1,10 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1387,5 +1390,82 @@ func TestRecordingDurationUsesHzNotKHz(t *testing.T) {
 	// used to be shipped - so the fix is pinned to the correct unit.
 	if big := recordingDuration(p, 2, 48); big < 15*time.Minute {
 		t.Fatalf("kHz value should give a 1000x-inflated duration for the test to be meaningful, got %v", big)
+	}
+}
+
+// TestWriteRecordingZip streams a set of recording files (including one in a
+// per-day subfolder) into a single ZIP and verifies both the audio entries and
+// the manifest.txt are present and correct. This exercises the same
+// writeRecordingZip path handleDownloadAll uses, against a temp dir so it
+// never touches the real RecordPath.
+func TestWriteRecordingZip(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "2026-08-30")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	flat := filepath.Join(dir, "recording_20240131_143022_ch2_48kHz.wav")
+	deep := filepath.Join(sub, "Live_20260830_120000_ch4_96kHz.wav")
+
+	// 1s of 48kHz stereo 24-bit: 44-byte header + 48000*2*3 data bytes.
+	f, err := os.Create(flat)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Write(make([]byte, 44+48000*2*3))
+	f.Close()
+
+	g, err := os.Create(deep)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.Write(make([]byte, 44+96000*4*3))
+	g.Close()
+
+	var buf bytes.Buffer
+	if err := writeRecordingZip(&buf, dir, []string{flat, deep}); err != nil {
+		t.Fatalf("writeRecordingZip: %v", err)
+	}
+
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatalf("zip.NewReader: %v", err)
+	}
+
+	byName := map[string]*zip.File{}
+	for _, zf := range zr.File {
+		byName[zf.Name] = zf
+	}
+
+	if _, ok := byName["recording_20240131_143022_ch2_48kHz.wav"]; !ok {
+		t.Fatalf("flat recording missing from archive")
+	}
+	if _, ok := byName["2026-08-30/Live_20260830_120000_ch4_96kHz.wav"]; !ok {
+		t.Fatalf("per-day subfolder recording missing from archive")
+	}
+	mf, ok := byName["manifest.txt"]
+	if !ok {
+		t.Fatalf("manifest.txt missing from archive")
+	}
+
+	rc, err := mf.Open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mdata, _ := io.ReadAll(rc)
+	rc.Close()
+	ms := string(mdata)
+
+	for _, want := range []string{"recording_20240131_143022_ch2_48kHz.wav", "2026-08-30/Live_20260830_120000_ch4_96kHz.wav", "Files: 2"} {
+		if !strings.Contains(ms, want) {
+			t.Fatalf("manifest missing %q; got:\n%s", want, ms)
+		}
+	}
+
+	// The flat file's 1-second duration must show up in the manifest (duration
+	// is computed from actual bytes, in Hz - see the duration fix).
+	if !strings.Contains(ms, "00:00:01") {
+		t.Fatalf("manifest should report a 1s take as 00:00:01; got:\n%s", ms)
 	}
 }

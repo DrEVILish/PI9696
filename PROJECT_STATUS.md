@@ -540,6 +540,17 @@ Third design-review pass: fills in the specifics needed to finish the build.
   control server now binds `0.0.0.0` (every interface) instead of eth0's IP only, so the
   WebUI is reachable over any interface (eth0/wlan0) per the Round 3 decision.
 
+- **1.14.0 - Download-all ZIP bundle.** The WebUI "Download ALL" control (a new button beside the
+  Recordings heading) streams every finished recording into a single ZIP archive via a new
+  `GET /download-all` endpoint (`handleDownloadAll`). It writes the archive streaming - each file
+  is opened and copied in as it's encountered, never buffered whole - so a very large set
+  (multi-channel high-sample-rate takes can be many GB each) downloads without exhausting RAM.
+  Zip entry names use each recording's path relative to `RecordPath`, preserving per-day
+  subfolders and avoiding basename collisions across days; a `manifest.txt` is included listing
+  every file's path, size, channel count, sample rate, format, duration, and start time. The
+  streaming logic lives in a testable `writeRecordingZip(dst, base, files)` helper pinned by
+  `TestWriteRecordingZip`.
+
 - **1.13.0 - Recording filename prefix.** Recordings are now named
   `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` (default prefix `recording`, unchanged for
   existing units) via a new Audio → Prefix row on the OLED (a preset list, like the Tag

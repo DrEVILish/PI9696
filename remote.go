@@ -1,6 +1,7 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"log"
 	"math"
 	"net"
@@ -1234,7 +1236,7 @@ body.meters-collapsed{padding-bottom:4em}
 <div class="grid">
 
   <div class="panel left">
-    <h2>Recordings</h2>
+    <h2>Recordings <a class="icon-btn" href="/download-all" title="Download all as ZIP" style="float:right">&#8675;</a></h2>
     <div id="recordings" hx-get="/api/recordings" hx-trigger="load, every 15s" hx-swap="innerHTML">Loading...</div>
   </div>
 
@@ -2370,6 +2372,89 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// handleDownloadAll streams every finished recording as a single ZIP bundle,
+// with a small manifest.txt describing each file. It never loads the files
+// into memory - each one is opened and copied into the archive as it's
+// encountered - so a very large set (multi-channel high-sample-rate takes can
+// be many GB each) is written to the client streaming, not buffered. Zip entry
+// names use the recording's path relative to RecordPath (the same unique key
+// the list uses for per-file download), so per-day subfolders are preserved
+// and same-named files across days don't collide.
+func handleDownloadAll(w http.ResponseWriter, r *http.Request) {
+	files := recordingFiles()
+	if len(files) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="pi9696-recordings-%s.zip"`, time.Now().Format("20060102_150405")))
+
+	if err := writeRecordingZip(w, RecordPath, files); err != nil {
+		logErrorf("download-all: %v", err)
+	}
+}
+
+// writeRecordingZip streams every file in files as a single ZIP archive with a
+// manifest.txt describing each one. Each file is opened and copied into the
+// archive as it's encountered, never buffered whole, so a very large set
+// (multi-channel high-sample-rate takes can be many GB each) is written
+// streaming. Zip entry names use each file's path relative to base (the
+// recording root), so per-day subfolders are preserved and same-named files
+// across days don't collide. base is the path prefix against which rel is
+// computed; it's a parameter so the same streaming logic is testable against a
+// temp directory without touching the real RecordPath.
+func writeRecordingZip(dst io.Writer, base string, files []string) error {
+	zw := zip.NewWriter(dst)
+	defer zw.Close()
+
+	var manifest strings.Builder
+	fmt.Fprintf(&manifest, "PI9696 recording bundle\nGenerated: %s\nFiles: %d\n\n", time.Now().Format("2006-01-02 15:04:05"), len(files))
+	fmt.Fprintf(&manifest, "%-60s %12s %8s %6s %8s %10s  %s\n", "Path", "Size(bytes)", "Channels", "Rate", "Format", "Duration", "Start")
+
+	for _, f := range files {
+		rel, err := filepath.Rel(base, f)
+		if err != nil || strings.Contains(rel, "..") {
+			continue
+		}
+		entry := filepath.ToSlash(rel)
+
+		info, err := os.Stat(f)
+		if err != nil {
+			continue
+		}
+
+		hdr := &zip.FileHeader{Name: entry, Method: zip.Deflate}
+		hdr.SetModTime(info.ModTime())
+		wc, err := zw.CreateHeader(hdr)
+		if err != nil {
+			return err
+		}
+		in, err := os.Open(f)
+		if err != nil {
+			continue
+		}
+		_, copyErr := io.Copy(wc, in)
+		in.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+
+		row := buildRecordingRow(f)
+		fmt.Fprintf(&manifest, "%-60s %12d %8d %6d %8s %10s  %s\n",
+			entry, info.Size(), row.Channels, row.SampleRate, row.Format, row.DurationStr, row.StartStr)
+	}
+
+	mw, err := zw.Create("manifest.txt")
+	if err != nil {
+		return err
+	}
+	if _, err := mw.Write([]byte(manifest.String())); err != nil {
+		return err
+	}
+	return nil
+}
+
 func newRemoteMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /manifest.json", handleManifest)
@@ -2401,6 +2486,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/demo/start/{kind}", requireAuth(handleAPIDemoStart))
 	mux.HandleFunc("POST /api/demo/stop", requireAuth(handleAPIDemoStop))
 	mux.HandleFunc("GET /api/recordings", requireAuth(handleAPIRecordings))
+	mux.HandleFunc("GET /download-all", requireAuth(handleDownloadAll))
 	mux.HandleFunc("GET /download/{filepath...}", requireAuth(handleDownload))
 
 	mux.HandleFunc("GET /api/display.png", requireAuth(handleDisplayPNG))
