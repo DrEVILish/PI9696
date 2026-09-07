@@ -1755,3 +1755,60 @@ func TestWriteRecordingZip(t *testing.T) {
 		t.Fatalf("manifest should report a 1s take as 00:00:01; got:\n%s", ms)
 	}
 }
+
+// Download ALL must speak human when /rec is empty - a bare 404 reads as
+// "broken" (the reported bug) - and serve the ZIP when there is something
+// to bundle. Also pins the labeled dashboard button (icon-only read as
+// unclear).
+func TestDownloadAll(t *testing.T) {
+	initTestHardware(t)
+	cookie := testSessionCookie(t)
+
+	mux := newRemoteMux()
+
+	// Empty /rec: explanatory page, 200, with a way back.
+	req := httptest.NewRequest("GET", "/download-all", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200 with an explanatory page for empty /rec, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "No recordings to download yet") {
+		t.Fatalf("expected an explanatory empty-state page, got: %s", body)
+	}
+
+	// Dashboard must render a labeled (not icon-only) Download ALL control.
+	req = httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("dashboard: expected 200, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Download ALL (.zip)") {
+		t.Fatalf("dashboard missing labeled Download ALL button")
+	}
+
+	// With recordings present: a ZIP stream containing them + manifest.
+	os.MkdirAll(RecordPath, 0755)
+	p := filepath.Join(RecordPath, "recording_20260101_000000_ch2_48kHz.wav")
+	if err := os.WriteFile(p, []byte("fake wav data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(p) })
+
+	req = httptest.NewRequest("GET", "/download-all", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("expected 200 ZIP for populated /rec, got %d", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "application/zip" {
+		t.Fatalf("expected application/zip, got %q", ct)
+	}
+	if !strings.Contains(rec.Body.String(), "recording_20260101_000000_ch2_48kHz.wav") {
+		t.Fatalf("ZIP does not contain the recording entry")
+	}
+}

@@ -995,6 +995,10 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .icon-btn svg{width:clamp(14px,1.8vw,18px);height:clamp(14px,1.8vw,18px);stroke:var(--glow)}
 .icon-btn:hover{border-color:var(--orange)}
 .icon-btn:hover svg{stroke:var(--orange)}
+/* Download ALL: a small labeled action in the Recordings heading - text,
+   not just an icon, so its function reads at a glance. */
+.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:#08192b;border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal}
+.dl-all:hover{border-color:var(--glow)}
 
 .grid{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:1.2em;max-width:1400px;margin:0 auto}
 
@@ -1249,7 +1253,7 @@ body.meters-collapsed{padding-bottom:4em}
 <div class="grid">
 
   <div class="panel left">
-    <h2>Recordings <a class="icon-btn" href="/download-all" title="Download all as ZIP" style="float:right">&#8675;</a></h2>
+    <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)">Download ALL (.zip)</a></h2>
     <div id="recordings" hx-get="/api/recordings" hx-trigger="load, every 15s" hx-swap="innerHTML">Loading...</div>
   </div>
 
@@ -2377,7 +2381,12 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 func handleDownloadAll(w http.ResponseWriter, r *http.Request) {
 	files := recordingFiles()
 	if len(files) == 0 {
-		http.NotFound(w, r)
+		// A bare 404 reads as "broken" - the common case is simply an empty
+		// /rec (fresh unit, or a dev box). Say so, with a way back.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<html><head><title>Download ALL</title></head><body>`+
+			`<p>No recordings to download yet.</p>`+
+			`<p><a href="/">Back to dashboard</a></p></body></html>`)
 		return
 	}
 
