@@ -2329,10 +2329,11 @@ func newRemoteMux() *http.ServeMux {
 
 const remoteControlPort = "8080"
 
-// startRemoteServer binds to ip only (never 0.0.0.0) - see PROJECT_STATUS.md:
-// this is a deliberate constraint so the control surface is reachable from
-// the recorder's own eth0 LAN and nothing else (no USB gadget interfaces, no
-// future wifi, no localhost-only tunneling assumptions).
+// startRemoteServer binds to the given address (normally "0.0.0.0" from
+// remoteControlLoop, or a specific host via PI9696_REMOTE_BIND for dev
+// testing). Binding 0.0.0.0 serves the control surface on every interface -
+// the Round 3 design decision, replacing the old eth0-only constraint; access
+// is still gated by the token/session auth.
 func startRemoteServer(ip string) (*http.Server, error) {
 	listener, err := net.Listen("tcp", net.JoinHostPort(ip, remoteControlPort))
 	if err != nil {
@@ -2350,22 +2351,49 @@ func startRemoteServer(ip string) (*http.Server, error) {
 	return srv, nil
 }
 
-// remoteControlLoop (re)binds the remote control server to eth0's current IP
-// and tears it down when eth0 loses its address, mirroring networkMonitorLoop's
-// polling approach but kept entirely separate from the app mutex: binding/
-// shutting down a listener is not instant, and this must never block
-// render()/input handling the way pre-worker Inferno start/stop used to.
+// anyInterfaceIP returns the first non-loopback IPv4 address on any up
+// interface, or "" if none. This is the "serve on any interface" view that
+// the eth0-only NetworkDetector can't give: the remote control server must
+// run whenever *any* interface (eth0, wlan0 AP/client, USB gadget, etc.) has
+// an address, not just eth0 (Round 3 design decision).
+func anyInterfaceIP() string {
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	for _, ifc := range ifaces {
+		if ifc.Flags&net.FlagUp == 0 {
+			continue
+		}
+		addrs, err := ifc.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok {
+				ip := ipnet.IP.To4()
+				if ip != nil && !ip.IsLoopback() {
+					return ip.String()
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// remoteControlLoop (re)binds the remote control server to every up interface
+// (0.0.0.0) and tears it down when no interface has an address, mirroring
+// networkMonitorLoop's polling approach but kept entirely separate from the
+// app mutex: binding/shutting down a listener is not instant, and this must
+// never block render()/input handling the way pre-worker Inferno start/stop
+// used to.
 func remoteControlLoop() {
 	var currentServer *http.Server
-	var currentIP string
+	var wasUp bool
 
 	for {
-		ip := ""
-		if info, err := hwManager.Network.GetNetworkInfo(); err == nil && info.Connected {
-			ip = info.IPAddress
-		}
-
-		if ip != currentIP {
+		up := anyInterfaceIP() != ""
+		if up != wasUp {
 			if currentServer != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				currentServer.Shutdown(ctx)
@@ -2374,12 +2402,12 @@ func remoteControlLoop() {
 				logInfof("Remote control server stopped")
 			}
 
-			currentIP = ip
-			if ip != "" {
-				srv, err := startRemoteServer(ip)
+			wasUp = up
+			if up {
+				srv, err := startRemoteServer("0.0.0.0")
 				if err != nil {
-					logErrorf("Failed to start remote control server on %s: %v", ip, err)
-					currentIP = "" // retry on the next tick
+					logErrorf("Failed to start remote control server: %v", err)
+					wasUp = false // retry on the next tick
 				} else {
 					currentServer = srv
 				}
@@ -2391,14 +2419,16 @@ func remoteControlLoop() {
 }
 
 // remoteAccessInfo is what Settings -> Remote Access shows on the OLED.
+// It picks any reachable address (not just eth0) since the server now binds
+// every interface.
 func remoteAccessInfo() []string {
-	info, err := hwManager.Network.GetNetworkInfo()
-	if err != nil || !info.Connected || info.IPAddress == "" {
-		return []string{"Remote Access", "Not available", "(eth0 has no IP)"}
+	ip := anyInterfaceIP()
+	if ip == "" {
+		return []string{"Remote Access", "Not available", "(no interface has an IP)"}
 	}
 	return []string{
 		"Remote Access",
-		fmt.Sprintf("http://%s:%s", info.IPAddress, remoteControlPort),
+		fmt.Sprintf("http://%s:%s", ip, remoteControlPort),
 		"Token: " + formatToken(remoteToken),
 	}
 }

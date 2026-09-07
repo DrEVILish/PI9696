@@ -685,13 +685,12 @@ func main() {
 	}
 	applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
 
-	// PI9696_REMOTE_BIND is a manual test-only escape hatch: it exists
-	// because remoteControlLoop only ever binds to eth0's own IP (a
-	// deliberate security constraint - see PROJECT_STATUS.md's Remote
-	// Control section), which means the remote UI never comes up at all on
-	// a dev box with no real eth0 interface. Never set this on a real
-	// deployment - it bypasses that constraint entirely, binding wherever
-	// you tell it to (e.g. "0.0.0.0" for every interface).
+	// PI9696_REMOTE_BIND is a manual test-only escape hatch: remoteControlLoop
+	// binds 0.0.0.0 (every interface), which on a dev box with no real
+	// network stack can still be reached, but if you need to pin the server to
+	// one specific host (e.g. a loopback or a particular dev NIC) this sets it
+	// explicitly and skips the loop. Never set this on a real deployment
+	// unless you intend to restrict the bind address.
 	if bindHost := os.Getenv("PI9696_REMOTE_BIND"); bindHost != "" {
 		if _, err := startRemoteServer(bindHost); err != nil {
 			log.Fatalf("PI9696_REMOTE_BIND: failed to bind %s:%s: %v", bindHost, remoteControlPort, err)
