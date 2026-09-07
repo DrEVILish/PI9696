@@ -540,6 +540,16 @@ Third design-review pass: fills in the specifics needed to finish the build.
   control server now binds `0.0.0.0` (every interface) instead of eth0's IP only, so the
   WebUI is reachable over any interface (eth0/wlan0) per the Round 3 decision.
 
+- **Fixes (2026-09-07).** Stopping playback from the Paused state hung the transport:
+  `pausePlayback` freezes ffmpeg with SIGSTOP, and a stopped process defers SIGTERM until it's
+  continued, so `stopPlayback`'s lone SIGTERM sat pending forever — the UI stayed stuck in
+  Paused, ffmpeg never exited, and `gracefulShutdown` (which waits on the reaping goroutine)
+  would have hung shutdown-while-paused. `stopPlayback` now follows the SIGTERM with SIGCONT so
+  a frozen ffmpeg wakes and processes it. Made prominent by the 1.16.0 seek/scrub feature, which
+  keeps users in Paused; the defect itself predates it. Pinned by
+  `TestStopWhilePausedAwakensStoppedFFmpeg`, which waits for the child to reach kernel state `T`
+  before stopping so it can't pass by racing signal delivery.
+
 - **1.16.0 - Playback seek/scrub.** Per the Round 3 decision, the encoder (and the WebUI's
   on-screen encoder buttons, which route through the same handlers) drives the transport while a
   track is running: **click toggles play/pause** (`onEncoderClick` → `pausePlayback`/`resumePlayback`),

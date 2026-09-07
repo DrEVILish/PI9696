@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"fmt"
 	"image/png"
 	"io"
 	"net/http"
@@ -826,6 +827,30 @@ func waitForPlaybackIdle(t *testing.T) {
 	}
 }
 
+// waitProcessStopped blocks until pid reports kernel state 'T' (stopped by
+// SIGSTOP), so a test can deterministically reproduce the paused-playback
+// conditions instead of racing the signal delivery.
+func waitProcessStopped(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err == nil {
+			s := string(data)
+			if i := strings.LastIndex(s, ")"); i >= 0 && i+2 < len(s) {
+				fields := strings.Fields(s[i+2:])
+				if len(fields) > 0 && fields[0] == "T" {
+					return
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("process %d never reached stopped (T) state", pid)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
 func TestPlaybackLifecycle(t *testing.T) {
 	initTestHardware(t)
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
@@ -995,6 +1020,41 @@ func TestPlaybackSeekAndPauseToggle(t *testing.T) {
 		t.Fatalf("expected StatePlaying after resume click, got %v", currentState)
 	}
 	mutex.Unlock()
+
+	onButtonPress(hardware.StopButton)
+	waitForPlaybackIdle(t)
+}
+
+// Regression for the stop-while-paused hang: pausePlayback freezes ffmpeg
+// with SIGSTOP, and a stopped process defers SIGTERM until it's continued.
+// stopPlayback used to send only SIGTERM, so stopping from Paused left
+// ffmpeg stopped forever - the UI stuck in Paused, and gracefulShutdown
+// hung on the reaping goroutine's channel. stopPlayback must follow the
+// TERM with SIGCONT. The test waits for the child to actually reach kernel
+// state 'T' first, so it can't pass by racing the stop signal.
+func TestStopWhilePausedAwakensStoppedFFmpeg(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	os.MkdirAll(RecordPath, 0755)
+	recFile := filepath.Join(RecordPath, "recording_20260101_000000_ch2_48kHz.wav")
+	if err := os.WriteFile(recFile, []byte("fake"), 0644); err != nil {
+		t.Fatalf("write fake recording: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(recFile) })
+
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = false
+	mutex.Unlock()
+
+	onButtonPress(hardware.PlayButton)
+	onEncoderClick() // pause -> SIGSTOP
+
+	mutex.Lock()
+	pid := playbackCmd.Process.Pid
+	mutex.Unlock()
+	waitProcessStopped(t, pid)
 
 	onButtonPress(hardware.StopButton)
 	waitForPlaybackIdle(t)
