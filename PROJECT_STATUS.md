@@ -437,8 +437,9 @@ Second design-review pass. Items marked *(future)* are noted for later releases.
 - **File naming** - **Custom prefix option** - let the user add a project/location prefix to
   filenames *(future)*.
 - **Take naming** - **Start-time only**; no scene/take numbering.
-- **Audition** - **No audition mode**; playback (including the upcoming seek/scrub) goes out
-  via **Inferno**.
+- **Audition** - **No audition mode**; playback (including the upcoming seek/scrub) is targeted
+  to go out via **Inferno**. (Currently playback goes to local ALSA - see the Playback path
+  note below; not yet routed through Inferno.)
 - **Monitoring EQ** - **Raw passthrough**; no monitoring DSP, the recorded file is always
   untouched input.
 - **WebUI auth** - **Keep token + session cookie** authentication.
@@ -470,8 +471,11 @@ Third design-review pass: fills in the specifics needed to finish the build.
   reproducible build.
 - **Inferno transport** - Inferno is **bidirectional**: an AES67/Dante implementation that
   both **sends and receives** audio over the network.
-- **Playback path** - Playback goes **out through Inferno/AoIP** (confirmed); local ALSA
-  playback is retired.
+- **Playback path** - **Target**: playback goes **out through Inferno/AoIP**; local ALSA
+  playback is retired. **Not yet implemented**: the current Inferno contract is receive-only
+  (it captures AoIP into a FIFO), so `startPlayback` still plays to local ALSA
+  (`ffmpeg -f alsa default`). Blocked until the Inferno server exposes an input/stream
+  command to feed a WAV back out over AoIP.
 - **Channel ceiling** - Keep **1-128** channels as the advertised range for testing. The
   Raspberry Pi 5's practical throughput is uncertain at the top end; the limit may be raised
   later if stress testing passes without errors.
@@ -517,6 +521,14 @@ Third design-review pass: fills in the specifics needed to finish the build.
   unrelated edits.
 
 ### Feature History
+
+- **Docs (2026-09-06).** Corrected the playback documentation to match the code. The README
+  and design notes claimed playback is sent out through Inferno/AoIP, but `startPlayback`
+  actually plays to local ALSA (`ffmpeg -f alsa default`). The Inferno contract is
+  receive-only (it captures AoIP into a FIFO) with no documented input/stream command, so
+  playback-through-Inferno cannot be implemented in this repo yet. Updated README.md and the
+  PROJECT_STATUS.md design bullets to describe the actual behavior and mark the
+  Inferno/AoIP playback path as the target, not yet implemented.
 
 - **Fixes (2026-09-06).** Three correctness/design fixes: (1) the WebUI recordings list
   showed durations 1000× too long because `recordingDuration` was fed the kHz figure instead
