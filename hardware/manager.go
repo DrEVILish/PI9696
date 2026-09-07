@@ -5,7 +5,7 @@ import (
 	"io"
 	"time"
 
-	"pi9696/xlog"
+	"log/slog"
 
 	"golang.org/x/image/font"
 )
@@ -24,7 +24,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 	firacode, err := NewFiraCodeManager()
 	if err != nil {
 		// Fallback to basic display if FiraCode fails
-		xlog.Errorf("FiraCode initialization failed, attempting fallback: %v", err)
+		slog.Error(fmt.Sprintf("FiraCode initialization failed, attempting fallback: %v", err))
 
 		// Try basic TTF display with system font
 		basicDisplay, basicErr := NewTTFDisplay("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11.0)
@@ -45,7 +45,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 			fontFaces:   make(map[string]font.Face),
 		}
 		firacode.fontFaces[fontFaceKey(firacode.currentFont, firacode.currentSize)] = basicDisplay.font
-		xlog.Warnf("Using fallback display with system fonts")
+		slog.Warn("Using fallback display with system fonts")
 	}
 	hm.FiraCode = firacode
 
@@ -68,7 +68,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 	}
 	hm.Buttons = buttons
 
-	xlog.Infof("Hardware initialized successfully with FiraCode support")
+	slog.Info("Hardware initialized successfully with FiraCode support")
 	return hm, nil
 }
 
