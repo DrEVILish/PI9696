@@ -2946,7 +2946,16 @@ func renderPlayingScreen() {
 	if playbackFile != "" {
 		filename = filepath.Base(playbackFile)
 	}
-	hwManager.DrawPlaybackStatus(pos, playbackDuration, filename, currentState == StatePaused)
+	progress := 0.0
+	if playbackDuration > 0 {
+		progress = float64(pos) / float64(playbackDuration)
+		if progress < 0 {
+			progress = 0
+		} else if progress > 1 {
+			progress = 1
+		}
+	}
+	hwManager.DrawPlaybackStatus(formatDuration(pos), formatDuration(playbackDuration), progress, filename, currentState == StatePaused)
 }
 
 func renderSettingsMenu() {

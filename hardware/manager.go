@@ -3,7 +3,6 @@ package hardware
 import (
 	"fmt"
 	"io"
-	"time"
 
 	"log/slog"
 
@@ -125,8 +124,8 @@ func (hm *HardwareManager) EncodePNG(w io.Writer) error {
 	return hm.FiraCode.EncodePNG(w)
 }
 
-func (hm *HardwareManager) DrawPlaybackStatus(elapsed, total time.Duration, filename string, paused bool) error {
-	return hm.FiraCode.DrawPlaybackStatus(elapsed, total, filename, paused)
+func (hm *HardwareManager) DrawPlaybackStatus(elapsed, total string, progress float64, filename string, paused bool) error {
+	return hm.FiraCode.DrawPlaybackStatus(elapsed, total, progress, filename, paused)
 }
 
 func (hm *HardwareManager) DrawProgressBar(title string, progress float64, details string) error {
