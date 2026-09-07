@@ -1755,8 +1755,8 @@ function applyMeter(m) {
   // Reels and the tape-path pulse stop moving while paused (frozen transport)
   // but the head display still shows the frozen elapsed time rather than
   // going blank.
-  var moving = m.recording || m.playing || m.demo;
-  var showing = m.recording || m.playing || paused || m.demo;
+  var moving = m.recording || m.playing;
+  var showing = m.recording || m.playing || paused;
   document.querySelectorAll('.reel-g').forEach(function(el) { el.classList.toggle('spinning', moving); });
   document.getElementById('tapePath').classList.toggle('active', moving);
   setSeg7(showing ? m.elapsed : null);
@@ -2020,8 +2020,6 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 <button hx-post="/api/record/stop" hx-target="#status" hx-swap="innerHTML" data-record-stop>Stop</button>
  {{else if .Playing}}<p>&#9654; Playing back - {{.Elapsed}}</p>
  {{else if .Paused}}<p>&#10074;&#10074; Paused - {{.Elapsed}}</p>
- {{else if .Demo}}<p class="{{if eq .DemoKind "record"}}rec{{else}}idle{{end}}">{{if eq .DemoKind "record"}}&#9679; DEMO RECORDING{{else}}&#9654; DEMO PLAYBACK{{end}} - {{.Elapsed}}</p>
-<button hx-post="/api/demo/stop" hx-target="#status" hx-swap="innerHTML">Stop Demo</button>
  {{else if .MonOutput}}<p class="idle">&#9654; Monitoring output - playing {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch {{.Elapsed}}</p>
  <button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML">Start Recording</button>
  {{else if .Monitoring}}<p class="idle">&#128266; Monitoring input - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
@@ -2030,8 +2028,6 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 {{else}}<p class="idle">Idle - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
 <button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Start Recording</button>
 <button hx-post="/api/monitor/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Monitor Input</button>
-<button hx-post="/api/demo/start/record" hx-target="#status" hx-swap="innerHTML">Demo Record</button>
-<button hx-post="/api/demo/start/playback" hx-target="#status" hx-swap="innerHTML">Demo Playback</button>
 {{if not .InfernoUp}}<p>(Inferno server not running)</p>{{end}}
 {{end}}
 <p>Storage: {{.Storage}}</p>
@@ -2043,8 +2039,6 @@ type statusView struct {
 	Paused     bool
 	Monitoring bool
 	MonOutput  bool
-	Demo       bool
-	DemoKind   string
 	Elapsed    string
 	Meter      string
 	Format     string
@@ -2062,8 +2056,6 @@ func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		Paused:     currentState == StatePaused,
 		Monitoring: monitoring,
 		MonOutput:  monitoringOutput,
-		Demo:       demoMode,
-		DemoKind:   demoKind,
 		Format:     "WAV",
 		SampleRate: sampleRates[sampleRateIdx] / 1000,
 		Channels:   channelCount,
@@ -2078,8 +2070,6 @@ func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		v.Elapsed = formatDuration(time.Since(playbackStart))
 	case v.Paused:
 		v.Elapsed = formatDuration(playbackPausedElapsed)
-	case v.Demo:
-		v.Elapsed = formatDuration(time.Since(demoStart))
 	}
 	mutex.Unlock()
 
@@ -2105,7 +2095,6 @@ type meterResponse struct {
 	Paused     bool           `json:"paused"`
 	Monitoring bool           `json:"monitoring"`
 	MonOutput  bool           `json:"monOutput"`
-	Demo       bool           `json:"demo"`
 	Elapsed    string         `json:"elapsed"`
 	Channels   []channelLevel `json:"channels"`
 	// FloorDB is the currently configured VU-meter range floor (Settings ->
@@ -2120,7 +2109,7 @@ type meterResponse struct {
 // return an empty 200 instead of a payload), so clamp any non-finite reading
 // to the silence sentinel before it reaches the wire. meterReader in main.go
 // already sanitizes at ingestion, but this guarantees the JSON sink can never
-// fail even if a non-finite value comes from some other path (demo math,
+// fail even if a non-finite value comes from some other path (meter math,
 // decay ballistics, etc.).
 func jsonSafeDB(v float64) float64 {
 	if math.IsInf(v, 0) || math.IsNaN(v) {
@@ -2145,7 +2134,6 @@ func currentMeterResponse() meterResponse {
 		Paused:     currentState == StatePaused,
 		Monitoring: monitoring,
 		MonOutput:  monitoringOutput,
-		Demo:       demoMode,
 		FloorDB:    vuRangeOptions[vuRangeIdx],
 	}
 	// Always size the meter bank to the configured channel count. During
@@ -2175,8 +2163,6 @@ func currentMeterResponse() meterResponse {
 		// Playback time is frozen while paused - the VFD must not keep
 		// counting. Format the captured duration captured at pause time.
 		resp.Elapsed = formatDuration(playbackPausedElapsed)
-	case resp.Demo:
-		resp.Elapsed = formatDuration(time.Since(demoStart))
 	}
 	return resp
 }
@@ -2253,30 +2239,6 @@ func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	if monitoring {
 		stopMonitor()
-	}
-	mutex.Unlock()
-	handleAPIStatus(w, r)
-}
-
-// handleAPIDemoStart accepts "record" or "playback" via the {kind} path
-// value purely to change how the dashboard labels the simulated session
-// (see statusTmpl) - the generated levels are identical either way.
-func handleAPIDemoStart(w http.ResponseWriter, r *http.Request) {
-	kind := r.PathValue("kind")
-	if kind != "record" && kind != "playback" {
-		http.NotFound(w, r)
-		return
-	}
-	mutex.Lock()
-	startDemo(kind)
-	mutex.Unlock()
-	handleAPIStatus(w, r)
-}
-
-func handleAPIDemoStop(w http.ResponseWriter, r *http.Request) {
-	mutex.Lock()
-	if demoMode {
-		stopDemo()
 	}
 	mutex.Unlock()
 	handleAPIStatus(w, r)
@@ -2518,8 +2480,6 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/record/stop", requireAuth(handleAPIRecordStop))
 	mux.HandleFunc("POST /api/monitor/start", requireAuth(handleAPIMonitorStart))
 	mux.HandleFunc("POST /api/monitor/stop", requireAuth(handleAPIMonitorStop))
-	mux.HandleFunc("POST /api/demo/start/{kind}", requireAuth(handleAPIDemoStart))
-	mux.HandleFunc("POST /api/demo/stop", requireAuth(handleAPIDemoStop))
 	mux.HandleFunc("GET /api/recordings", requireAuth(handleAPIRecordings))
 	mux.HandleFunc("GET /download-all", requireAuth(handleDownloadAll))
 	mux.HandleFunc("GET /download/{filepath...}", requireAuth(handleDownload))
