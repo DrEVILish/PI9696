@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"html/template"
@@ -56,6 +57,18 @@ func generateRemoteToken() string {
 		out[i] = remoteTokenAlphabet[int(c)%len(remoteTokenAlphabet)]
 	}
 	return string(out)
+}
+
+// generateRemoteSessionID produces the cookie value: a longer, full-entropy
+// hex string, not the short operator-typed token. It's never shown to the
+// user and never equals the token, so a session cookie can't be guessed from
+// the token (and vice versa).
+func generateRemoteSessionID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 // formatToken renders a token as two groups of 4 for readability, e.g.
@@ -120,6 +133,66 @@ func (l *loginLimiter) recordSuccess(ip string) {
 
 var loginLimit = newLoginLimiter()
 
+// sessionStore holds issued session IDs with their expiry. It is deliberately
+// a separate in-memory store (not the token itself): the login token is the
+// secret the operator reads off the OLED and types in, and it never becomes
+// the cookie value. Instead, a fresh random session ID is minted at login and
+// stored here with a lifetime, so (a) the cookie doesn't carry the token, and
+// (b) sessions actually expire server-side - the browser's MaxAge alone only
+// tells the client when to drop the cookie, not the server when to stop
+// accepting it. A process restart clears all sessions (fresh token + empty
+// store), which is acceptable for a device that re-logs-in after a reboot.
+type sessionStore struct {
+	mu       sync.Mutex
+	sessions map[string]time.Time // session ID -> expiry
+}
+
+func newSessionStore() *sessionStore {
+	return &sessionStore{sessions: make(map[string]time.Time)}
+}
+
+// create mints a new session ID valid for the given lifetime.
+func (s *sessionStore) create(ttl time.Duration) string {
+	id, err := generateRemoteSessionID()
+	if err != nil {
+		// Session IDs use the same crypto/rand source as the token; a failure
+		// here is fatal (there's no safe fallback for a bearer credential).
+		log.Fatalf("Failed to generate session ID: %v", err)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions[id] = time.Now().Add(ttl)
+	return id
+}
+
+// valid reports whether id is a live, unexpired session. Expired entries are
+// pruned lazily so the map doesn't grow unboundedly with use.
+func (s *sessionStore) valid(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	exp, ok := s.sessions[id]
+	if !ok {
+		return false
+	}
+	if time.Now().After(exp) {
+		delete(s.sessions, id)
+		return false
+	}
+	return true
+}
+
+// revoke removes a session (logout), so a logged-out cookie can't be replayed.
+func (s *sessionStore) revoke(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.sessions, id)
+}
+
+var sessions = newSessionStore()
+
+// sessionLifetime is how long a login session lasts server-side.
+const sessionLifetime = 12 * time.Hour
+
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -128,14 +201,15 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// validSession does a constant-time comparison to avoid leaking the token
-// via response-timing side channels.
+// validSession checks the cookie against the server-side session store (a
+// constant-time lookup isn't needed here - sessions are random IDs looked up
+// in a map, not a secret compared byte-by-byte).
 func validSession(r *http.Request) bool {
 	c, err := r.Cookie(remoteSessionCookie)
 	if err != nil {
 		return false
 	}
-	return subtle.ConstantTimeCompare([]byte(c.Value), []byte(remoteToken)) == 1
+	return sessions.valid(c.Value)
 }
 
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -322,21 +396,28 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	loginLimit.recordSuccess(ip)
+	// Mint a fresh session ID; the cookie value is never the token.
+	sessionID := sessions.create(sessionLifetime)
 	http.SetCookie(w, &http.Cookie{
 		Name:     remoteSessionCookie,
-		Value:    remoteToken,
+		Value:    sessionID,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
 		// No Secure flag: this server is plain HTTP (see PROJECT_STATUS.md's
 		// remote-control notes for why, and what that means for LAN
-		// eavesdropping risk).
-		MaxAge: 3600 * 12,
+		// eavesdropping risk). The server-side lifetime is enforced by
+		// sessionStore.valid, not this client-side MaxAge.
+		MaxAge: int(sessionLifetime / time.Second),
 	})
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func handleLogout(w http.ResponseWriter, r *http.Request) {
+	// Revoke server-side so a captured cookie can't be replayed after logout.
+	if c, err := r.Cookie(remoteSessionCookie); err == nil {
+		sessions.revoke(c.Value)
+	}
 	http.SetCookie(w, &http.Cookie{Name: remoteSessionCookie, Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
