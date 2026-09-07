@@ -540,6 +540,16 @@ Third design-review pass: fills in the specifics needed to finish the build.
   control server now binds `0.0.0.0` (every interface) instead of eth0's IP only, so the
   WebUI is reachable over any interface (eth0/wlan0) per the Round 3 decision.
 
+- **UI (2026-09-07).** The dashboard's reel-to-reel transport deck was restyled to the
+  blue/cyan sci-fi design language: structure lines (bezel, screws, guides, head plate,
+  window, HUD band) now inherit the shared `--border` token instead of their own hardcoded
+  blue; the reel faces lost their diagonal gradient (flat deep navy); and - the main fix -
+  glow now tracks activity per the design brief: the tape path is a dim navy line at rest
+  and only lights up (with the travelling pulse) while the transport runs, the reel hubs
+  carry a thin cyan ring at rest and fill+glow while spinning, and the head gap line
+  brightens only while tape is moving (new deck `run` class from `applyMeter`). Guide
+  bores, head edge, and the 7-segment glow were restrained.
+
 - **Fixes (2026-09-07).** Stopping playback from the Paused state hung the transport:
   `pausePlayback` freezes ffmpeg with SIGSTOP, and a stopped process defers SIGTERM until it's
   continued, so `stopPlayback`'s lone SIGTERM sat pending forever — the UI stayed stuck in
