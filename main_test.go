@@ -979,6 +979,37 @@ func TestWSMeterSendDetectsClosedClient(t *testing.T) {
 	}
 }
 
+// Regression for the session store's unbounded growth: valid() prunes
+// lazily, only when the same expired ID is presented again, so sessions
+// that expired and were never re-presented accumulated forever. create()
+// now sweeps already-expired entries on every login. This test expires one
+// session without ever re-presenting it, then logs in again and asserts the
+// store holds only the new session - the sweep must have removed the
+// expired one without it being touched by valid().
+func TestSessionStoreSweepsExpiredOnCreate(t *testing.T) {
+	s := newSessionStore()
+	expired := s.create(30 * time.Millisecond)
+	time.Sleep(60 * time.Millisecond)
+
+	live := s.create(time.Hour)
+
+	// The sweep must already have removed the expired entry - assert the
+	// store's raw size before any valid() call could have lazily pruned it.
+	s.mu.Lock()
+	n := len(s.sessions)
+	s.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("expected the expired session to be swept on create, store holds %d entries", n)
+	}
+
+	if s.valid(expired) {
+		t.Fatalf("expired session still valid")
+	}
+	if !s.valid(live) {
+		t.Fatalf("freshly created session is not valid")
+	}
+}
+
 // Covers the Round 3 seek/scrub design: encoder click toggles play/pause,
 // rotate while paused seeks (restarting ffmpeg at a new offset), and the
 // playhead is reported as a clamped offset. Also pins playbackFileDuration
