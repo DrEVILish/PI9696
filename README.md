@@ -248,7 +248,9 @@ Count/Tag (the WAV-only recording format is fixed) settings, System Options, eve
 same way you would standing in front of it. Status,
 a read-only config summary, and the recordings file browser (download only - no upload, no
 delete-over-network, no arbitrary file access; downloads are checked against the app's own
-current recording list, not just sanitized user input) follow below.
+current recording list, not just sanitized user input). A **Download ALL** control streams every
+finished recording as a single ZIP (with a `manifest.txt` listing each file) directly to the
+browser, streaming rather than buffering, so large multi-channel sets don't exhaust RAM.
 
 **Security posture, read before exposing this on a shared network:**
 - The server is **plain HTTP, not HTTPS** - no certificate management on an embedded device with
