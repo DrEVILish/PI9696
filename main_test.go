@@ -18,6 +18,8 @@ import (
 
 	"pi9696/hardware"
 	"pi9696/xlog"
+
+	"golang.org/x/net/websocket"
 )
 
 // TestMain starts the single infernoWorker every test in this file shares.
@@ -935,6 +937,45 @@ func TestPlaybackAndRecordingAreMutuallyExclusive(t *testing.T) {
 	mutex.Unlock()
 	if !notPlaying {
 		t.Fatalf("play button started playback while recording was active")
+	}
+}
+
+// Regression for the WS meter push loop's missing write deadline: a client
+// that vanishes without closing could block Send forever, leaking the
+// handler goroutine per stale connection. wsMeterSend must (a) succeed on a
+// live connection and (b) report the connection as done once the peer is
+// gone, so the loop exits instead of retrying into the void.
+func TestWSMeterSendDetectsClosedClient(t *testing.T) {
+	gotConn := make(chan *websocket.Conn, 1)
+	release := make(chan struct{})
+	srv := httptest.NewServer(websocket.Handler(func(ws *websocket.Conn) {
+		gotConn <- ws
+		<-release // hold the conn open until the test is done with it
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+
+	url := "ws" + strings.TrimPrefix(srv.URL, "http") + "/ws"
+	client, err := websocket.Dial(url, "", "http://127.0.0.1/")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	serverConn := <-gotConn
+	if !wsMeterSend(serverConn) {
+		t.Fatalf("send to live client failed")
+	}
+
+	// Abrupt close: the next server-side send must fail and report done.
+	client.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if !wsMeterSend(serverConn) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("wsMeterSend kept succeeding after the client closed")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

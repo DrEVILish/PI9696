@@ -2181,12 +2181,31 @@ func handleAPIMeter(w http.ResponseWriter, r *http.Request) {
 // (client navigated away, network dropped) - the dashboard's reconnect
 // logic (see the WS setup in dashboardTmpl) is what handles that, not this
 // loop retrying.
+// wsWriteTimeout bounds how long a single meter-frame write may block. It's
+// a var so tests can tighten it.
+var wsWriteTimeout = 5 * time.Second
+
+// wsMeterSend pushes one meter snapshot, arming a fresh write deadline first.
+// It returns false when the connection is done and the push loop should exit.
+// The deadline matters: a client that vanishes without closing (power loss,
+// silent network drop) never triggers a read error, and a deadline-less Send
+// can block on it indefinitely - leaking this goroutine per stale connection
+// and keeping the connection "active" so remoteControlLoop's Shutdown can't
+// drain it (a clean close by the client errors the write immediately; the
+// deadline covers the silent-vanish case at the cost of one timed-out write).
+func wsMeterSend(ws *websocket.Conn) bool {
+	if err := ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
+		return false
+	}
+	return websocket.JSON.Send(ws, currentMeterResponse()) == nil
+}
+
 func handleWSMeter(ws *websocket.Conn) {
 	defer ws.Close()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
-		if err := websocket.JSON.Send(ws, currentMeterResponse()); err != nil {
+		if !wsMeterSend(ws) {
 			return
 		}
 	}
@@ -2584,8 +2603,17 @@ func remoteControlLoop() {
 		if up != wasUp {
 			if currentServer != nil {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-				currentServer.Shutdown(ctx)
+				err := currentServer.Shutdown(ctx)
 				cancel()
+				if err != nil {
+					// Graceful drain timed out - long-lived connections
+					// (the WebSocket meter push, a dashboard that stopped
+					// reading) don't count as idle. Force-close so a
+					// stopped interface can't leave the old server's
+					// connections half-open; their handlers exit on the
+					// resulting write errors.
+					currentServer.Close()
+				}
 				currentServer = nil
 				logInfof("Remote control server stopped")
 			}
