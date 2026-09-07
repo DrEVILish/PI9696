@@ -1172,8 +1172,12 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .vu-track{position:relative;width:14px;height:var(--meter-h);background:#020509;box-shadow:inset 0 0 0 1px var(--border);border-radius:2px}
 /* -18dBFS (58% up the scale, see VU_CURVE) is where the fill switches
    from green to the yellow->red graduation running the rest of the way to
-   0dBFS. */
-.vu-fill{position:absolute;bottom:0;left:1px;right:1px;height:0%;background:linear-gradient(to top,#0aff9d 0%,#0aff9d 58%,#ffe400 58%,#ff2a2a 100%);box-shadow:0 0 8px rgba(0,255,180,0.35)}
+   0dBFS. The gradient is sized to the full --meter-h track (not the fill's
+   own height) and pinned to the bottom, so the fill only reveals the band up
+   to its current level - a low bar reads green, a mid bar yellow, a hot bar
+   red - instead of the whole green->red ramp compressing into every bar
+   regardless of level. */
+.vu-fill{position:absolute;bottom:0;left:1px;right:1px;height:0%;background:linear-gradient(to top,#0aff9d 0%,#0aff9d 58%,#ffe400 58%,#ff2a2a 100%);background-size:100% var(--meter-h);background-position:0 100%;background-repeat:no-repeat;box-shadow:0 0 8px rgba(0,255,180,0.35)}
 .vu-peak{position:absolute;left:1px;right:1px;height:2px;background:#fff;box-shadow:0 0 6px #fff}
 .ch-label{font-size:0.6em;color:var(--dim);letter-spacing:0.04em}
 
