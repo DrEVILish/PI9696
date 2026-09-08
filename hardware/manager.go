@@ -14,6 +14,7 @@ type HardwareManager struct {
 	Encoder  *Encoder
 	Buttons  *ButtonManager
 	Network  *NetworkDetector
+	Lamps    *LampManager
 }
 
 func NewHardwareManager() (*HardwareManager, error) {
@@ -67,11 +68,22 @@ func NewHardwareManager() (*HardwareManager, error) {
 	}
 	hm.Buttons = buttons
 
+	// Initialize button lamps (REC/PLAY backlights; STOP has no lamp).
+	lamps, err := NewLampManager()
+	if err != nil {
+		hm.FiraCode.Close()
+		return nil, fmt.Errorf("failed to initialize lamps: %v", err)
+	}
+	hm.Lamps = lamps
+
 	slog.Info("Hardware initialized successfully with FiraCode support")
 	return hm, nil
 }
 
 func (hm *HardwareManager) Close() error {
+	if hm.Lamps != nil {
+		hm.Lamps.Close()
+	}
 	if hm.FiraCode != nil {
 		return hm.FiraCode.Close()
 	}

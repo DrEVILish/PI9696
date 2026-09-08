@@ -2527,6 +2527,28 @@ func updateLoop() {
 	}
 }
 
+// updateButtonLampsLocked drives the REC/PLAY button backlights (Round 3
+// hardware; STOP has no lamp): REC lit while a take is running, PLAY lit
+// while playback is active and flashing at ~2Hz while paused so a paused deck
+// reads as "standing by" rather than finished. Called from the 100ms render
+// tick; LampManager.Set only writes a pin when its state changes, so the
+// steady-state lamps cost nothing. Must hold the app mutex.
+func updateButtonLampsLocked() {
+	if hwManager == nil || hwManager.Lamps == nil {
+		return
+	}
+	lm := hwManager.Lamps
+	lm.Set(hardware.RecLamp, isRecording)
+	switch currentState {
+	case StatePlaying:
+		lm.Set(hardware.PlayLamp, true)
+	case StatePaused:
+		lm.Set(hardware.PlayLamp, time.Now().UnixMilli()/250%2 == 0)
+	default:
+		lm.Set(hardware.PlayLamp, false)
+	}
+}
+
 func render() {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -2537,6 +2559,8 @@ func render() {
 	applyAutoDimLocked(time.Now())
 
 	pushWaveformSample()
+
+	updateButtonLampsLocked()
 
 	// Mid-take low-space auto-stop (Round 3 design: a take must never be
 	// allowed to run into no room and have ffmpeg die mid-write, corrupting
