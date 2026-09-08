@@ -1817,8 +1817,10 @@ func startRecording() {
 	// render() and every button/encoder callback for as long as that took.
 	go func() {
 		cmd.Wait()
+		var closedFile string
 		mutex.Lock()
 		if ffmpegCmd == cmd {
+			closedFile = recordingFile
 			ffmpegCmd = nil
 			isRecording = false
 			meterPeakDB = meterSilence
@@ -1843,6 +1845,22 @@ func startRecording() {
 			}
 		}
 		mutex.Unlock()
+		// The take's WAV file is now fully written and closed by ffmpeg.
+		// fsync it (a foreground, deliberate write to stable storage) before
+		// the take counts as done, so a power loss right after recording
+		// can't leave the just-finished take as a zero-/partially-drained
+		// journal cache entry. Done outside the app mutex so a slow flush
+		// to a USB stick doesn't freeze the UI.
+		if closedFile != "" {
+			if f, err := os.OpenFile(closedFile, os.O_RDWR, 0); err == nil {
+				if err := f.Sync(); err != nil {
+					logErrorf("fsync of take %s failed: %v", closedFile, err)
+				}
+				f.Close()
+			} else {
+				logErrorf("fsync of take %s: open failed: %v", closedFile, err)
+			}
+		}
 		close(done)
 	}()
 }
@@ -2519,6 +2537,15 @@ func render() {
 	applyAutoDimLocked(time.Now())
 
 	pushWaveformSample()
+
+	// Mid-take low-space auto-stop (Round 3 design: a take must never be
+	// allowed to run into no room and have ffmpeg die mid-write, corrupting
+	// the WAV header). Checks at most once per second under the render tick,
+	// which is far cheaper than the Statfs syscall and keeps the behaviour on
+	// the same lock everything else uses.
+	if isRecording {
+		checkMidTakeDiskLocked()
+	}
 
 	hwManager.ClearDisplay()
 
@@ -3832,6 +3859,42 @@ const diskWarnMinutes = 30
 func lowDisk() bool {
 	r := estimateRemainingTime()
 	return r > 0 && r < diskWarnMinutes*time.Minute
+}
+
+// midTakeDiskStopThreshold is the remaining-time below which an in-progress
+// take is auto-stopped so ffmpeg finalizes the WAV (headers, length) while
+// there is still room, instead of running out of space mid-write and leaving
+// a corrupt file with no usable take.
+const midTakeDiskStopThreshold = time.Minute
+
+// lastMidTakeDiskCheck gates the mid-take Statfs check to at most once per
+// second (it runs under the render tick).
+var lastMidTakeDiskCheck time.Time
+
+// checkMidTakeDiskLocked auto-stops an in-progress take when the estimated
+// remaining disk time drops below midTakeDiskStopThreshold. Callers must hold
+// mutex. Silently no-ops if estimate 0 (unwritable/unknown storage) - same
+// principle as lowDisk; the recording path fails cleanly on its own then.
+func checkMidTakeDiskLocked() {
+	if now := time.Now(); now.Sub(lastMidTakeDiskCheck) < time.Second {
+		return
+	} else {
+		lastMidTakeDiskCheck = now
+	}
+	if shouldAutoStopTake(estimateRemainingTime()) {
+		diskWarnUntil = time.Now().Add(5 * time.Second)
+		logWarnf("Auto-stopping take: under a minute of space remains")
+		stopRecording()
+	}
+}
+
+// shouldAutoStopTake reports whether an in-progress take should be stopped
+// because the remaining disk time has dropped below the auto-stop threshold.
+// A zero/unknown estimate deliberately returns false, matching lowDisk's
+// principle - unknowable storage isn't "low", the recording path fails
+// cleanly on its own.
+func shouldAutoStopTake(remaining time.Duration) bool {
+	return remaining > 0 && remaining < midTakeDiskStopThreshold
 }
 
 // recordingBytesPerSecond estimates on-disk output rate. WAV is uncompressed
