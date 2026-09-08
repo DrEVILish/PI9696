@@ -1193,7 +1193,8 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .r2r .hud-lamp{fill:#11304a}
 .r2r .hud-lamp.on{fill:var(--idle);filter:drop-shadow(0 0 3px var(--idle))}
 .r2r .hud-lamp.rec{fill:var(--rec);filter:drop-shadow(0 0 3px var(--rec))}
-.r2r #linkLamp{fill:rgba(0,217,255,0.55)}
+.r2r #linkLamp{fill:#15324a}
+.r2r #linkLamp.on{fill:rgba(0,217,255,0.9);filter:drop-shadow(0 0 3px rgba(0,217,255,0.8))}
 .r2r .hud-text{fill:var(--dim);font-size:9px;letter-spacing:0.22em;font-family:"Consolas",monospace}
 /* The lit 7-segment time display. Every segment is an SVG line (see the
    buildSeg7 JS); the dim .s7 shows all segments faintly so the display
@@ -1837,6 +1838,8 @@ function applyMeter(m) {
     sysLamp.classList.toggle('on', moving);
     sysLamp.classList.toggle('rec', !!m.recording);
   }
+  var linkLamp = document.getElementById('linkLamp');
+  if (linkLamp) linkLamp.classList.toggle('on', !!m.infernoUp);
 
   // Rebuild the transport row only when the play/pause state actually flips,
   // so the play triangle toggles to a pause glyph exactly when the state does.
@@ -2162,6 +2165,11 @@ type meterResponse struct {
 	Paused     bool           `json:"paused"`
 	Monitoring bool           `json:"monitoring"`
 	MonOutput  bool           `json:"monOutput"`
+	// InfernoUp mirrors the Inferno server state (infernoState ==
+	// InfernoRunning) so the dashboard's INFERNO-LINK deck lamp reflects
+	// reality - it rides the existing 100ms meter push, so no separate
+	// stream or poll is needed.
+	InfernoUp  bool           `json:"infernoUp"`
 	Elapsed    string         `json:"elapsed"`
 	Channels   []channelLevel `json:"channels"`
 	// FloorDB is the currently configured VU-meter range floor (Settings ->
@@ -2201,6 +2209,7 @@ func currentMeterResponse() meterResponse {
 		Paused:     currentState == StatePaused,
 		Monitoring: monitoring,
 		MonOutput:  monitoringOutput,
+		InfernoUp:  infernoState == InfernoRunning,
 		FloorDB:    vuRangeOptions[vuRangeIdx],
 	}
 	// Always size the meter bank to the configured channel count. During
