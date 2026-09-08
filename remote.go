@@ -1187,14 +1187,17 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    ring is drawn via box-shadow instead so the darker background still reads
    as a channel well. */
 .vu-track{position:relative;width:14px;height:var(--meter-h);background:#020509;box-shadow:inset 0 0 0 1px var(--border);border-radius:2px}
-/* -18dBFS (58% up the scale, see VU_CURVE) is where the fill switches
-   from green to the yellow->red graduation running the rest of the way to
-   0dBFS. The gradient is sized to the full --meter-h track (not the fill's
+/* The meter bands honor the design colors at absolute dBFS: green below
+   -18dBFS, yellow -18..-6dBFS, red above -6dBFS. The stops are percentages
+   of the track, computed in JS from the configured floor via the same
+   vuPct() curve used for the ticks and fills (--vu-g / --vu-r below), so a
+   floor change repositions the bands instead of leaving them tuned to one
+   range. The gradient is sized to the full --meter-h track (not the fill's
    own height) and pinned to the bottom, so the fill only reveals the band up
    to its current level - a low bar reads green, a mid bar yellow, a hot bar
    red - instead of the whole green->red ramp compressing into every bar
    regardless of level. */
-.vu-fill{position:absolute;bottom:0;left:1px;right:1px;height:0%;background:linear-gradient(to top,#0aff9d 0%,#0aff9d 58%,#ffe400 58%,#ff2a2a 100%);background-size:100% var(--meter-h);background-position:0 100%;background-repeat:no-repeat;box-shadow:0 0 8px rgba(0,255,180,0.35)}
+.vu-fill{position:absolute;bottom:0;left:1px;right:1px;height:0%;background:linear-gradient(to top,#0aff9d 0%,#0aff9d var(--vu-g,58%),#ffe400 var(--vu-g,58%),#ffe400 var(--vu-r,90%),#ff2a2a var(--vu-r,90%),#ff2a2a 100%);background-size:100% var(--meter-h);background-position:0 100%;background-repeat:no-repeat;box-shadow:0 0 8px rgba(0,255,180,0.35)}
 .vu-peak{position:absolute;left:1px;right:1px;height:2px;background:#fff;box-shadow:0 0 6px #fff}
 .ch-label{font-size:0.6em;color:var(--dim);letter-spacing:0.04em}
 
@@ -1624,6 +1627,11 @@ function rebuildDbScale(floor) {
     span.textContent = db;
     dbScale.appendChild(span);
   });
+  // Position the green->yellow and yellow->red meter bands at the design's
+  // absolute thresholds (-18 / -6 dBFS) mapped through the current floor.
+  var root = document.documentElement;
+  root.style.setProperty('--vu-g', vuPct(-18) + '%');
+  root.style.setProperty('--vu-r', vuPct(-6) + '%');
 }
 
 // ---- 7-segment time display (inline SVG segments, italic via skewX) ----
