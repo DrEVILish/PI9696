@@ -38,6 +38,8 @@ dashboard that mirrors the device.
 **Recording**
 - Manual start/stop only (no scheduling — removed from the product design)
 - Start is refused when less than 30 minutes of space remains at the current rate
+- A take still running when under a minute of space remains auto-stops (graceful finalize,
+  LOW DISK warning); finished takes are fsynced to storage
 - Tag presets (Show / Rehearsal / Soundcheck / Interview / Backup / None) and a filename
   prefix (preset list on the OLED, free text in the WebUI)
 - Real-time elapsed / remaining time, storage, and Peak/RMS readout on the OLED

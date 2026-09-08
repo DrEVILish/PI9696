@@ -4,7 +4,8 @@ This file is the **design record**: what is implemented, what is deliberately no
 product decisions behind the behaviour, and the per-feature history. For setup and usage
 see `README.md`; for hardware see `WIRING.md`.
 
-**Last updated:** 2026-09-07 · **Version:** 1.16.0 (plus the over-engineering audit cuts)
+**Last updated:** 2026-09-07 · **Version:** 1.16.2 (clock + meter colors, fsync +
+mid-take auto-stop, over-engineering audit cuts)
 
 ---
 
@@ -13,7 +14,8 @@ see `README.md`; for hardware see `WIRING.md`.
 **Working end-to-end** (verified by the test suite and the live sim instance):
 
 - Recording: Inferno → FIFO → ffmpeg → 24-bit WAV in `/rec/YYYY-MM-DD/`, with start-time
-  naming (`prefix_..._chN_NNkHz.wav`), tag presets, low-disk start refusal (30-min rule)
+  naming (`prefix_..._chN_NNkHz.wav`), tag presets, low-disk start refusal (30-min rule),
+  fsync of the finished WAV, and mid-take auto-stop when under a minute of space remains
 - Playback of the latest take to local ALSA, with encoder click = play/pause,
   rotate-while-paused = seek (5 s/detent), hold = exit, progress bar + elapsed/total
 - OLED UI: full menu system, status bar `[ETH] [INF] [USB]`, VU/waveform/info idle-browse
@@ -38,25 +40,20 @@ language toggle (future), power-source monitoring.
 Prioritized. Items marked *(design promise)* contradict a recorded decision and should be
 fixed before release; the rest are recorded as future work.
 
-1. **Auto-stop when storage runs out mid-take** *(design promise — "auto-stop gracefully
-   when less than 1 minute of space remains")*. Only the start-time refusal exists today;
-   a take that runs into a full card ends in ffmpeg write errors and a truncated file.
-2. **fsync the finished WAV** after the encoder exits, so a power cut right after "stop"
-   cannot lose buffered data.
-3. **Button lamps** (Round 3: REC/STOP/PLAY backlights instead of status LEDs). The GPIO
+1. **Button lamps** (Round 3: REC/STOP/PLAY backlights instead of status LEDs). The GPIO
    status LEDs are removed from the code; the lamps are not yet driven by software.
-4. **Playback via Inferno/AoIP** — the recorded target. Blocked: the Inferno server
+2. **Playback via Inferno/AoIP** — the recorded target. Blocked: the Inferno server
    contract is receive-only today (no input/stream command to feed a WAV back out).
    Playback currently goes to local ALSA.
-5. **Config export/import to USB** *(future)* — non-secret JSON (WiFi password and
+3. **Config export/import to USB** *(future)* — non-secret JSON (WiFi password and
    access token excluded) so units can be cloned; `persistConfig` already exists, so
    this is now a small feature.
-6. **INFERNO-LINK lamp on the WebUI deck is static** — it should reflect Inferno state
+4. **INFERNO-LINK lamp on the WebUI deck is static** — it should reflect Inferno state
    (needs an Inferno field in the meter payload).
-7. **Sim-mode OLED input** — the token logging fixed sim authentication, but there is
+5. **Sim-mode OLED input** — the token logging fixed sim authentication, but there is
    still no way to drive the OLED menus from a dev box (only the WebUI's on-screen
    encoder, which needs auth). Add only when actually needed.
-8. **Recordings list at scale** — the WebUI globs and re-renders every 15 s; fine to
+6. **Recordings list at scale** — the WebUI globs and re-renders every 15 s; fine to
    hundreds of takes, degrades at thousands. Accepted ceiling; revisit with pagination
    only if real use hits it.
 
@@ -212,7 +209,8 @@ noted for later releases; everything else reflects the intended current behaviou
 ### Recording Length
 - **No user recording time limit**; records until manually stopped or storage is
   exhausted. **Auto-stop gracefully when less than 1 minute of space remains** to avoid
-  an unrecoverable/corrupt take. *(Not yet implemented — see Known Gaps #1.)*
+  an unrecoverable/corrupt take. *(Implemented — see the fsync + mid-take auto-stop
+  feature entry in the history.)*
 
 ### Power Source Monitoring
 - **Not needed** — mains power assumed; no battery/UPS monitoring *(out of scope)*.
@@ -244,7 +242,7 @@ noted for later releases; everything else reflects the intended current behaviou
   *(Implemented in 1.16.0 — encoder click = play/pause, rotate-while-paused = seek.)*
 - **Target path**: playback goes out through **Inferno/AoIP**; local ALSA playback is
   retired eventually. **Not yet implemented** — the Inferno contract is receive-only
-  today, so playback still goes to local ALSA (see Known Gaps #4).
+  today, so playback still goes to local ALSA (see Known Gaps #2).
 ### Product Decisions - Round 2 (2026-09-04)
 
 Second design-review pass. Items marked *(future)* are noted for later releases.
@@ -347,6 +345,28 @@ Third design-review pass: fills in the specifics needed to finish the build.
   unrelated edits.
 
 ### Feature History
+
+- **Data-loss hardening (2026-09-07).** The two design promises for protecting takes
+  against losing them are now in the code. (1) Every finished WAV is fsynced by the
+  take's owning goroutine after ffmpeg exits — an `open+Sync` outside the app mutex,
+  with failures logged — so a power cut right after "stop" can't leave a drained
+  journal-cache entry. (2) A take running into < 1 minute of space is now auto-stopped
+  (same graceful SIGTERM finalize as the Stop button) via a once-per-second check under
+  the render tick, flashing the existing LOW DISK warning; the pure predicate
+  `shouldAutoStopTake` (unknown/zero estimate ≡ "not low", matching `lowDisk`) is
+  pinned by a test, and the recording-lifecycle test now creates the take file so the
+  fsync path runs against a real file.
+
+- **Clock + meter colors (2026-09-07).** Two Round-1 design decisions the code had
+  silently skipped. (1) A 24-hour HH:MM clock leads the OLED status bar (re-rendered on
+  the existing 100 ms tick); no clock existed anywhere on the device before — the design
+  specified one "throughout the device and WebUI", and the WebUI's 7-segment counter
+  already covers the WebUI half during takes. (2) The WebUI VU meters now switch color at
+  the design's absolute thresholds (green < -18 dBFS, yellow -18…-6, red > -6) with the
+  band positions computed in JS from the configured meter floor via the same `vuPct()`
+  curve used for the ticks and fills (previously a fixed 58 %/100 % gradient that only
+  approximated -18 dBFS at the default floor and had no -6 boundary). Verified across
+  floors -40/-60/-90/-120: -30 reads green, -12 yellow, -3 red.
 
 - **Audit cuts (2026-09-07).** Whole-tree over-engineering audit; ~800 lines removed in
   eight commits with zero feature change (full suite green after each): dead
@@ -501,6 +521,9 @@ Third design-review pass: fills in the specifics needed to finish the build.
 hardware bring-up. The known gaps list above is the honest remainder.**
 
 **Version:** 1.16.0 — playback seek/scrub (encoder click = play/pause, rotate-while-paused
-= seek, relative-offset position display), plus the over-engineering audit cuts
-(~800 lines: dead manager surface, demo mode, GPIO status LEDs, font-converter tool,
-xlog → log/slog, dead network code, template consolidation).
+= seek, relative-offset position display); **1.16.1** — two Round-1 design decisions
+(status-bar clock; WebUI meter colors at the design's dBFS thresholds); **1.16.2** — the
+two data-loss design promises (fsync of finished takes; mid-take auto-stop at <1 min).
+Plus the over-engineering audit cuts (~800 lines: dead manager surface, demo mode, GPIO
+status LEDs, font-converter tool, xlog → log/slog, dead network code, template
+consolidation).

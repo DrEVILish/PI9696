@@ -106,7 +106,7 @@ This document provides the complete wiring reference for connecting all componen
 - Anode (long leg) → resistor → GPIO pin; cathode (short leg) → GND
 - **Software status: not yet implemented.** Per the Round 3 design the former GPIO12/16
   status LEDs were removed from the codebase; driving these three backlights is the
-  recorded follow-up (see PROJECT_STATUS, Known Gaps #3). The wiring above is the
+  recorded follow-up (see PROJECT_STATUS, Known Gaps #1). The wiring above is the
   builder's reference for when the software support lands.
 
 ### 5. Audio (AoIP / Ethernet)
@@ -118,7 +118,7 @@ There is **no analog or USB audio I/O** in the build:
   ffmpeg -> WAV).
 - Playback currently goes to the **local ALSA output** (`ffmpeg -f alsa default`). Routing
   playback back out through Inferno is the design target but is not yet implemented - the
-  Inferno server contract is receive-only today (see PROJECT_STATUS, Known Gaps #4).
+  Inferno server contract is receive-only today (see PROJECT_STATUS, Known Gaps #2).
 - No USB audio interface, no DAC/HAT, no XLR/TRS analog inputs.
 
 ## Power Requirements
