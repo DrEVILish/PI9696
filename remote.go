@@ -1002,6 +1002,21 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 
 .grid{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:1.2em;max-width:1400px;margin:0 auto}
 
+/* The recordings browser is a big scrollable list that fills whatever
+   vertical space the viewport has left (header deck above, meter footer
+   below) instead of growing past it and scrolling the whole page -
+   pagination was explicitly ruled out, so a long take list scrolls inside
+   its own panel. On desktop the page is a fixed-height flex column: the
+   grid stretches to fill, panels become columns, and the recordings area
+   is the flexible, scrolling member. */
+@media (min-width:801px){
+  body{min-height:100vh;display:flex;flex-direction:column}
+  .grid{flex:1;min-height:0;align-self:stretch}
+  .panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .panel h2{flex:none}
+  #recordings{flex:1;min-height:0;overflow-y:auto;margin-top:0.5em;padding-top:0.4em;border-top:1px solid var(--border)}
+}
+
 /* Modals: the settings sheet and the stop-recording confirmation. */
 .modal-backdrop{display:none;position:fixed;inset:0;background:rgba(2,6,10,0.75);z-index:200;align-items:center;justify-content:center}
 .modal-backdrop.open{display:flex}
