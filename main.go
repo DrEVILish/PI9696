@@ -2571,7 +2571,7 @@ func renderStatusBar() {
 	sampleRate := sampleRates[sampleRateIdx]
 	// Use FiraCode ligatures: >= <= != === !== -> <- =>
 	// WAV is uncompressed PCM at the output bit depth shown below.
-	formatStr := fmt.Sprintf("WAV %dbit %dkHz %dch", OutputBitsPerSample, sampleRate/1000, channelCount)
+	formatStr := fmt.Sprintf("%s WAV %dbit %dkHz %dch", time.Now().Format("15:04"), OutputBitsPerSample, sampleRate/1000, channelCount)
 
 	// Right side - USB status with enhanced typography
 	rightSide := ""
