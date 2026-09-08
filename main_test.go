@@ -255,6 +255,12 @@ func TestStopRecordingDoesNotBlockMutex(t *testing.T) {
 	}
 	startRecording()
 	recording := isRecording
+	// The fake ffmpeg never writes the output WAV, so create it so the
+	// post-take fsync in the stop goroutine opens a real file.
+	os.MkdirAll(RecordPath, 0755)
+	takeFile := filepath.Join(recordingFile)
+	os.WriteFile(takeFile, []byte("fake"), 0644)
+	t.Cleanup(func() { os.Remove(takeFile) })
 	mutex.Unlock()
 	if !recording {
 		t.Fatalf("expected isRecording true after startRecording")
@@ -1810,5 +1816,23 @@ func TestDownloadAll(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "recording_20260101_000000_ch2_48kHz.wav") {
 		t.Fatalf("ZIP does not contain the recording entry")
+	}
+}
+
+// The mid-take auto-stop predicate must trip only when remaining disk is
+// between 0 and the threshold - an unknown (0) estimate must never stop a
+// take (matches lowDisk's "unknowable isn't low" principle).
+func TestShouldAutoStopTake(t *testing.T) {
+	if !shouldAutoStopTake(midTakeDiskStopThreshold - time.Second) {
+		t.Fatalf("expected auto-stop at a minute-minus-one of space")
+	}
+	if shouldAutoStopTake(midTakeDiskStopThreshold) {
+		t.Fatalf("did not expect auto-stop exactly at the threshold")
+	}
+	if shouldAutoStopTake(midTakeDiskStopThreshold + time.Minute) {
+		t.Fatalf("did not expect auto-stop with plenty of space")
+	}
+	if shouldAutoStopTake(0) {
+		t.Fatalf("unknown (0) estimate must not trigger auto-stop")
 	}
 }
