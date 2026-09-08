@@ -4,8 +4,8 @@ This file is the **design record**: what is implemented, what is deliberately no
 product decisions behind the behaviour, and the per-feature history. For setup and usage
 see `README.md`; for hardware see `WIRING.md`.
 
-**Last updated:** 2026-09-07 · **Version:** 1.16.2 (clock + meter colors, fsync +
-mid-take auto-stop, over-engineering audit cuts)
+**Last updated:** 2026-09-08 · **Version:** 1.17.0 (button lamps driven, scrollable
+recording-list, config export/import to USB)
 
 ---
 
@@ -40,22 +40,18 @@ language toggle (future), power-source monitoring.
 Prioritized. Items marked *(design promise)* contradict a recorded decision and should be
 fixed before release; the rest are recorded as future work.
 
-1. **Button lamps** (Round 3: REC/STOP/PLAY backlights instead of status LEDs). The GPIO
-   status LEDs are removed from the code; the lamps are not yet driven by software.
-2. **Playback via Inferno/AoIP** — the recorded target. Blocked: the Inferno server
+1. **Playback via Inferno/AoIP** — the recorded target. Blocked: the Inferno server
    contract is receive-only today (no input/stream command to feed a WAV back out).
    Playback currently goes to local ALSA.
-3. **Config export/import to USB** *(future)* — non-secret JSON (WiFi password and
-   access token excluded) so units can be cloned; `persistConfig` already exists, so
-   this is now a small feature.
-4. **INFERNO-LINK lamp on the WebUI deck is static** — it should reflect Inferno state
+2. **INFERNO-LINK lamp on the WebUI deck is static** — it should reflect Inferno state
    (needs an Inferno field in the meter payload).
-5. **Sim-mode OLED input** — the token logging fixed sim authentication, but there is
+3. **Sim-mode OLED input** — the token logging fixed sim authentication, but there is
    still no way to drive the OLED menus from a dev box (only the WebUI's on-screen
    encoder, which needs auth). Add only when actually needed.
-6. **Recordings list at scale** — the WebUI globs and re-renders every 15 s; fine to
-   hundreds of takes, degrades at thousands. Accepted ceiling; revisit with pagination
-   only if real use hits it.
+4. **Recordings list at scale** — the WebUI globs and re-renders every 15 s; fine to
+   hundreds of takes, degrades at thousands. The list itself is now a full-height
+   scrollable panel (no pagination, per directive); the 15 s re-glob is the remaining
+   ceiling. Revisit only if real use hits it.
 
 Superseded design notes kept for the record: scheduled recording was **removed from the
 product design** (Round 3) and is fully removed from the codebase; the two GPIO status
@@ -69,8 +65,9 @@ LEDs (GPIO12/16) were **removed** in the same round in favour of button backligh
   command 0xC1; inert no-op paths in simulator mode.
 - **Rotary encoder (EC11)** — rotate / click / hold with debouncing.
 - **GPIO buttons** — Record (GPIO5), Stop (GPIO6), Play (GPIO13), internal pull-ups.
-- **Button lamps** — *not yet implemented* (Round 3 target; the old GPIO12/16 status LEDs
-  were removed from code and design).
+- **Button lamps** — REC + PLAY backlights, driven (GPIO12 = REC lit while recording;
+  GPIO16 = PLAY solid while playing, 250 ms blink while paused; STOP has no lamp per the
+  Round-4 directive). Change-only writes via `LampManager`, inert in sim.
 - **Hardware manager** — unified init/close over the sub-managers + network detection.
 
 ### Recording Engine
@@ -101,7 +98,7 @@ LEDs (GPIO12/16) were **removed** in the same round in favour of button backligh
   without this, stop-while-paused hangs; same for the seek path).
 - The playing screen shows a progress bar + `elapsed / total` with a `[PAUSED]` marker.
 - **Routing playback out through Inferno/AoIP is the design target, not implemented** —
-  blocked on the Inferno server exposing an input/stream command (see Known Gaps).
+  blocked on the Inferno server exposing an input/stream command (see Known Gaps #1).
 
 ### Level Metering
 - Peak/RMS per channel from the recording/monitor pipeline; WebUI bars colour
@@ -242,7 +239,7 @@ noted for later releases; everything else reflects the intended current behaviou
   *(Implemented in 1.16.0 — encoder click = play/pause, rotate-while-paused = seek.)*
 - **Target path**: playback goes out through **Inferno/AoIP**; local ALSA playback is
   retired eventually. **Not yet implemented** — the Inferno contract is receive-only
-  today, so playback still goes to local ALSA (see Known Gaps #2).
+  today, so playback still goes to local ALSA (see Known Gaps #1).
 ### Product Decisions - Round 2 (2026-09-04)
 
 Second design-review pass. Items marked *(future)* are noted for later releases.
@@ -308,9 +305,10 @@ Third design-review pass: fills in the specifics needed to finish the build.
   XLR/TRS analog inputs are removed from the hardware list. Audio is Ethernet-only.
 - **Local monitor** - **No local monitor output** (no headphone jack/DAC/HAT); monitoring is
   via the meters and AoIP consumers.
-- **Status LEDs** - **Button lamps only**: the two GPIO status LEDs (GPIO12/16) are removed;
-  illumination is behind the REC/STOP/PLAY buttons only. Status indication otherwise lives on
-  the OLED.
+- **Status LEDs** - **Button lamps only (REC + PLAY)**: the two GPIO status LEDs
+  (GPIO12/16) are removed; illumination is behind the REC and PLAY buttons only — STOP
+  has no lamp (Round-4 directive; the STOP action has a long-press, so its lamp would
+  signal nothing a user waits on). Status indication otherwise lives on the OLED.
 - **Logging storage** - **journald + a small on-device file** (for crash/early-boot), with
   rotation/retention.
 - **Log level UI** - Log level (default **Error-only**) is changeable from both the **OLED
@@ -345,6 +343,31 @@ Third design-review pass: fills in the specifics needed to finish the build.
   unrelated edits.
 
 ### Feature History
+
+- **Config export/import to USB (2026-09-08).** New System Options rows — Export Config
+  and Import Config (between Format USB and the power actions) publish and load a
+  non-secret JSON profile (`pi9696-config.json`) on the USB drive. The profile carries
+  device name, sample rate/channels, tag preset, file prefix, VU range/peak-hold,
+  transport mode, log level, OLED brightness, auto-dim, and the WiFi SSID/enable — but
+  **never** `WifiPassword` or the access token (export blanks it; import re-applies an
+  existing local password when the file carries none). Out-of-range indexes are clamped
+  like boot-time load, log level/brightness are re-applied live, an Inferno restart is
+  scheduled when sample rate/channel count changed, and the imported values are
+  persisted. In the WebUI the same two actions live in a Config group of the settings
+  modal (import forces an HX-Refresh so every settings row shows the new values; failures
+  stay inline in the modal). The directory-level helpers are unit-tested for the full
+  round-trip, password non-leak, and clean failure on a profile-less drive.
+
+- **Button lamps driven (2026-09-08).** The Round-3 backlights were LED statuses, not
+  transport lamps; a new `LampManager` writes change-only GPIO values on the 100 ms OLED
+  tick — REC (GPIO12) lit while recording, PLAY (GPIO16) solid while playing and blinking
+  at 250 ms while paused, both off otherwise. STOP has no lamp per the Round-4 narrowing.
+  Sim-mode lamps are no-ops, so the full path runs headlessly.
+
+- **WebUI recordings list is a scrollable panel (2026-09-08).** The dashboard grows to
+  viewport height on desktop layouts (≥801 px); the content grid takes all free vertical
+  space and only `#recordings` scrolls — no pagination, per directive — while the deck,
+  meter and settings panels squeeze to their own content. Phone widths are unchanged.
 
 - **Data-loss hardening (2026-09-07).** The two design promises for protecting takes
   against losing them are now in the code. (1) Every finished WAV is fsynced by the
@@ -524,6 +547,9 @@ hardware bring-up. The known gaps list above is the honest remainder.**
 = seek, relative-offset position display); **1.16.1** — two Round-1 design decisions
 (status-bar clock; WebUI meter colors at the design's dBFS thresholds); **1.16.2** — the
 two data-loss design promises (fsync of finished takes; mid-take auto-stop at <1 min).
+**1.17.0** — button lamps driven from transport state (REC + PLAY, STOP has no lamp),
+WebUI recordings list as a full-height scrollable panel, config export/import to USB
+(non-secret JSON profile).
 Plus the over-engineering audit cuts (~800 lines: dead manager surface, demo mode, GPIO
 status LEDs, font-converter tool, xlog → log/slog, dead network code, template
 consolidation).
