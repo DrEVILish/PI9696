@@ -209,6 +209,143 @@ func settingChanged() {
 	persistConfig()
 }
 
+// configExportName is the config profile a unit writes/reads on its USB drive
+// (System -> Export/Import Config, or the WebUI Config group). It is plain
+// JSON that a newer unit can still read (unknown fields are dropped by Go;
+// absent fields keep the importer's current value via the clamps below).
+const configExportName = "pi9696-config.json"
+
+// exportConfig writes the current non-destructive settings to the USB drive
+// as JSON, with the WiFi password blanked - config export is explicitly the
+// non-secret profile for cloning a unit's setup (the access token is never
+// persisted anywhere, so it is inherently excluded too). Must be called under
+// the app mutex.
+func exportConfig() error {
+	if !usbMounted {
+		return fmt.Errorf("no USB drive mounted")
+	}
+	return exportConfigTo(USBMountPoint)
+}
+
+// exportConfigTo does exportConfig's work into an arbitrary directory so the
+// round-trip is testable without a mounted drive.
+func exportConfigTo(dir string) error {
+	profile := PersistedConfig{
+		DeviceName:        deviceName,
+		SampleRateIdx:     sampleRateIdx,
+		ChannelCount:      channelCount,
+		TagPresetIdx:      tagPresetIdx,
+		FilePrefix:        filePrefix,
+		VURangeIdx:        vuRangeIdx,
+		PeakHoldIdx:       peakHoldIdx,
+		TransportMode:     transportMode,
+		LogLevelIdx:       int(currentLogLevel()),
+		OledBrightnessPct: &oledBrightnessPct,
+		AutoDimDisabled:   !autoDimEnabled,
+		WifiEnabled:       wifiEnabled,
+		WifiSSID:          wifiSSID,
+		// WifiPassword deliberately omitted - it's a credential.
+	}
+	data, err := json.MarshalIndent(&profile, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshalling config: %v", err)
+	}
+	dst := filepath.Join(dir, configExportName)
+	tmp := dst + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return fmt.Errorf("writing %s: %v", configExportName, err)
+	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("committing %s: %v", configExportName, err)
+	}
+	logInfof("config exported to USB as %s", configExportName)
+	return nil
+}
+
+// importConfig loads the USB profile written by exportConfig and applies it,
+// clamping out-of-range indexes exactly like loadPersistedConfig does at boot
+// (a hand-edited file can't push an index off its slice). The WiFi password
+// is never adopted from the file - export blanks it, so the whole WiFi block
+// is skipped unless the file actually carries a credential, preventing an
+// import from turning on an open access point. Must be called under the app
+// mutex.
+func importConfig() error {
+	if !usbMounted {
+		return fmt.Errorf("no USB drive mounted")
+	}
+	return importConfigFrom(USBMountPoint)
+}
+
+// importConfigFrom does importConfig's work from an arbitrary directory so
+// the round-trip is testable without a mounted drive.
+func importConfigFrom(dir string) error {
+	src := filepath.Join(dir, configExportName)
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return fmt.Errorf("no %s on the USB drive: %v", configExportName, err)
+	}
+	var c PersistedConfig
+	if err := json.Unmarshal(data, &c); err != nil {
+		return fmt.Errorf("invalid config file: %v", err)
+	}
+
+	if c.DeviceName != "" && isValidDeviceName(c.DeviceName) {
+		deviceName = c.DeviceName
+	}
+	if c.SampleRateIdx >= 0 && c.SampleRateIdx < len(sampleRates) {
+		sampleRateIdx = c.SampleRateIdx
+	}
+	if c.ChannelCount >= 1 && c.ChannelCount <= MaxChannelCount {
+		channelCount = c.ChannelCount
+	}
+	if c.TagPresetIdx >= 0 && c.TagPresetIdx < len(tagPresets) {
+		tagPresetIdx = c.TagPresetIdx
+	}
+	if c.FilePrefix == "" || isValidFilePrefix(c.FilePrefix) {
+		filePrefix = c.FilePrefix
+	}
+	if c.VURangeIdx >= 0 && c.VURangeIdx < len(vuRangeOptions) {
+		vuRangeIdx = c.VURangeIdx
+	}
+	if c.PeakHoldIdx >= 0 && c.PeakHoldIdx < len(peakHoldOptions) {
+		peakHoldIdx = c.PeakHoldIdx
+	}
+	if c.TransportMode == "icon" || c.TransportMode == "text" {
+		transportMode = c.TransportMode
+	}
+	if c.LogLevelIdx >= 0 && c.LogLevelIdx < len(logLevelNames) {
+		applyLogLevel(LogLevel(c.LogLevelIdx))
+	}
+	if c.OledBrightnessPct != nil && *c.OledBrightnessPct >= 0 && *c.OledBrightnessPct <= 100 {
+		oledBrightnessPct = *c.OledBrightnessPct
+		if hwManager != nil {
+			hwManager.SetBrightness(oledBrightnessPct)
+		}
+	}
+	autoDimEnabled = !c.AutoDimDisabled
+
+	if c.WifiPassword != "" {
+		wifiSSID, wifiPassword, wifiEnabled = c.WifiSSID, c.WifiPassword, c.WifiEnabled
+		go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
+	}
+
+	checkInfernoRestart()
+	persistConfig()
+	logInfof("config imported from USB %s", configExportName)
+	return nil
+}
+
+// sysNotice + sysNoticeUntil flash a one-shot status line on the idle screen
+// for actions that have no screen of their own (e.g. "Config exported") - the
+// same transient-message pattern as the low-disk refusal warning.
+var sysNotice string
+var sysNoticeUntil time.Time
+
+func showSysNotice(msg string) {
+	sysNotice = msg
+	sysNoticeUntil = time.Now().Add(4 * time.Second)
+}
+
 // applyAutoDimLocked advances the display's dim/off state to whatever the
 // idle time dictates, applying a brightness transition only when the stage
 // changes (SPI writes on every 100ms render are pointless churn). Must be
@@ -523,6 +660,7 @@ const (
 	ShutdownConfirm
 	RestartConfirm
 	InfernoRestartConfirm
+	ConfigImportConfirm
 )
 
 type ConfirmOption int
@@ -1130,7 +1268,7 @@ func navigateMenu(direction int) {
 	case StateCopyFiles:
 		maxItems = len(allFiles) + 3 // Start Copy, [All], [NONE], files...
 	case StateSystemOptions:
-		maxItems = 5 // Delete All, Format USB, Shutdown, Restart, Exit
+		maxItems = 7 // Delete All, Format USB, Export Config, Import Config, Shutdown, Restart, Exit
 	case StateWifi:
 		maxItems = 3 // Enable AP, Show QR, Back
 	}
@@ -1300,15 +1438,34 @@ func handleSystemOptionsClick() {
 			currentState = StateConfirm
 			confirmOption = ConfirmNo
 		}
-	case 2: // Shutdown System
+	case 2: // Export Config
+		if !usbMounted {
+			showSysNotice("NO USB DRIVE")
+			break
+		}
+		if err := exportConfig(); err != nil {
+			showSysNotice("EXPORT FAILED")
+			logErrorf("config export: %v", err)
+		} else {
+			showSysNotice("CONFIG EXPORTED")
+		}
+	case 3: // Import Config
+		if usbMounted {
+			menuMode = ConfigImportConfirm
+			currentState = StateConfirm
+			confirmOption = ConfirmNo
+		} else {
+			showSysNotice("NO USB DRIVE")
+		}
+	case 4: // Shutdown System
 		menuMode = ShutdownConfirm
 		currentState = StateConfirm
 		confirmOption = ConfirmNo
-	case 3: // Restart System
+	case 5: // Restart System
 		menuMode = RestartConfirm
 		currentState = StateConfirm
 		confirmOption = ConfirmNo
-	case 4: // Exit
+	case 6: // Exit
 		currentState = StateSettings
 		selectedMenu = 0
 		menuScrollOffset = 0
@@ -1346,6 +1503,13 @@ func handleConfirmClick() {
 			enqueueSystemOp(opRestart)
 		case InfernoRestartConfirm:
 			restartInfernoServer()
+		case ConfigImportConfirm:
+			if err := importConfig(); err != nil {
+				showSysNotice("IMPORT FAILED")
+				logErrorf("config import: %v", err)
+			} else {
+				showSysNotice("CONFIG IMPORTED")
+			}
 		}
 	}
 	currentState = StateIdle
@@ -2642,6 +2806,16 @@ func renderIdleScreen() {
 	// Use context-aware rendering for standby state
 	hwManager.DrawCenteredText("~ Standby ~", "idle", 32)
 
+	// One-shot status flash for OLED actions that have no screen of their
+	// own (config export/import), transient like the low-disk warning below.
+	if time.Now().Before(sysNoticeUntil) {
+		if time.Now().UnixMilli()/500%2 == 0 {
+			hwManager.SwitchToContext("selected")
+			hwManager.DrawCenteredText(sysNotice, "selected", 48)
+		}
+		return
+	}
+
 	// If a record was just refused for lack of space (see onButtonPress),
 	// surface an explicit flashing warning instead of the usual remaining-time
 	// readout so the operator knows why the button did nothing.
@@ -3716,6 +3890,8 @@ func renderSystemOptionsMenu() { // No separate header - see renderSettingsMenu 
 	items := []hardware.MenuItem{
 		{Label: "Delete All Recordings", Value: ""},
 		{Label: "Format USB Drive", Value: ""},
+		{Label: "Export Config", Value: ""},
+		{Label: "Import Config", Value: ""},
 		{Label: "Shutdown System", Value: ""},
 		{Label: "Restart System", Value: ""},
 		{Label: "← Exit", Value: ""},
@@ -3795,6 +3971,10 @@ func renderConfirmDialog() {
 		title = "RESTART INFERNO"
 		message1 = "Restart Inferno server?"
 		message2 = "Will reconnect audio stream"
+	case ConfigImportConfirm:
+		title = "IMPORT CONFIG"
+		message1 = "Import settings from USB?"
+		message2 = "Overwrites current settings"
 	}
 
 	// Use FiraCode context-aware confirmation dialog
