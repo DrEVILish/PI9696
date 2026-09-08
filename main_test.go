@@ -1836,3 +1836,96 @@ func TestShouldAutoStopTake(t *testing.T) {
 		t.Fatalf("unknown (0) estimate must not trigger auto-stop")
 	}
 }
+
+// Config export/import round-trip: export the current settings to a directory,
+// mutate a few globals, import back, and confirm they're restored. Also
+// verifies the export never carries the WiFi password (the non-secret rule)
+// and that importing a password-less profile doesn't clobber the current one.
+func TestConfigExportImportRoundTrip(t *testing.T) {
+	initTestHardware(t)
+
+	origCfg := os.Getenv("PI9696_CONFIG")
+	t.Cleanup(func() { os.Setenv("PI9696_CONFIG", origCfg) })
+	os.Setenv("PI9696_CONFIG", filepath.Join(t.TempDir(), "config.json"))
+
+	usb := t.TempDir()
+	origUSB := usbMounted
+	t.Cleanup(func() { mutex.Lock(); usbMounted = origUSB; mutex.Unlock() })
+	mutex.Lock()
+	usbMounted = true
+	curPwd := wifiPassword
+	deviceName = "Unit-A"
+	sampleRateIdx = 1
+	channelCount = 2
+	tagPresetIdx = 2
+	filePrefix = "Live"
+	vuRangeIdx = 2
+	peakHoldIdx = 3
+	transportMode = "icon"
+	wifiSSID = "PI-Unit-A"
+	wifiEnabled = true
+	wifiPassword = "sekret123"
+
+	if err := exportConfigTo(usb); err != nil {
+		mutex.Unlock()
+		t.Fatalf("export: %v", err)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(usb, configExportName))
+	if err != nil {
+		mutex.Unlock()
+		t.Fatalf("read export: %v", err)
+	}
+	if strings.Contains(string(raw), "sekret123") {
+		mutex.Unlock()
+		t.Fatalf("export leaked the wifi password")
+	}
+
+	// Retain the password in the local unit, then import a "clone".
+	wifiPassword = curPwd
+	sampleRateIdx = 0
+	channelCount = 1
+	tagPresetIdx = 0
+	filePrefix = ""
+	vuRangeIdx = 0
+	peakHoldIdx = 0
+	transportMode = "text"
+
+	if err := importConfigFrom(usb); err != nil {
+		mutex.Unlock()
+		t.Fatalf("import: %v", err)
+	}
+	if sampleRateIdx != 1 || channelCount != 2 || tagPresetIdx != 2 || filePrefix != "Live" ||
+		vuRangeIdx != 2 || peakHoldIdx != 3 || transportMode != "icon" {
+		mutex.Unlock()
+		t.Fatalf("import did not restore settings: sr=%d ch=%d tag=%d prefix=%q vu=%d ph=%d tm=%q",
+			sampleRateIdx, channelCount, tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx, transportMode)
+	}
+	if wifiPassword != curPwd {
+		mutex.Unlock()
+		t.Fatalf("import clobbered the wifi password without a credential present")
+	}
+	mutex.Unlock()
+}
+
+// Config export/import fail cleanly (error, no state change) when the target
+// drive has no profile yet.
+func TestConfigImportMissingFileFailsCleanly(t *testing.T) {
+	initTestHardware(t)
+	usb := t.TempDir()
+	origUSB := usbMounted
+	t.Cleanup(func() { mutex.Lock(); usbMounted = origUSB; mutex.Unlock() })
+	mutex.Lock()
+	usbMounted = true
+	sampleRateIdx = 0
+	err := importConfigFrom(filepath.Join(usb, "empty-dir"))
+	mutex.Unlock()
+	if err == nil {
+		t.Fatalf("expected an error importing from a drive with no profile")
+	}
+	mutex.Lock()
+	if sampleRateIdx != 0 {
+		t.Fatalf("failed import mutated state")
+	}
+	mutex.Unlock()
+}

@@ -903,6 +903,37 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 	w.Write(qrBuf.Bytes())
 }
 
+// handleAPIConfigExport writes the non-secret config profile to the USB drive
+// (configExportName) and reports the outcome into the settings modal's status
+// line - always a 200 so htmx shows the message; the text carries failure.
+func handleAPIConfigExport(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	err := exportConfig()
+	mutex.Unlock()
+	if err != nil {
+		logErrorf("web config export: %v", err)
+		fmt.Fprint(w, "Export failed: "+err.Error())
+		return
+	}
+	fmt.Fprint(w, "Config exported to USB drive.")
+}
+
+// handleAPIConfigImport loads the USB config profile and applies it. On
+// success the page is refreshed (HX-Refresh) so every settings row shows the
+// imported values; on failure the message stays in the modal's status line.
+func handleAPIConfigImport(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	err := importConfig()
+	mutex.Unlock()
+	if err != nil {
+		logErrorf("web config import: %v", err)
+		fmt.Fprint(w, "Import failed: "+err.Error())
+		return
+	}
+	w.Header().Set("HX-Refresh", "true")
+	fmt.Fprint(w, "Config imported from USB - reloading...")
+}
+
 // The dashboard's header ("deck") mirrors the physical front panel left to
 // right - logo, OLED, rotary encoder, transport buttons - reusing the exact
 // same onEncoderRotate/onEncoderClick/onButtonPress functions physical
@@ -1458,6 +1489,15 @@ body.meters-collapsed{padding-bottom:4em}
       <section class="settings-group">
         <h3 class="settings-group-title">Logging</h3>
         {{.LogLevelFragment}}
+      </section>
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">Config</h3>
+        <div class="setting-row setting-row--pair">
+          <button hx-post="/api/config/export" hx-target="#config-msg" class="btn-primary">Export to USB</button>
+          <button hx-post="/api/config/import" hx-target="#config-msg" class="btn-primary">Import from USB</button>
+        </div>
+        <div class="setting-row" id="config-msg"></div>
       </section>
 
       <section class="settings-group">
@@ -2508,6 +2548,8 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/prefix", requireAuth(handleAPISettingsPrefix))
 	mux.HandleFunc("POST /api/settings/transport-mode", requireAuth(handleAPISettingsTransportMode))
 	mux.HandleFunc("POST /api/settings/wifi", requireAuth(handleAPISettingsWiFi))
+	mux.HandleFunc("POST /api/config/export", requireAuth(handleAPIConfigExport))
+	mux.HandleFunc("POST /api/config/import", requireAuth(handleAPIConfigImport))
 	mux.HandleFunc("POST /api/record/start", requireAuth(handleAPIRecordStart))
 	mux.HandleFunc("POST /api/record/stop", requireAuth(handleAPIRecordStop))
 	mux.HandleFunc("POST /api/monitor/start", requireAuth(handleAPIMonitorStart))
