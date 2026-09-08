@@ -27,6 +27,10 @@ import (
 // harmless today only because doStartInferno/doStopInferno are idempotent
 // and requests are short-lived, not because it's actually safe by design.
 func TestMain(m *testing.M) {
+	// Persist tests must never touch the real unit config (/etc/pi9696/
+	// config.json) - ConfigPath is computed once at package init, so the
+	// per-test PI9696_CONFIG env is ignored; repoint it here instead.
+	ConfigPath = filepath.Join(os.TempDir(), "pi9696-test-config.json")
 	go infernoWorker()
 	os.Exit(m.Run())
 }
