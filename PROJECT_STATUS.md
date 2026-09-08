@@ -4,8 +4,8 @@ This file is the **design record**: what is implemented, what is deliberately no
 product decisions behind the behaviour, and the per-feature history. For setup and usage
 see `README.md`; for hardware see `WIRING.md`.
 
-**Last updated:** 2026-09-08 · **Version:** 1.17.0 (button lamps driven, scrollable
-recording-list, config export/import to USB)
+**Last updated:** 2026-09-08 · **Version:** 1.17.1 (INFERNO-LINK deck lamp live; button
+lamps driven, scrollable recording-list, config export/import to USB)
 
 ---
 
@@ -43,12 +43,10 @@ fixed before release; the rest are recorded as future work.
 1. **Playback via Inferno/AoIP** — the recorded target. Blocked: the Inferno server
    contract is receive-only today (no input/stream command to feed a WAV back out).
    Playback currently goes to local ALSA.
-2. **INFERNO-LINK lamp on the WebUI deck is static** — it should reflect Inferno state
-   (needs an Inferno field in the meter payload).
-3. **Sim-mode OLED input** — the token logging fixed sim authentication, but there is
+2. **Sim-mode OLED input** — the token logging fixed sim authentication, but there is
    still no way to drive the OLED menus from a dev box (only the WebUI's on-screen
    encoder, which needs auth). Add only when actually needed.
-4. **Recordings list at scale** — the WebUI globs and re-renders every 15 s; fine to
+3. **Recordings list at scale** — the WebUI globs and re-renders every 15 s; fine to
    hundreds of takes, degrades at thousands. The list itself is now a full-height
    scrollable panel (no pagination, per directive); the 15 s re-glob is the remaining
    ceiling. Revisit only if real use hits it.
@@ -344,6 +342,13 @@ Third design-review pass: fills in the specifics needed to finish the build.
 
 ### Feature History
 
+- **INFERNO-LINK deck lamp live (2026-09-08).** The dashboard's link lamp was a static
+  soft-cyan dot; now it reflects the Inferno server state. The 100 ms meter WebSocket
+  push (already streaming to the same dashboard) carries an `infernoUp` field set from
+  `infernoState == InfernoRunning` — the same source the status panel uses — and
+  `applyMeter` toggles the lamp's `on` class against it, so both the WebSocket and the
+  `/api/meter` fallback path get live state with one field, one class, and one CSS rule.
+
 - **Config export/import to USB (2026-09-08).** New System Options rows — Export Config
   and Import Config (between Format USB and the power actions) publish and load a
   non-secret JSON profile (`pi9696-config.json`) on the USB drive. The profile carries
@@ -549,7 +554,8 @@ hardware bring-up. The known gaps list above is the honest remainder.**
 two data-loss design promises (fsync of finished takes; mid-take auto-stop at <1 min).
 **1.17.0** — button lamps driven from transport state (REC + PLAY, STOP has no lamp),
 WebUI recordings list as a full-height scrollable panel, config export/import to USB
-(non-secret JSON profile).
+(non-secret JSON profile). **1.17.1** — the INFERNO-LINK deck lamp reflects Inferno state
+(100 ms meter push carries `infernoUp`).
 Plus the over-engineering audit cuts (~800 lines: dead manager surface, demo mode, GPIO
 status LEDs, font-converter tool, xlog → log/slog, dead network code, template
 consolidation).
