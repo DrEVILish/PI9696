@@ -87,7 +87,7 @@ This document provides the complete wiring reference for connecting all componen
 - Internal pull-ups are enabled in software
 - Use quality tactile switches for better feel
 
-### 4. Button Lamps (REC / STOP / PLAY backlights)
+### 4. Button Lamps (REC / PLAY backlights)
 
 **Interface:** GPIO digital output (no PWM/brightness control)
 **Type:** Small LED backlights behind each button with a current-limiting resistor
@@ -96,18 +96,16 @@ This document provides the complete wiring reference for connecting all componen
 | Lamp  | Pi Pin | GPIO | Description |
 |-------|--------|------|-------------|
 | REC   | 32     | 12   | Lit while recording is in progress |
-| STOP  | 36     | 16   | Lit while the app is running (booting / playback / etc.) |
-| PLAY  | TBD    | TBD  | Lit while playback is active |
+| PLAY  | 36     | 16   | Solid while playing; 250 ms blink while paused |
+| STOP  | —      | —    | No lamp (Round-4 decision; nothing a user waits on) |
 
 **Wiring Notes:**
+- These backlights are driven by `hardware/lamps.go`: change-only writes (a lamp is
+  touched only when its state changes) on the same 100 ms tick that paints the OLED.
 - There are **no separate status LEDs**: these backlights plus the OLED are the status
   indication. Status details (USB, Network, WiFi if enabled, Inferno) display on the OLED's
   status screen.
 - Anode (long leg) → resistor → GPIO pin; cathode (short leg) → GND
-- **Software status: not yet implemented.** Per the Round 3 design the former GPIO12/16
-  status LEDs were removed from the codebase; driving these three backlights is the
-  recorded follow-up (see PROJECT_STATUS, Known Gaps #1). The wiring above is the
-  builder's reference for when the software support lands.
 
 ### 5. Audio (AoIP / Ethernet)
 
@@ -118,7 +116,7 @@ There is **no analog or USB audio I/O** in the build:
   ffmpeg -> WAV).
 - Playback currently goes to the **local ALSA output** (`ffmpeg -f alsa default`). Routing
   playback back out through Inferno is the design target but is not yet implemented - the
-  Inferno server contract is receive-only today (see PROJECT_STATUS, Known Gaps #2).
+  Inferno server contract is receive-only today (see PROJECT_STATUS, Known Gaps #1).
 - No USB audio interface, no DAC/HAT, no XLR/TRS analog inputs.
 
 ## Power Requirements
