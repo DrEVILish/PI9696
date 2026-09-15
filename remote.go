@@ -1278,6 +1278,16 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .vu-peak{position:absolute;left:1px;right:1px;height:2px;background:#fff;box-shadow:0 0 6px #fff}
 .ch-label{font-size:0.6em;color:var(--dim);letter-spacing:0.04em}
 
+/* Telemetry panel: collapsible system stats with per-core mini graphs */
+.sys-stats{margin-top:.5em;font-size:.72em;color:var(--dim)}
+.sys-stats summary{cursor:pointer;color:var(--glow);letter-spacing:.08em;font-weight:bold}
+.sys-cpu{display:flex;align-items:center;gap:.3em;margin:.12em 0}
+.sys-label{width:2.8em;flex:none;color:var(--dim);font-size:.9em}
+.sys-track{flex:1;height:6px;background:#020509;border:1px solid var(--border);border-radius:2px;overflow:hidden}
+.sys-fill{height:100%;border-radius:1px;background:var(--idle);transition:width .3s}
+.sys-fill.warn{background:#ffe400}
+.sys-fill.hot{background:#ff2a2a}
+
 /* Mobile: stack the three-column grid, let the fixed OLED frame shrink to
    the viewport instead of overflowing it, and give the header/footer more
    vertical room now that their contents wrap onto more lines. */
@@ -2123,31 +2133,46 @@ var statusTmpl = template.Must(template.New("status").Parse(`
  {{else if .Playing}}<p>&#9654; Playing back - {{.Elapsed}}</p>
  {{else if .Paused}}<p>&#10074;&#10074; Paused - {{.Elapsed}}</p>
  {{else if .MonOutput}}<p class="idle">&#9654; Monitoring output - playing {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch {{.Elapsed}}</p>
- <button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML">Start Recording</button>
+<button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML">Start Recording</button>
  {{else if .Monitoring}}<p class="idle">&#128266; Monitoring input - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
 <button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML">Start Recording</button>
 <button hx-post="/api/monitor/stop" hx-target="#status" hx-swap="innerHTML">Stop Monitoring</button>
 {{else}}<p class="idle">Idle - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
 <button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Start Recording</button>
 <button hx-post="/api/monitor/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Monitor Input</button>
-{{if not .InfernoUp}}<p>(Inferno server not running)</p>{{end}}
+{{if not .InfernoUp}}<p>(Inferno not running &mdash; build with <code>setup.sh</code> and restart)</p>{{end}}
 {{end}}
-<p>Storage: {{.Storage}}</p>
-`))
+<details class="sys-stats"><summary>Telemetry</summary>
+<p>Uptime {{.Uptime}} &middot; v{{.AppVersion}}</p>
+{{range $i, $p := .CPUPerCore}}<div class="sys-cpu"><span class="sys-label">CPU{{$i}}</span><div class="sys-track"><div class="sys-fill{{if gt $p 85.0}} hot{{else if gt $p 60.0}} warn{{end}}" style="width:{{printf "%.0f" $p}}%"></div></div></div>{{end}}
+<p>RAM App {{if gt .RAMApp 0.0}}{{printf "%.0f" .RAMApp}}{{else}}&mdash;{{end}}MB / Inferno {{if gt .RAMInferno 0.0}}{{printf "%.0f" .RAMInferno}}{{else}}&mdash;{{end}}MB / Sys {{printf "%.0f" .RAMSysUsed}}/{{printf "%.0f" .RAMSysTotal}}MB</p>
+<p>Temp {{if ge .CPUTemp 0.0}}{{printf "%.0f" .CPUTemp}}&deg;{{else}}&mdash;{{end}}</p>
+<p>Disk /rec: {{printf "%.0f" .DiskTotal}}GB / {{printf "%.0f" .DiskFree}}GB free &middot; record: {{.RecordTime}}</p>
+</details>`))
 
 type statusView struct {
-	Recording  bool
-	Playing    bool
-	Paused     bool
-	Monitoring bool
-	MonOutput  bool
-	Elapsed    string
-	Meter      string
-	Format     string
-	SampleRate int
-	Channels   int
-	InfernoUp  bool
-	Storage    string
+	Recording   bool
+	Playing     bool
+	Paused      bool
+	Monitoring  bool
+	MonOutput   bool
+	Elapsed     string
+	Meter       string
+	Format      string
+	SampleRate  int
+	Channels    int
+	InfernoUp   bool
+	Uptime      string
+	AppVersion  string
+	CPUPerCore  []float64
+	RAMApp      float64
+	RAMInferno  float64
+	RAMSysUsed  float64
+	RAMSysTotal float64
+	CPUTemp     float64
+	DiskTotal   float64
+	DiskFree    float64
+	RecordTime  string
 }
 
 func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
@@ -2162,7 +2187,6 @@ func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 		SampleRate: sampleRates[sampleRateIdx] / 1000,
 		Channels:   channelCount,
 		InfernoUp:  infernoState == InfernoRunning,
-		Storage:    getRemainingStorage(),
 	}
 	switch {
 	case v.Recording:
@@ -2175,6 +2199,10 @@ func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	mutex.Unlock()
 
+	t := snapshotTelemetry()
+	v.Uptime, v.AppVersion, v.CPUPerCore = t.Uptime, t.AppVersion, t.CPUPerCore
+	v.RAMApp, v.RAMInferno, v.RAMSysUsed, v.RAMSysTotal = t.RAMApp, t.RAMInferno, t.RAMSysUsed, t.RAMSysTotal
+	v.CPUTemp, v.DiskTotal, v.DiskFree, v.RecordTime = t.CPUTemp, t.DiskTotal, t.DiskFree, t.RecordTime
 	statusTmpl.Execute(w, v)
 }
 

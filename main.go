@@ -715,10 +715,12 @@ var (
 	meterChannelRMS        []float64
 	meterChannelPeakHeld   []float64 // display-facing peak after hold/decay ballistics - see decayPeakHold; everything that shows a peak marker (OLED, WebUI) reads this, never meterChannelPeak directly
 	peakHeldSetAt          []time.Time
-	vuRangeIdx             = 3      // index into vuRangeOptions; -90dBFS default
-	peakHoldIdx            = 4      // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
-	transportMode          = "icon" // web dashboard transport buttons: "icon" or "text" labels - persisted, see PersistedConfig
-	monitoring             bool     // input-monitor ffmpeg reading the Inferno FIFO for levels only, no recording - see startMonitor
+	bootTime               time.Time // set at startup, used by uptime readout
+	cpuPct                 []float64 // latest per-core usage % (cpuUsageLoop)
+	vuRangeIdx             = 3       // index into vuRangeOptions; -90dBFS default
+	peakHoldIdx            = 4       // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
+	transportMode          = "icon"  // web dashboard transport buttons: "icon" or "text" labels - persisted, see PersistedConfig
+	monitoring             bool      // input-monitor ffmpeg reading the Inferno FIFO for levels only, no recording - see startMonitor
 	monitorCmd             *exec.Cmd
 	monitorDone            chan struct{}
 	monitoringOutput       bool          // playback's output-monitoring mode: the input monitor is stood down while a track plays (see startPlayback); UI shows "monitoring output" - no real output tap, so audio latency is untouched
@@ -813,6 +815,7 @@ func main() {
 	// count as "idle for years").
 	hwManager.SetBrightness(oledBrightnessPct)
 	lastInputTime = time.Now()
+	bootTime = time.Now()
 
 	remoteToken = generateRemoteToken()
 	// Sim mode has no hardware input path, so the OLED's Remote Access screen
@@ -830,6 +833,7 @@ func main() {
 	go updateLoop()
 	go networkMonitorLoop()
 	go peakHoldLoop()
+	go cpuUsageLoop()
 	go mdnsLoop()
 
 	// Bring the WiFi access point to the persisted startup state (OFF unless
@@ -4158,4 +4162,176 @@ func getFreeSpace() uint64 {
 		return 0
 	}
 	return stat.Bavail * uint64(stat.Bsize)
+}
+
+// ---- telemetry helpers ----
+
+const appVersion = "1.17.1"
+
+type cpuStat struct{ total, idle int64 }
+
+func readCPUStat() ([]cpuStat, bool) {
+	data, err := os.ReadFile("/proc/stat")
+	if err != nil {
+		return nil, false
+	}
+	var stats []cpuStat
+	for _, line := range strings.Split(string(data), "\n") {
+		if len(line) < 5 || line[:3] != "cpu" {
+			continue
+		}
+		if line[3] < '0' || line[3] > '9' {
+			continue // skip aggregate "cpu" line
+		}
+		f := strings.Fields(line)
+		if len(f) < 6 {
+			continue
+		}
+		var total int64
+		for _, s := range f[1:] {
+			v, _ := strconv.ParseInt(s, 10, 64)
+			total += v
+		}
+		idle, _ := strconv.ParseInt(f[4], 10, 64)
+		iow, _ := strconv.ParseInt(f[5], 10, 64)
+		stats = append(stats, cpuStat{total, idle + iow})
+	}
+	return stats, true
+}
+
+func cpuUsageLoop() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	prev, _ := readCPUStat()
+	<-ticker.C
+	for range ticker.C {
+		curr, ok := readCPUStat()
+		mutex.Lock()
+		if ok && len(curr) > 0 && len(prev) > 0 && len(curr) == len(prev) {
+			cpuPct = make([]float64, len(curr))
+			for i := range curr {
+				dt := curr[i].total - prev[i].total
+				di := curr[i].idle - prev[i].idle
+				if dt > 0 {
+					cpuPct[i] = (1 - float64(di)/float64(dt)) * 100
+				}
+			}
+		}
+		mutex.Unlock()
+		prev = curr
+	}
+}
+
+func readProcKV(pid int, key string) int64 {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid))
+	if err != nil {
+		return -1
+	}
+	prefix := key + ":"
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, prefix) {
+			f := strings.Fields(line)
+			if len(f) >= 2 {
+				v, _ := strconv.ParseInt(f[1], 10, 64)
+				return v
+			}
+		}
+	}
+	return -1
+}
+
+func ramMB(pid int, key string) float64 {
+	kb := readProcKV(pid, key)
+	if kb < 0 {
+		return -1
+	}
+	return float64(kb) / 1024
+}
+
+func systemRAM() (used, total float64) {
+	var memTotal, memAvail int64
+	data, err := os.ReadFile("/proc/meminfo")
+	if err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(line, "MemTotal:") {
+				f := strings.Fields(line)
+				if len(f) >= 2 {
+					memTotal, _ = strconv.ParseInt(f[1], 10, 64)
+				}
+			} else if strings.HasPrefix(line, "MemAvailable:") {
+				f := strings.Fields(line)
+				if len(f) >= 2 {
+					memAvail, _ = strconv.ParseInt(f[1], 10, 64)
+				}
+			}
+		}
+	}
+	if memTotal == 0 {
+		return 0, 0
+	}
+	return float64(memTotal-memAvail) / 1024, float64(memTotal) / 1024
+}
+
+func readCPUTemp() (float64, bool) {
+	data, err := os.ReadFile("/sys/class/thermal/thermal_zone0/temp")
+	if err != nil {
+		return -1, false
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64)
+	if err != nil {
+		return -1, false
+	}
+	return float64(v) / 1000, true
+}
+
+func recordTimeAvailable() string {
+	bytesPerSec := recordingBytesPerSecond()
+	if bytesPerSec <= 0 {
+		return "\u2014"
+	}
+	remaining := float64(getFreeSpace()) / float64(bytesPerSec)
+	return formatDuration(time.Duration(remaining) * time.Second)
+}
+
+type telemetryData struct {
+	Uptime      string
+	AppVersion  string
+	CPUPerCore  []float64
+	RAMApp      float64
+	RAMInferno  float64
+	RAMSysUsed  float64
+	RAMSysTotal float64
+	CPUTemp     float64
+	DiskTotal   float64
+	DiskFree    float64
+	RecordTime  string
+}
+
+func snapshotTelemetry() telemetryData {
+	mutex.Lock()
+	defer mutex.Unlock()
+	v := telemetryData{
+		Uptime:     time.Since(bootTime).String(),
+		AppVersion: appVersion,
+		CPUPerCore: append([]float64(nil), cpuPct...),
+		RAMApp:     ramMB(os.Getpid(), "VmRSS"),
+		CPUTemp:    -1,
+	}
+	if infernoCmd != nil && infernoCmd.Process != nil {
+		v.RAMInferno = ramMB(infernoCmd.Process.Pid, "VmRSS")
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(RecordPath, &stat); err == nil {
+		v.DiskTotal = float64(stat.Blocks*uint64(stat.Bsize)) / 1e9
+		v.DiskFree = float64(stat.Bavail*uint64(stat.Bsize)) / 1e9
+	}
+	v.RecordTime = recordTimeAvailable()
+	ramSysUsed, ramSysTotal := systemRAM()
+	v.RAMSysUsed, v.RAMSysTotal = ramSysUsed, ramSysTotal
+	if t, ok := readCPUTemp(); ok {
+		v.CPUTemp = t
+	}
+	if v.RAMInferno == 0 {
+		v.RAMInferno = -1
+	}
+	return v
 }
