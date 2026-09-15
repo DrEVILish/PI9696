@@ -2863,7 +2863,7 @@ func renderIdleScreen() {
 // legibly across the 256px-wide panel at once (see renderIdleVUPage) -
 // wider bars with room for a channel-number label read better on a small
 // OLED than cramming every channel into one page.
-const idleVUChannelsPerPage = 6
+const idleVUChannelsPerPage = 12
 
 // idleVUPageCount is how many VU-meter pages idle-browse needs to cover
 // every recording channel; onEncoderRotate's StateIdleBrowse case pages
@@ -3071,7 +3071,6 @@ func renderIdleVUPage(page int) {
 	// file (see renderNetworkInfo etc.) - the status bar occupies the rows
 	// above it, and drawing any earlier overlaps its text.
 	hwManager.SwitchToContext("details")
-	hwManager.DrawText(2, 22, fmt.Sprintf("Levels %d/%d", page+1, pages))
 
 	const top, bottom = 30, 54
 	const scaleW = 18
@@ -3125,6 +3124,8 @@ func renderIdleVUPage(page int) {
 		tw := hwManager.GetTextWidth(label)
 		hwManager.DrawText(x+(w-tw)/2, 58, label)
 	}
+	ind := fmt.Sprintf("%d/%d", page+1, pages)
+	hwManager.DrawText(DisplayWidth-hwManager.GetTextWidth(ind)-2, 58, ind)
 }
 
 // renderIdleInfoPage is the page after the last VU meter: the same network
@@ -3132,9 +3133,6 @@ func renderIdleVUPage(page int) {
 // token (see remoteAccessInfo) for anyone who wants to hop on the WebUI
 // after checking input levels here.
 func renderIdleInfoPage() {
-	// No separate header - see renderSettingsMenu for why: 256x64 doesn't
-	// have room for a title row above content without colliding with the
-	// status bar, so details start right at the established safe line.
 	details := hwManager.GetDetailedNetworkInfo()
 	y := 22
 	for i, d := range details {
