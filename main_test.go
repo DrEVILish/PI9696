@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"image/png"
 	"io"
 	"net/http"
@@ -510,6 +511,92 @@ func TestRemoteLoginWrongTokenThenCorrectToken(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200 with valid session cookie, got %d", rec.Code)
+	}
+}
+
+func TestTelemetryHistAppendCap(t *testing.T) {
+	origT, origCPU, origApp, origSys := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys
+	origPct := cpuPct
+	t.Cleanup(func() {
+		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys = origT, origCPU, origApp, origSys
+		cpuPct = origPct
+	})
+
+	// Empty history accepts samples; parallel slices stay aligned.
+	teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys = nil, nil, nil, nil
+	cpuPct = []float64{10, 30}
+	appendTelemetryHist()
+	appendTelemetryHist()
+	if len(teleHistT) != 2 || len(teleHistCPU) != 2 || len(teleHistRAMApp) != 2 || len(teleHistRAMSys) != 2 {
+		t.Fatalf("history slices drifted apart: %d %d %d %d", len(teleHistT), len(teleHistCPU), len(teleHistRAMApp), len(teleHistRAMSys))
+	}
+	if teleHistCPU[0] != 20 {
+		t.Fatalf("expected cross-core average 20, got %v", teleHistCPU[0])
+	}
+
+	// Overflowing the cap trims oldest-first, newest kept.
+	for i := 0; i < teleHistN+10; i++ {
+		appendTelemetryHist()
+	}
+	if len(teleHistT) != teleHistN || len(teleHistCPU) != teleHistN || len(teleHistRAMApp) != teleHistN || len(teleHistRAMSys) != teleHistN {
+		t.Fatalf("expected cap %d on all slices, got %d %d %d %d", teleHistN, len(teleHistT), len(teleHistCPU), len(teleHistRAMApp), len(teleHistRAMSys))
+	}
+	for i := 1; i < len(teleHistT); i++ {
+		if teleHistT[i] < teleHistT[i-1] {
+			t.Fatalf("history timestamps out of order at %d", i)
+		}
+	}
+}
+
+func TestAPITelemetry(t *testing.T) {
+	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
+	origT, origCPU, origApp, origSys := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys
+	remoteToken = "TESTTOKEN2"
+	loginLimit = newLoginLimiter()
+	sessions = newSessionStore()
+	t.Cleanup(func() {
+		remoteToken, loginLimit, sessions = origToken, origLimiter, origSessions
+		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys = origT, origCPU, origApp, origSys
+	})
+
+	mux := newRemoteMux()
+	form := "token=" + remoteToken
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "192.0.2.1:12345"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	var sessionCookie *http.Cookie
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == remoteSessionCookie {
+			sessionCookie = c
+		}
+	}
+	if sessionCookie == nil {
+		t.Fatalf("expected session cookie")
+	}
+
+	teleHistT = []int64{1000, 1002, 1004}
+	teleHistCPU = []float64{10, 20, 30}
+	teleHistRAMApp = []float64{40, 41, 42}
+	teleHistRAMSys = []float64{1000, 1001, 1002}
+
+	req = httptest.NewRequest("GET", "/api/telemetry", nil)
+	req.AddCookie(sessionCookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	var v telemetryHistView
+	if err := json.NewDecoder(rec.Body).Decode(&v); err != nil {
+		t.Fatalf("telemetry not JSON: %v", err)
+	}
+	if len(v.T) != 3 || len(v.CPU) != 3 || len(v.RAMApp) != 3 || len(v.RAMSys) != 3 {
+		t.Fatalf("parallel arrays must match: %+v", v)
+	}
+	if v.T[0] != 1000 || v.CPU[2] != 30 || v.RAMApp[1] != 41 || v.RAMSys[2] != 1002 {
+		t.Fatalf("history values wrong: %+v", v)
 	}
 }
 

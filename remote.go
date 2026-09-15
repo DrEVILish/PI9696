@@ -980,6 +980,8 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <script src="/static/htmax.min.js"></script>
+<link rel="stylesheet" href="/static/uPlot.min.css">
+<script src="/static/uPlot.iife.min.js"></script>
 <style>
 :root{--glow:#00d9ff;--panel:#0a1526;--border:#0f3a5c;--text:#cfeeff;--dim:#5b8aa8;--rec:#ff3355;--idle:#2bffb0;--orange:#ff8c1a;--meter-h:120px}
 *{box-sizing:border-box}
@@ -1276,14 +1278,13 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .ch-label{font-size:0.6em;color:var(--dim);letter-spacing:0.04em}
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
-.sys-stats{margin-top:.5em;font-size:.72em;color:var(--dim)}
-.sys-stats summary{cursor:pointer;color:var(--glow);letter-spacing:.08em;font-weight:bold}
-.sys-cpu{display:flex;align-items:center;gap:.3em;margin:.12em 0}
-.sys-label{width:2.8em;flex:none;color:var(--dim);font-size:.9em}
-.sys-track{flex:1;height:6px;background:#020509;border:1px solid var(--border);border-radius:2px;overflow:hidden}
-.sys-fill{height:100%;border-radius:1px;background:var(--idle);transition:width .3s}
-.sys-fill.warn{background:#ffe400}
-.sys-fill.hot{background:#ff2a2a}
+.sys-readout{margin-top:.5em;font-size:.72em;color:var(--dim)}
+.sys-readout summary{cursor:pointer;color:var(--glow);letter-spacing:.08em;font-weight:bold}
+.sys-graphs{margin-top:.6em}
+.sys-graphs h3{font-size:.68em;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin:.7em 0 .2em}
+.sys-graphs .uplot{width:100%}
+.sys-graphs .u-legend{display:none}
+.sys-wait{font-size:.72em;color:var(--dim)}
 
 /* Mobile: stack the three-column grid, let the fixed OLED frame shrink to
     the viewport instead of overflowing it, and give the header/footer more
@@ -1453,6 +1454,12 @@ body.meters-collapsed{padding-bottom:4em}
       </svg>
     </div>
     <div id="status" hx-get="/api/status" hx-trigger="load, every 2s" hx-swap="innerHTML">Loading...</div>
+    <div class="sys-graphs">
+      <h3>CPU %</h3>
+      <div id="cpuChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <h3>RAM MB</h3>
+      <div id="ramChart"><span class="sys-wait">collecting&hellip;</span></div>
+    </div>
   </div>
 
   <div class="panel right">
@@ -1936,6 +1943,57 @@ function pollMeterFallback() {
   fetch('/api/meter').then(function(r) { return r.json(); }).then(applyMeter).catch(function() {});
   setTimeout(pollMeterFallback, 1000);
 }
+// System graphs: uPlot CPU/RAM history fed by /api/telemetry (2s cadence,
+// 150 samples = 5min). The containers live outside the htmx-swapped #status
+// so polls never destroy the chart instances; charts appear once 2+ samples
+// exist. Missing uPlot file degrades to the collecting placeholder.
+var teleCPU = null, teleRAM = null;
+function teleOpts(extraSeries, ymin, ymax) {
+  var o = {
+    width: 300, height: 90,
+    series: [{}].concat(extraSeries),
+    cursor: {show: false},
+    legend: {show: false},
+    axes: [
+      {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}},
+      {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}}
+    ]
+  };
+  if (ymin !== null) o.scales = {y: {range: [ymin, ymax]}};
+  return o;
+}
+function teleWidth(el) {
+  var w = el.clientWidth || 300;
+  return w > 0 ? w : 300;
+}
+function initTeleCharts() {
+  var cpuEl = document.getElementById('cpuChart');
+  var ramEl = document.getElementById('ramChart');
+  if (!cpuEl || !ramEl) return false;
+  cpuEl.innerHTML = ''; ramEl.innerHTML = '';
+  teleCPU = new uPlot(teleOpts([{label: 'CPU %', stroke: '#00d9ff', width: 1.5, fill: 'rgba(0,217,255,0.12)'}], 0, 100), [[0, 1], [0, 0]], cpuEl);
+  teleRAM = new uPlot(teleOpts([
+    {label: 'App MB', stroke: '#00d9ff', width: 1.5, fill: 'rgba(0,217,255,0.10)'},
+    {label: 'Sys MB', stroke: '#ff8c1a', width: 1.5}
+  ], null, null), [[0, 1], [0, 0], [0, 0]], ramEl);
+  teleCPU.setSize({width: teleWidth(cpuEl), height: 90});
+  teleRAM.setSize({width: teleWidth(ramEl), height: 90});
+  window.addEventListener('resize', function() {
+    if (teleCPU) teleCPU.setSize({width: teleWidth(cpuEl), height: 90});
+    if (teleRAM) teleRAM.setSize({width: teleWidth(ramEl), height: 90});
+  });
+  return true;
+}
+function pollTelemetry() {
+  fetch('/api/telemetry').then(function(r) { return r.json(); }).then(function(h) {
+    if (!h || !h.t || h.t.length < 2) return;
+    if (!teleCPU && !initTeleCharts()) return;
+    teleCPU.setData([h.t, h.cpu]);
+    teleRAM.setData([h.t, h.ramApp, h.ramSys]);
+  }).catch(function() {});
+  setTimeout(pollTelemetry, 2000);
+}
+if (window.uPlot) pollTelemetry();
 connectMeterSocket();
 </script>
 </body></html>`))
@@ -2145,10 +2203,8 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 <button hx-post="/api/monitor/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Monitor Input</button>
 {{if not .InfernoUp}}<p>(Inferno not running &mdash; build with <code>setup.sh</code> and restart)</p>{{end}}
 {{end}}
-<details class="sys-stats"><summary>Telemetry</summary>
+<details class="sys-readout"><summary>System</summary>
 <p>Uptime {{.Uptime}} &middot; v{{.AppVersion}}</p>
-{{range $i, $p := .CPUPerCore}}<div class="sys-cpu"><span class="sys-label">CPU{{$i}}</span><div class="sys-track"><div class="sys-fill{{if gt $p 85.0}} hot{{else if gt $p 60.0}} warn{{end}}" style="width:{{printf "%.0f" $p}}%"></div></div></div>{{end}}
-<p>RAM App {{if gt .RAMApp 0.0}}{{printf "%.0f" .RAMApp}}{{else}}&mdash;{{end}}MB / Inferno {{if gt .RAMInferno 0.0}}{{printf "%.0f" .RAMInferno}}{{else}}&mdash;{{end}}MB / Sys {{printf "%.0f" .RAMSysUsed}}/{{printf "%.0f" .RAMSysTotal}}MB</p>
 <p>Temp {{if ge .CPUTemp 0.0}}{{printf "%.0f" .CPUTemp}}&deg;{{else}}&mdash;{{end}}</p>
 <p>Disk /rec: {{printf "%.0f" .DiskTotal}}GB / {{printf "%.0f" .DiskFree}}GB free &middot; record: {{.RecordTime}}</p>
 </details>`))
@@ -2207,6 +2263,28 @@ func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	v.RAMApp, v.RAMInferno, v.RAMSysUsed, v.RAMSysTotal = t.RAMApp, t.RAMInferno, t.RAMSysUsed, t.RAMSysTotal
 	v.CPUTemp, v.DiskTotal, v.DiskFree, v.RecordTime = t.CPUTemp, t.DiskTotal, t.DiskFree, t.RecordTime
 	statusTmpl.Execute(w, v)
+}
+
+// telemetryHistView is the dashboard graphs' feed: parallel arrays, newest
+// last, sampled every teleHistStep (see appendTelemetryHist).
+type telemetryHistView struct {
+	T      []int64   `json:"t"`
+	CPU    []float64 `json:"cpu"`
+	RAMApp []float64 `json:"ramApp"`
+	RAMSys []float64 `json:"ramSys"`
+}
+
+func handleAPITelemetry(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	v := telemetryHistView{
+		T:      append([]int64(nil), teleHistT...),
+		CPU:    append([]float64(nil), teleHistCPU...),
+		RAMApp: append([]float64(nil), teleHistRAMApp...),
+		RAMSys: append([]float64(nil), teleHistRAMSys...),
+	}
+	mutex.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(v)
 }
 
 // handleAPIMeter is deliberately separate from handleAPIStatus: the VU
@@ -2595,6 +2673,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("GET /logout", handleLogout)
 	mux.HandleFunc("GET /", requireAuth(handleDashboard))
 	mux.HandleFunc("GET /api/status", requireAuth(handleAPIStatus))
+	mux.HandleFunc("GET /api/telemetry", requireAuth(handleAPITelemetry))
 	mux.HandleFunc("GET /api/meter", requireAuth(handleAPIMeter))
 	mux.HandleFunc("GET /ws/meter", requireAuth(websocket.Handler(handleWSMeter).ServeHTTP))
 	mux.HandleFunc("GET /api/config", requireAuth(handleAPIConfig))
@@ -2638,6 +2717,12 @@ func newRemoteMux() *http.ServeMux {
 	// in that directory.
 	mux.HandleFunc("GET /static/htmax.min.js", func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join("web", "htmax.min.js"))
+	})
+	mux.HandleFunc("GET /static/uPlot.iife.min.js", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join("web", "uPlot.iife.min.js"))
+	})
+	mux.HandleFunc("GET /static/uPlot.min.css", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join("web", "uPlot.min.css"))
 	})
 
 	return mux

@@ -488,6 +488,60 @@ else
     log_info "htmx already present, skipping download"
 fi
 
+log_step "uPlot Installation (telemetry graphs)"
+
+# uPlot 1.6.32 (MIT, zero dependencies): single IIFE bundle + CSS for the
+# dashboard CPU/RAM time graphs. Same treatment as htmax above - pinned
+# versioned URL + checksum, served locally so the unit never needs the
+# internet, only its own LAN.
+UPLOT_VERSION="1.6.32"
+UPLOT_JS_URL="https://unpkg.com/uplot@${UPLOT_VERSION}/dist/uPlot.iife.min.js"
+UPLOT_JS_SHA256="19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f"
+UPLOT_CSS_URL="https://unpkg.com/uplot@${UPLOT_VERSION}/dist/uPlot.min.css"
+UPLOT_CSS_SHA256="df630c6a8d6f8eeaff264b50f73ce5b114f646ffd9a0bb74f049b0a00135fa04"
+
+if [[ ! -f "$WEB_DIR/uPlot.iife.min.js" ]]; then
+    log_info "Downloading uPlot v${UPLOT_VERSION}..."
+    TMP_UPLOT="/tmp/uPlot.iife.min.js"
+
+    if ! wget -q -O "$TMP_UPLOT" "$UPLOT_JS_URL"; then
+        log_error "Failed to download uPlot"
+        exit 1
+    fi
+
+    if ! echo "${UPLOT_JS_SHA256}  ${TMP_UPLOT}" | sha256sum -c - > /dev/null 2>&1; then
+        log_error "uPlot checksum mismatch - aborting"
+        rm -f "$TMP_UPLOT"
+        exit 1
+    fi
+
+    mv "$TMP_UPLOT" "$WEB_DIR/uPlot.iife.min.js"
+    log_success "uPlot v${UPLOT_VERSION} installed to $WEB_DIR"
+else
+    log_info "uPlot JS already present, skipping download"
+fi
+
+if [[ ! -f "$WEB_DIR/uPlot.min.css" ]]; then
+    log_info "Downloading uPlot CSS v${UPLOT_VERSION}..."
+    TMP_UPLOT_CSS="/tmp/uPlot.min.css"
+
+    if ! wget -q -O "$TMP_UPLOT_CSS" "$UPLOT_CSS_URL"; then
+        log_error "Failed to download uPlot CSS"
+        exit 1
+    fi
+
+    if ! echo "${UPLOT_CSS_SHA256}  ${TMP_UPLOT_CSS}" | sha256sum -c - > /dev/null 2>&1; then
+        log_error "uPlot CSS checksum mismatch - aborting"
+        rm -f "$TMP_UPLOT_CSS"
+        exit 1
+    fi
+
+    mv "$TMP_UPLOT_CSS" "$WEB_DIR/uPlot.min.css"
+    log_success "uPlot CSS v${UPLOT_VERSION} installed to $WEB_DIR"
+else
+    log_info "uPlot CSS already present, skipping download"
+fi
+
 # Verify font installation
 log_info "Verifying font installation..."
 
