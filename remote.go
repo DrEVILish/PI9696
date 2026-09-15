@@ -1289,19 +1289,23 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .sys-fill.hot{background:#ff2a2a}
 
 /* Mobile: stack the three-column grid, let the fixed OLED frame shrink to
-   the viewport instead of overflowing it, and give the header/footer more
-   vertical room now that their contents wrap onto more lines. */
+    the viewport instead of overflowing it, and give the header/footer more
+    vertical room now that their contents wrap onto more lines. */
 /* Mobile: the header already scales fluidly with vw widths (see the clamp()
-   rules above), so here we only need to clear the fixed decorations that
-   would crowd out the OLED and controls on a phone: hide the logo and the
-   meter footer badge, tighten gutters, and collapse the status columns to a
-   single column. The OLED, encoder, and transport keep shrinking with the
-   viewport so the single-row deck never overflows. */
+    rules above), so here we only need to clear the fixed decorations that
+    would crowd out the OLED and controls on a phone: hide the logo and the
+    meter footer badge, tighten gutters, and collapse the status columns to a
+    single column. The OLED, encoder, and transport keep shrinking with the
+    viewport so the single-row deck never overflows. */
 @media (max-width: 800px) {
   body{padding:0 0.4em 200px}
-  header.deck{flex-wrap:nowrap;gap:clamp(0.3em,1.5vw,0.5em);padding:0.8em clamp(0.4em,2vw,3.2em) 0.8em 0.8em;justify-content:center}
+  header.deck{flex-wrap:wrap}
   .header-actions{top:0.6em;right:0.6em}
-  .deck-logo{display:none}
+  .deck-logo{flex:1 0 100%;text-align:center;display:block}
+  .deck-logo .logo-svg{width:clamp(80px,20vw,200px)}
+  .oled-frame{flex:0 0 auto}
+  .encoder-row{flex:0 0 auto}
+  .transport-row{flex:1 0 100%;justify-content:center}
   .oled-frame img{width:min(190px,40vw);height:auto;aspect-ratio:4/1}
   .grid{grid-template-columns:1fr}
   .transport-deck{padding:0}
@@ -1383,7 +1387,7 @@ body.meters-collapsed{padding-bottom:4em}
         <circle class="plate-screw" cx="18" cy="247" r="4"/>
         <circle class="plate-screw" cx="802" cy="247" r="4"/>
 
-        <g class="reel-g" id="reelL">
+        <g class="reel-g" id="reelL" transform="translate(170,105) scale(1.25) translate(-170,-105)">
           <circle class="reel-ring" cx="170" cy="105" r="61"/>
           <circle class="reel-disc" cx="170" cy="105" r="58"/>
           <g class="reel-spin">
@@ -1398,7 +1402,7 @@ body.meters-collapsed{padding-bottom:4em}
             <circle class="reel-center" cx="170" cy="105" r="5"/>
           </g>
         </g>
-        <g class="reel-g" id="reelR">
+        <g class="reel-g" id="reelR" transform="translate(650,105) scale(1.25) translate(-650,-105)">
           <circle class="reel-ring" cx="650" cy="105" r="61"/>
           <circle class="reel-disc" cx="650" cy="105" r="58"/>
           <g class="reel-spin">
@@ -1414,8 +1418,8 @@ body.meters-collapsed{padding-bottom:4em}
           </g>
         </g>
 
-        <circle class="guide" cx="210" cy="150" r="7"/>
-        <circle class="guide" cx="610" cy="150" r="7"/>
+        <circle class="guide" cx="221" cy="162" r="7"/>
+        <circle class="guide" cx="599" cy="162" r="7"/>
         <circle class="guide" cx="330" cy="194" r="7"/>
         <circle class="guide" cx="490" cy="194" r="7"/>
         <circle class="guide-in" cx="118" cy="200" r="10"/>
@@ -1423,8 +1427,8 @@ body.meters-collapsed{padding-bottom:4em}
         <circle class="guide-bore" cx="118" cy="200" r="3"/>
         <circle class="guide-bore" cx="702" cy="200" r="3"/>
 
-        <path class="tape-shadow" d="M210 152 L330 196 L490 196 L610 152"/>
-        <path class="tape" id="tapePath" d="M210 150 L330 194 L490 194 L610 150"/>
+        <path class="tape-shadow" d="M221 164 L330 196 L490 196 L599 164"/>
+        <path class="tape" id="tapePath" d="M221 162 L330 194 L490 194 L599 162"/>
 
         <g class="head">
           <polygon class="head-plate" points="272,252 272,198 288,184 532,184 548,198 548,252"/>
@@ -1759,7 +1763,11 @@ function buildSeg7() {
   var x = 0;
   for (var p = 0; p < 8; p++) {
     var g = document.createElementNS(svgNS, 'g');
-    g.setAttribute('transform', 'translate(' + x + ',0)');
+    var tx = x, ty = 0, sc = 1;
+    // Seconds digits (positions 6,7) render at 75% and drop down half a
+    // digit, de-emphasising SS relative to the HH:MM pair.
+    if (p >= 6) { tx = x + 1.25; ty = 2.25; sc = 0.75; }
+    g.setAttribute('transform', 'translate(' + tx + ',' + ty + ') scale(' + sc + ')');
     g.setAttribute('data-pos', p);
     var isColon = (p === 2 || p === 5);
     if (isColon) {
