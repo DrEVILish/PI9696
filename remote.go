@@ -229,7 +229,13 @@ func validSession(r *http.Request) bool {
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !validSession(r) {
-			http.Redirect(w, r, "/login", http.StatusSeeOther)
+			// Preserve the query (the OLED access-QR encodes /?t=<token>) so a
+			// scanned code still pre-fills the login boxes after the 303.
+			target := "/login"
+			if r.URL.RawQuery != "" {
+				target += "?" + r.URL.RawQuery
+			}
+			http.Redirect(w, r, target, http.StatusSeeOther)
 			return
 		}
 		next(w, r)
@@ -377,6 +383,16 @@ boxes.forEach(function(box, i) {
     boxes[Math.min(i + chars.length, boxes.length - 1)].focus();
   });
 });
+// The OLED's access-QR encodes a URL with "?t=<token>"; pre-fill the boxes
+// so scanning the code lands the operator one click from Enter.
+(function() {
+  var t = new URLSearchParams(window.location.search).get('t');
+  if (t && t.length === 8 && /^[A-Za-z0-9]+$/.test(t)) {
+    t = t.toUpperCase();
+    for (var j = 0; j < t.length; j++) boxes[j].value = t[j];
+    boxes[boxes.length - 1].focus();
+  }
+})();
 document.getElementById('loginForm').addEventListener('submit', function() {
   document.getElementById('tokenValue').value = Array.from(boxes).map(function(b) { return b.value; }).join('');
 });

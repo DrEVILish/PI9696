@@ -500,19 +500,32 @@ func renderWifiQRScreen() {
 	hwManager.DrawText(4, 30, "SSID "+label)
 	hwManager.DrawText(4, 42, "Pass "+wifiPassword)
 
-	// QR module bitmap from the WIFI: string, drawn right of the text. Each
-	// module is 2x2 px so a ~25-module QR fits the 100px-deep right side.
-	code, err := qrcode.New(wifiQRContent(), qrcode.Medium)
+	// QR module bitmap compact: 1px modules, border disabled so the
+	// OLED black surround serves as quiet zone.
+	bmp := qrBitmap(wifiQRContent())
+	drawQRBitmap(bmp, DisplayWidth-29, 17, 1)
+}
+
+// qrBitmap returns a QR-code bitmap for content with the quiet-zone
+// border disabled — the surrounding OLED black area acts as the quiet
+// zone, letting us use 1px modules for the smallest possible code.
+func qrBitmap(content string) [][]bool {
+	code, err := qrcode.New(content, qrcode.Medium)
 	if err != nil {
-		logErrorf("wifi: failed to generate QR: %v", err)
+		return nil
+	}
+	code.DisableBorder = true
+	return code.Bitmap()
+}
+
+// drawQRBitmap renders a QR bitmap onto the OLED at modulePx pixels
+// per module, top-left at (x0, y0).
+func drawQRBitmap(bmp [][]bool, x0, y0, modulePx int) {
+	if bmp == nil {
 		return
 	}
-	bmp := code.Bitmap()
-	const modulePx = 2
-	n := len(bmp)
-	x0 := 130
-	y0 := (DisplayHeight - n*modulePx) / 2
 	hwManager.SwitchToContext("menu")
+	n := len(bmp)
 	for i := 0; i < n; i++ {
 		for j := 0; j < n; j++ {
 			if bmp[i][j] {
@@ -3131,8 +3144,13 @@ func renderIdleInfoPage() {
 		hwManager.DrawCenteredText(d, "details", y)
 		y += 10
 	}
-
-	hwManager.DrawCenteredText("Token: "+formatToken(remoteToken), "selected", y+4)
+	ip := anyInterfaceIP()
+	if ip != "" {
+		bmp := qrBitmap("http://" + ip + ":" + remoteControlPort + "/?t=" + remoteToken)
+		drawQRBitmap(bmp, DisplayWidth-29, 17, 1)
+	} else {
+		hwManager.DrawCenteredText("Token: "+formatToken(remoteToken), "selected", y+4)
+	}
 	hwManager.DrawCenteredText("Click or hold to return", "details", 58)
 }
 
