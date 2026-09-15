@@ -49,7 +49,7 @@ func main() {
 
 	shot("idle", func() {
 		statusBar()
-		hm.DrawCenteredText("~ Standby ~", "idle", 32)
+		hm.DrawCenteredText("Standby", "idle", 32)
 		hm.DrawCenteredText("02:45:12 (456MB) available", "details", 48)
 	})
 

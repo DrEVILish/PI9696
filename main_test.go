@@ -1462,7 +1462,7 @@ func TestDisplaySubmenuBackTarget(t *testing.T) {
 
 	mutex.Lock()
 	currentState = StateDisplay
-	selectedMenu = 2 // Back
+	selectedMenu = 3 // Back
 	mutex.Unlock()
 	onEncoderClick()
 
@@ -1471,6 +1471,82 @@ func TestDisplaySubmenuBackTarget(t *testing.T) {
 	mutex.Unlock()
 	if !got {
 		t.Fatalf("expected Display Back to go to Settings, got state=%d", currentState)
+	}
+}
+
+func TestMenuTimeoutReturnsToIdle(t *testing.T) {
+	origIdx, origLast := menuTimeoutIdx, lastInputTime
+	origState, origSel, origScroll, origEdit := currentState, selectedMenu, menuScrollOffset, editingParameter
+	origOwned := idleBrowseMonitorOwned
+	t.Cleanup(func() {
+		menuTimeoutIdx, lastInputTime = origIdx, origLast
+		currentState, selectedMenu, menuScrollOffset, editingParameter = origState, origSel, origScroll, origEdit
+		idleBrowseMonitorOwned = origOwned
+	})
+
+	set := func(state AppState, idle time.Duration) {
+		mutex.Lock()
+		currentState, selectedMenu, menuScrollOffset, editingParameter = state, 2, 1, true
+		idleBrowseMonitorOwned = false
+		lastInputTime = time.Now().Add(-idle)
+		mutex.Unlock()
+	}
+	timedOut := func() (AppState, int, int, bool) {
+		applyMenuTimeoutLocked(time.Now())
+		mutex.Lock()
+		defer mutex.Unlock()
+		return currentState, selectedMenu, menuScrollOffset, editingParameter
+	}
+
+	// A stale Settings menu falls back to Standby with nav state reset.
+	menuTimeoutIdx = 2 // 30s
+	set(StateSettings, 5*time.Minute)
+	if st, sel, off, edit := timedOut(); st != StateIdle || sel != 0 || off != 0 || edit {
+		t.Fatalf("expected Settings to time out to Idle (nav reset), got state=%d sel=%d off=%d edit=%v", st, sel, off, edit)
+	}
+
+	// Off means menus stay put no matter how stale the idle clock is.
+	menuTimeoutIdx = 0
+	set(StateAudio, 10*time.Minute)
+	if st, _, _, _ := timedOut(); st != StateAudio {
+		t.Fatalf("expected Off to keep the Audio menu, got state=%d", st)
+	}
+
+	// Fresh activity inside the window also stays.
+	menuTimeoutIdx = 2
+	set(StateDisplay, 5*time.Second)
+	if st, _, _, _ := timedOut(); st != StateDisplay {
+		t.Fatalf("expected recent input to keep the Display menu, got state=%d", st)
+	}
+
+	// Transport, copy and home states are never touched.
+	menuTimeoutIdx = 1 // 15s, shortest real delay
+	for _, st := range []AppState{StateIdle, StateRecording, StatePlaying, StatePaused, StateCopying} {
+		set(st, 10*time.Minute)
+		if got, _, _, _ := timedOut(); got != st {
+			t.Fatalf("menu timeout must not touch state=%d, got %d", st, got)
+		}
+	}
+
+	// Idle-browse exits through the owned-monitor path back to Standby.
+	set(StateIdleBrowse, 10*time.Minute)
+	if st, _, _, _ := timedOut(); st != StateIdle {
+		t.Fatalf("expected IdleBrowse to time out to Idle, got state=%d", st)
+	}
+
+	// The preset cycles Off -> 15s -> 30s -> 60s -> 2min -> Off.
+	menuTimeoutIdx = len(menuTimeoutOptions) - 1
+	adjustMenuTimeout(1)
+	if menuTimeoutIdx != 0 || menuTimeoutLabel() != "Off" {
+		t.Fatalf("expected wrap to Off, got idx=%d label=%q", menuTimeoutIdx, menuTimeoutLabel())
+	}
+	adjustMenuTimeout(1)
+	if menuTimeoutLabel() != "15s" {
+		t.Fatalf("expected 15s label, got %q", menuTimeoutLabel())
+	}
+	menuTimeoutIdx = 4
+	if menuTimeoutLabel() != "2m" {
+		t.Fatalf("expected 2m label, got %q", menuTimeoutLabel())
 	}
 }
 

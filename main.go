@@ -96,6 +96,14 @@ var oledBrightnessPct = 100
 // autoDimEnabled toggles the dim-then-off behavior. Default on.
 var autoDimEnabled = true
 
+// menuTimeoutOptions are the selectable idle delays after which an
+// untouched OLED menu falls back to the Standby status screen; 0 is Off
+// (the "yes/no" half of the setting - menus stay put until dismissed).
+var menuTimeoutOptions = []time.Duration{0, 15 * time.Second, 30 * time.Second, time.Minute, 2 * time.Minute}
+
+// menuTimeoutIdx selects into menuTimeoutOptions; 30s default.
+var menuTimeoutIdx = 2
+
 // lastInputTime is the most recent encoder/button/WebUI input, fed by
 // noteActivity; zero until the app boots so a stale default can't trigger an
 // immediate dim.
@@ -154,6 +162,9 @@ func loadPersistedConfig() {
 		}
 	}
 	autoDimEnabled = !c.AutoDimDisabled
+	if c.MenuTimeoutIdx >= 0 && c.MenuTimeoutIdx < len(menuTimeoutOptions) {
+		menuTimeoutIdx = c.MenuTimeoutIdx
+	}
 
 	wifiEnabled = c.WifiEnabled
 	wifiSSID = c.WifiSSID
@@ -179,6 +190,7 @@ func persistConfig() {
 		LogLevelIdx:       int(currentLogLevel()),
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
+		MenuTimeoutIdx:    menuTimeoutIdx,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
 		WifiPassword:      wifiPassword,
@@ -242,6 +254,7 @@ func exportConfigTo(dir string) error {
 		LogLevelIdx:       int(currentLogLevel()),
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
+		MenuTimeoutIdx:    menuTimeoutIdx,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
 		// WifiPassword deliberately omitted - it's a credential.
@@ -323,6 +336,9 @@ func importConfigFrom(dir string) error {
 		}
 	}
 	autoDimEnabled = !c.AutoDimDisabled
+	if c.MenuTimeoutIdx >= 0 && c.MenuTimeoutIdx < len(menuTimeoutOptions) {
+		menuTimeoutIdx = c.MenuTimeoutIdx
+	}
 
 	if c.WifiPassword != "" {
 		wifiSSID, wifiPassword, wifiEnabled = c.WifiSSID, c.WifiPassword, c.WifiEnabled
@@ -632,7 +648,7 @@ const (
 	StateWifiQR     // full-screen QR code for joining the WiFi AP
 	StateAudio      // Audio submenu: Sample Rate, Channel Count, Tag, Prefix
 	StateMetering   // Metering submenu: Meter Range, Peak Hold
-	StateDisplay    // Display submenu: Brightness, Auto Dim, Back
+	StateDisplay    // Display submenu: Brightness, Auto Dim, Menu Timeout, Back
 	StateLogging    // Logging submenu: Error, Warn, Info, Debug, Back
 )
 
@@ -790,6 +806,11 @@ type PersistedConfig struct {
 	// AutoDimDisabled persists the auto-dim Off state; inverted because Go's
 	// zero value (false) is the desired default of "enabled".
 	AutoDimDisabled bool `json:"autoDimDisabled,omitempty"`
+	// MenuTimeoutIdx persists the menu-timeout preset (0 = Off). No
+	// omitempty: 0 is a real choice and must round-trip - and an old
+	// config without the field decodes to 0, which preserves the
+	// pre-feature behavior (menus never timed out).
+	MenuTimeoutIdx int `json:"menuTimeoutIdx"`
 
 	WifiEnabled  bool   `json:"wifiEnabled"`
 	WifiSSID     string `json:"wifiSSID"`
@@ -1001,6 +1022,8 @@ func onEncoderRotate(direction int) {
 			adjustOledBrightness(direction)
 		case 1: // Auto Dim
 			adjustAutoDim(direction)
+		case 2: // Menu Timeout
+			adjustMenuTimeout(direction)
 		}
 
 	case StateLogging:
@@ -1269,6 +1292,53 @@ func adjustAutoDim(_ int) {
 	settingChanged()
 }
 
+// menuTimeoutLabel renders the current menu-timeout preset for the Display
+// submenu row - "Off" or a compact duration.
+func menuTimeoutLabel() string {
+	d := menuTimeoutOptions[menuTimeoutIdx]
+	if d == 0 {
+		return "Off"
+	}
+	if d >= time.Minute {
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	}
+	return fmt.Sprintf("%ds", int(d/time.Second))
+}
+
+// adjustMenuTimeout cycles the menu-timeout preset (Off, 15s, 30s, 60s,
+// 2min), persisting like every other OLED setting.
+func adjustMenuTimeout(direction int) {
+	menuTimeoutIdx = ((menuTimeoutIdx+direction)%len(menuTimeoutOptions) + len(menuTimeoutOptions)) % len(menuTimeoutOptions)
+	settingChanged()
+}
+
+// applyMenuTimeoutLocked drops an untouched menu back to the Standby status
+// screen once its idle delay has elapsed. Only menu-ish states time out:
+// transport (recording/playing/paused), an in-progress copy, and the home
+// screen itself are never touched. StateIdleBrowse goes through
+// exitIdleBrowse so an auto-started input monitor is stood down correctly.
+// Must be called under the app mutex (render does).
+func applyMenuTimeoutLocked(now time.Time) {
+	d := menuTimeoutOptions[menuTimeoutIdx]
+	if d == 0 || lastInputTime.IsZero() {
+		return
+	}
+	if now.Sub(lastInputTime) < d {
+		return
+	}
+	switch currentState {
+	case StateIdleBrowse:
+		exitIdleBrowse()
+	case StateSettings, StateAudio, StateMetering, StateDisplay, StateLogging,
+		StateCopyFiles, StateSystemOptions, StateNetworkInfo, StateRemoteInfo,
+		StateWifi, StateWifiQR, StateConfirm:
+		currentState = StateIdle
+		selectedMenu = 0
+		menuScrollOffset = 0
+		editingParameter = false
+	}
+}
+
 func navigateMenu(direction int) {
 	var maxItems int
 
@@ -1280,7 +1350,7 @@ func navigateMenu(direction int) {
 	case StateMetering:
 		maxItems = 3 // Meter Range, Peak Hold, Back
 	case StateDisplay:
-		maxItems = 3 // Brightness, Auto Dim, Back
+		maxItems = 4 // Brightness, Auto Dim, Menu Timeout, Back
 	case StateLogging:
 		maxItems = len(logLevelNames) + 1 // Error, Warn, Info, Debug, Back
 	case StateCopyFiles:
@@ -1318,7 +1388,7 @@ func handleSettingsClick() {
 		currentState = StateMetering
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 2: // Display submenu (Brightness, Auto Dim)
+	case 2: // Display submenu (Brightness, Auto Dim, Menu Timeout)
 		currentState = StateDisplay
 		selectedMenu = 0
 		menuScrollOffset = 0
@@ -1409,18 +1479,18 @@ func handleLoggingClick() {
 	}
 }
 
-// handleDisplayClick drives the Display submenu (StateDisplay): Brightness
-// and Auto Dim are press-to-edit / rotate-to-adjust rows plus Back, the same
-// interaction as the Audio/Metering parameter rows.
+// handleDisplayClick drives the Display submenu (StateDisplay): Brightness,
+// Auto Dim and Menu Timeout are press-to-edit / rotate-to-adjust rows plus
+// Back, the same interaction as the Audio/Metering parameter rows.
 func handleDisplayClick() {
 	if editingParameter {
 		editingParameter = false
 		return
 	}
 	switch selectedMenu {
-	case 0, 1: // Brightness, Auto Dim
+	case 0, 1, 2: // Brightness, Auto Dim, Menu Timeout
 		editingParameter = true
-	case 2: // Back
+	case 3: // Back
 		currentState = StateSettings
 		selectedMenu = 2
 		menuScrollOffset = 0
@@ -2747,6 +2817,10 @@ func render() {
 	// wall-clock idle with no extra timers.
 	applyAutoDimLocked(time.Now())
 
+	// Drop an untouched menu back to the Standby status screen - same tick,
+	// same lock, same idle clock as auto-dim above.
+	applyMenuTimeoutLocked(time.Now())
+
 	pushWaveformSample()
 
 	updateButtonLampsLocked()
@@ -2829,7 +2903,7 @@ func renderStatusBar() {
 
 func renderIdleScreen() {
 	// Use context-aware rendering for standby state
-	hwManager.DrawCenteredText("~ Standby ~", "idle", 32)
+	hwManager.DrawCenteredText("Standby", "idle", 32)
 
 	// One-shot status flash for OLED actions that have no screen of their
 	// own (config export/import), transient like the low-disk warning below.
@@ -3841,12 +3915,14 @@ func renderLoggingMenu() {
 }
 
 // renderDisplayMenu draws the Display submenu (StateDisplay): Brightness
-// (0-100%) and Auto Dim (On/Off) as press-to-edit rows plus Back - same
-// interaction as the Audio/Metering parameter rows.
+// (0-100%), Auto Dim (On/Off) and Menu Timeout (Off/15s/30s/60s/2min) as
+// press-to-edit rows plus Back - same interaction as the Audio/Metering
+// parameter rows.
 func renderDisplayMenu() {
 	items := []hardware.MenuItem{
 		{Label: "Brightness →", Value: fmt.Sprintf("%d%%", oledBrightnessPct)},
 		{Label: "Auto Dim →", Value: map[bool]string{true: "On", false: "Off"}[autoDimEnabled]},
+		{Label: "Menu Timeout →", Value: menuTimeoutLabel()},
 		{Label: "← Back", Value: ""},
 	}
 	totalItems := len(items)
