@@ -32,6 +32,9 @@ fonts/
 
 # htmax.js (htmx + bundled extensions) - downloaded by setup.sh, not committed
 web/htmax.min.js
+# uPlot bundle + CSS (telemetry graphs) - downloaded by setup.sh, not committed
+web/uPlot.iife.min.js
+web/uPlot.min.css
 
 # Built binaries
 /pi9696

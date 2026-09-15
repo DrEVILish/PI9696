@@ -855,6 +855,7 @@ func main() {
 	go networkMonitorLoop()
 	go peakHoldLoop()
 	go cpuUsageLoop()
+	go telemetryHistLoop()
 	go mdnsLoop()
 
 	// Bring the WiFi access point to the persisted startup state (OFF unless
@@ -4410,4 +4411,48 @@ func snapshotTelemetry() telemetryData {
 		v.RAMInferno = -1
 	}
 	return v
+}
+
+// Telemetry history feeds the dashboard's CPU/RAM time graphs: one sample
+// every teleHistStep, newest last, capped at teleHistN (150 x 2s = 5 min).
+// CPU stores the cross-core average - per-core lines would fan out with core
+// count while the interesting signal on a recorder is overall load.
+const teleHistN = 150
+const teleHistStep = 2 * time.Second
+
+var teleHistT []int64
+var teleHistCPU, teleHistRAMApp, teleHistRAMSys []float64
+
+// appendTelemetryHist records one history sample; trims equally so the
+// parallel slices can never drift apart in length.
+func appendTelemetryHist() {
+	mutex.Lock()
+	defer mutex.Unlock()
+	avg := 0.0
+	if len(cpuPct) > 0 {
+		for _, p := range cpuPct {
+			avg += p
+		}
+		avg /= float64(len(cpuPct))
+	}
+	sysUsed, _ := systemRAM()
+	teleHistT = append(teleHistT, time.Now().Unix())
+	teleHistCPU = append(teleHistCPU, avg)
+	teleHistRAMApp = append(teleHistRAMApp, ramMB(os.Getpid(), "VmRSS"))
+	teleHistRAMSys = append(teleHistRAMSys, sysUsed)
+	if len(teleHistT) > teleHistN {
+		cut := len(teleHistT) - teleHistN
+		teleHistT = append([]int64(nil), teleHistT[cut:]...)
+		teleHistCPU = append([]float64(nil), teleHistCPU[cut:]...)
+		teleHistRAMApp = append([]float64(nil), teleHistRAMApp[cut:]...)
+		teleHistRAMSys = append([]float64(nil), teleHistRAMSys[cut:]...)
+	}
+}
+
+func telemetryHistLoop() {
+	ticker := time.NewTicker(teleHistStep)
+	defer ticker.Stop()
+	for range ticker.C {
+		appendTelemetryHist()
+	}
 }
