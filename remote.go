@@ -1200,11 +1200,8 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .r2r .tape{fill:none;stroke:#14507e;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.8}
 .r2r .tape.active{stroke:var(--glow);stroke-width:3;opacity:0.85;stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite;filter:drop-shadow(0 0 5px rgba(0,217,255,0.45))}
 @keyframes tapeflow{to{stroke-dashoffset:-36}}
-/* Guide idlers: dark spindle wells with a tiny lit bore so the tape path
-   reads as engineering hardware instead of plain dots. */
-.r2r .guide{fill:#0a1830;stroke:var(--border);stroke-width:2}
-.r2r .guide-in{fill:#071222;stroke:#16456e;stroke-width:1.5}
-.r2r .guide-bore{fill:rgba(0,217,255,0.3);filter:drop-shadow(0 0 2px rgba(0,217,255,0.4))}
+/* Guide idlers: lit rims so the tape path reads at a glance. */
+.r2r .guide{fill:#0a1830;stroke:rgba(0,217,255,0.55);stroke-width:1.5}
 /* The read/write head block: a chamfered angular castle rising out of the
    tape gap, with glowing trim rails on its mounting cheeks, the red centre
    gap line and the large 7-segment digital time counter in its display
@@ -1212,7 +1209,7 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
    (.r2r.rec). */
 .r2r .head-plate{fill:url(#headFace);stroke:var(--border);stroke-width:1.5}
 .r2r .head-edge{fill:none;stroke:rgba(0,217,255,0.25);stroke-width:1}
-.r2r .head-gap{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;opacity:0.4}
+.r2r .head-gap{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;opacity:0.55}
 .r2r.run .head-gap{opacity:0.75}
 .r2r.rec .head-gap{stroke:var(--rec);opacity:0.95;filter:drop-shadow(0 0 5px rgba(255,51,85,0.8))}
 .r2r .head-window{fill:#050d1a;stroke:#16456e;stroke-width:1.5}
@@ -1387,6 +1384,9 @@ body.meters-collapsed{padding-bottom:4em}
         <circle class="plate-screw" cx="18" cy="247" r="4"/>
         <circle class="plate-screw" cx="802" cy="247" r="4"/>
 
+        <path class="tape-shadow" d="M211 161 L330 196 L490 196 L609 161"/>
+        <path class="tape" id="tapePath" d="M211 159 L330 194 L490 194 L609 159"/>
+
         <g class="reel-g" id="reelL" transform="translate(170,105) scale(1.25) translate(-170,-105)">
           <circle class="reel-ring" cx="170" cy="105" r="61"/>
           <circle class="reel-disc" cx="170" cy="105" r="58"/>
@@ -1418,37 +1418,32 @@ body.meters-collapsed{padding-bottom:4em}
           </g>
         </g>
 
+        <text class="hud-text" x="410" y="122" text-anchor="middle">PI9696</text>
+
         <circle class="guide" cx="221" cy="162" r="7"/>
         <circle class="guide" cx="599" cy="162" r="7"/>
         <circle class="guide" cx="330" cy="194" r="7"/>
         <circle class="guide" cx="490" cy="194" r="7"/>
-        <circle class="guide-in" cx="118" cy="200" r="10"/>
-        <circle class="guide-in" cx="702" cy="200" r="10"/>
-        <circle class="guide-bore" cx="118" cy="200" r="3"/>
-        <circle class="guide-bore" cx="702" cy="200" r="3"/>
-
-        <path class="tape-shadow" d="M221 164 L330 196 L490 196 L599 164"/>
-        <path class="tape" id="tapePath" d="M221 162 L330 194 L490 194 L599 162"/>
 
         <g class="head">
           <polygon class="head-plate" points="272,252 272,198 288,184 532,184 548,198 548,252"/>
           <path class="head-edge" d="M284 198 V246 M536 198 V246"/>
-          <path class="head-gap" d="M402 194 L418 194"/>
+          <path class="head-gap" d="M402 190 L418 190"/>
           <rect class="head-window" x="300" y="198" width="220" height="48" rx="3"/>
           <path class="head-win-grid" d="M304 210 H516 M304 222 H516 M304 234 H516 M304 246 H516 M324 198 V246 M348 198 V246 M372 198 V246 M396 198 V246 M420 198 V246 M444 198 V246 M468 198 V246 M492 198 V246"/>
           <g id="seg7" transform="translate(312,202) skewX(-10) scale(2.12)"></g>
         </g>
 
-        <text class="hud-text" x="146" y="30">SUPPLY</text>
-        <text class="hud-text" x="614" y="30">TAKE-UP</text>
+        <text class="hud-text" x="146" y="24">SUPPLY</text>
+        <text class="hud-text" x="614" y="24">TAKE-UP</text>
 
         <g class="hud">
-          <path class="hud-band" d="M40 251 H780"/>
-          <circle class="hud-lamp" id="sysLamp" cx="54" cy="257" r="2.5"/>
-          <text class="hud-text" x="66" y="260">SYS</text>
-          <text class="hud-text" x="352" y="260">TRANSPORT</text>
-          <text class="hud-text" x="620" y="260">INFERNO-LINK</text>
-          <circle class="hud-lamp" id="linkLamp" cx="706" cy="257" r="2.5"/>
+          <path class="hud-band" d="M40 249 H780"/>
+          <circle class="hud-lamp" id="sysLamp" cx="54" cy="255" r="2.5"/>
+          <text class="hud-text" x="66" y="258">SYS</text>
+          <text class="hud-text" x="352" y="258">TRANSPORT</text>
+          <text class="hud-text" x="620" y="258">INFERNO-LINK</text>
+          <circle class="hud-lamp" id="linkLamp" cx="706" cy="255" r="2.5"/>
         </g>
 
         <path class="deck-corner" d="M14 30 V14 H30"/>
@@ -1764,9 +1759,9 @@ function buildSeg7() {
   for (var p = 0; p < 8; p++) {
     var g = document.createElementNS(svgNS, 'g');
     var tx = x, ty = 0, sc = 1;
-    // Seconds digits (positions 6,7) render at 75% and drop down half a
-    // digit, de-emphasising SS relative to the HH:MM pair.
-    if (p >= 6) { tx = x + 1.25; ty = 2.25; sc = 0.75; }
+    // Seconds digits (positions 6,7) render at 75%, bottom-aligned with
+    // the HH:MM pair (ty 3.5 = full 17px baseline minus scaled 13.5px).
+    if (p >= 6) { tx = x + 1.25; ty = 3.5; sc = 0.75; }
     g.setAttribute('transform', 'translate(' + tx + ',' + ty + ') scale(' + sc + ')');
     g.setAttribute('data-pos', p);
     var isColon = (p === 2 || p === 5);
