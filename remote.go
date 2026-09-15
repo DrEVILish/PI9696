@@ -952,7 +952,7 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 <meta name="theme-color" content="#00d9ff">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<script src="/static/htmx.min.js"></script>
+<script src="/static/htmax.min.js"></script>
 <style>
 :root{--glow:#00d9ff;--panel:#0a1526;--border:#0f3a5c;--text:#cfeeff;--dim:#5b8aa8;--rec:#ff3355;--idle:#2bffb0;--orange:#ff8c1a;--meter-h:120px}
 *{box-sizing:border-box}
@@ -2576,14 +2576,15 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/input/button/stop", requireAuth(handleInputButton(hardware.StopButton)))
 	mux.HandleFunc("POST /api/input/button/play", requireAuth(handleInputButton(hardware.PlayButton)))
 
-	// htmx.min.js is downloaded by setup.sh (pinned to 4.0.0, see setup.sh)
-	// rather than referencing an external CDN at runtime - this device
-	// shouldn't depend on internet access, only its own LAN, to serve its
-	// control page. A dedicated single-file handler (not http.FileServer
-	// mounted on the web/ dir) so this never exposes directory listing for
-	// anything else that might land in that directory.
-	mux.HandleFunc("GET /static/htmx.min.js", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, filepath.Join("web", "htmx.min.js"))
+	// htmax.min.js (htmx 4.0 plus its bundled extensions) is downloaded by
+	// setup.sh (pinned to 4.0.0, see setup.sh) rather than referencing an
+	// external CDN at runtime - this device shouldn't depend on internet
+	// access, only its own LAN, to serve its control page. A dedicated
+	// single-file handler (not http.FileServer mounted on the web/ dir) so
+	// this never exposes directory listing for anything else that might land
+	// in that directory.
+	mux.HandleFunc("GET /static/htmax.min.js", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join("web", "htmax.min.js"))
 	})
 
 	return mux
