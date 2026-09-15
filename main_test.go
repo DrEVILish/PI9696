@@ -307,13 +307,13 @@ func TestStopRecordingDoesNotBlockMutex(t *testing.T) {
 // clean idle start (the test env has no real disk, so lowDisk() is false -
 // zero free space is deliberately not treated as low).
 func TestStartRecordingGuarded(t *testing.T) {
-	origState, origRec := currentState, isRecording
-	origCfg := os.Getenv("PI9696_CONFIG")
-	t.Cleanup(func() { currentState, isRecording = origState, origRec; os.Setenv("PI9696_CONFIG", origCfg) })
+	origState, origRec, origInferno := currentState, isRecording, infernoState
+	t.Cleanup(func() { currentState, isRecording, infernoState = origState, origRec, origInferno })
 
 	initTestHardware(t)
-	tmpCfg := filepath.Join(t.TempDir(), "config.json")
-	os.Setenv("PI9696_CONFIG", tmpCfg)
+	mutex.Lock()
+	infernoState = InfernoStopped
+	mutex.Unlock()
 
 	// Refused: already recording.
 	mutex.Lock()
@@ -364,9 +364,9 @@ func TestStartRecordingGuarded(t *testing.T) {
 // sub-menu (StateAudio) behind a StateSettings row; the navigate-until-clicked
 // rule is exercised there.
 func TestRotationNavigatesUntilRowIsClicked(t *testing.T) {
-	origSelected, origEditing, origSampleIdx := selectedMenu, editingParameter, sampleRateIdx
+	origSelected, origEditing, origSampleIdx, origState := selectedMenu, editingParameter, sampleRateIdx, currentState
 	t.Cleanup(func() {
-		selectedMenu, editingParameter, sampleRateIdx = origSelected, origEditing, origSampleIdx
+		selectedMenu, editingParameter, sampleRateIdx, currentState = origSelected, origEditing, origSampleIdx, origState
 	})
 
 	mutex.Lock()
@@ -1378,11 +1378,6 @@ func TestLogLevelSetAndPersist(t *testing.T) {
 	}
 
 	// A raised level round-trips through the persisted config.
-	origCfg := os.Getenv("PI9696_CONFIG")
-	tmpCfg := filepath.Join(t.TempDir(), "config.json")
-	os.Setenv("PI9696_CONFIG", tmpCfg)
-	t.Cleanup(func() { os.Setenv("PI9696_CONFIG", origCfg) })
-
 	persistConfig()
 	loadPersistedConfig()
 	if currentLogLevel() != LogInfo {
@@ -1410,10 +1405,8 @@ func TestLogLevelSubmenuBackTarget(t *testing.T) {
 
 func TestOledBrightnessAdjustAndPersist(t *testing.T) {
 	origB, origAuto := oledBrightnessPct, autoDimEnabled
-	origCfg := os.Getenv("PI9696_CONFIG")
 	t.Cleanup(func() {
 		oledBrightnessPct, autoDimEnabled = origB, origAuto
-		os.Setenv("PI9696_CONFIG", origCfg)
 	})
 
 	// Clamping: going negative stops at 0, and going high stops at 100.
@@ -1429,8 +1422,6 @@ func TestOledBrightnessAdjustAndPersist(t *testing.T) {
 
 	// A mid-scale value round-trips through the persisted config.
 	oledBrightnessPct = 37
-	tmpCfg := filepath.Join(t.TempDir(), "config.json")
-	os.Setenv("PI9696_CONFIG", tmpCfg)
 
 	persistConfig()
 	oledBrightnessPct = 0
@@ -1616,11 +1607,7 @@ func TestEffectiveFilePrefix(t *testing.T) {
 
 func TestFilePrefixPersists(t *testing.T) {
 	origPrefix := filePrefix
-	origCfg := os.Getenv("PI9696_CONFIG")
-	t.Cleanup(func() { filePrefix = origPrefix; os.Setenv("PI9696_CONFIG", origCfg) })
-
-	tmpCfg := filepath.Join(t.TempDir(), "config.json")
-	os.Setenv("PI9696_CONFIG", tmpCfg)
+	t.Cleanup(func() { filePrefix = origPrefix })
 
 	filePrefix = "VenueB"
 	persistConfig()
@@ -1848,13 +1835,26 @@ func TestShouldAutoStopTake(t *testing.T) {
 func TestConfigExportImportRoundTrip(t *testing.T) {
 	initTestHardware(t)
 
-	origCfg := os.Getenv("PI9696_CONFIG")
-	t.Cleanup(func() { os.Setenv("PI9696_CONFIG", origCfg) })
-	os.Setenv("PI9696_CONFIG", filepath.Join(t.TempDir(), "config.json"))
-
 	usb := t.TempDir()
 	origUSB := usbMounted
-	t.Cleanup(func() { mutex.Lock(); usbMounted = origUSB; mutex.Unlock() })
+	origDev, origSR, origCh := deviceName, sampleRateIdx, channelCount
+	origTag, origPrefix, origVU, origPeak := tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx
+	origTM, origSSID, origWifiEn := transportMode, wifiSSID, wifiEnabled
+	t.Cleanup(func() {
+		mutex.Lock()
+		usbMounted = origUSB
+		deviceName = origDev
+		sampleRateIdx = origSR
+		channelCount = origCh
+		tagPresetIdx = origTag
+		filePrefix = origPrefix
+		vuRangeIdx = origVU
+		peakHoldIdx = origPeak
+		transportMode = origTM
+		wifiSSID = origSSID
+		wifiEnabled = origWifiEn
+		mutex.Unlock()
+	})
 	mutex.Lock()
 	usbMounted = true
 	curPwd := wifiPassword
