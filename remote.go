@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"html"
 	"html/template"
 	"io"
 	"log"
@@ -770,7 +771,6 @@ var wifiQRFragmentTmpl = template.Must(template.New("wifiqr").Parse(`
 <div class="wifi-qr-row">
   <div class="wifi-qr-info">
     <p><strong>SSID:</strong> {{.SSID}}</p>
-    <p><strong>Password:</strong> {{.Password}}</p>
   </div>
   <div class="wifi-qr-img">
     <img src="data:image/png;base64,{{.QRBase64}}" alt="WiFi QR Code" title="Scan to join">
@@ -870,18 +870,27 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 	pass := r.FormValue("password")
 	enabled := r.FormValue("enabled") == "on"
 
-	if ssid == "" {
-		http.Error(w, "SSID required", http.StatusBadRequest)
-		return
-	}
-	if len(pass) < 8 {
-		http.Error(w, "Password must be at least 8 characters", http.StatusBadRequest)
-		return
-	}
-
 	mutex.Lock()
-	wifiSSID = ssid
-	wifiPassword = pass
+	if enabled {
+		// Only a save that turns the AP on needs credentials; switching it
+		// off must work even when the form fields were cleared.
+		if ssid == "" {
+			mutex.Unlock()
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `<span class="err">SSID required</span>`)
+			return
+		}
+		if len(pass) < 8 {
+			mutex.Unlock()
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `<span class="err">Password must be at least 8 characters</span>`)
+			return
+		}
+		wifiSSID = ssid
+		wifiPassword = pass
+	}
 	wifiEnabled = enabled
 	persistConfig()
 	mutex.Unlock()
@@ -901,6 +910,8 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 	wifiQRFragmentTmpl.Execute(&qrBuf, wifiQRView{enabled, ssid, pass, qrBase64})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write(qrBuf.Bytes())
+	// OOB swap: clear any stale validation error from #wifi-error on success.
+	fmt.Fprint(w, "\n<div id=\"wifi-error\" hx-swap-oob=\"innerHTML\"></div>")
 }
 
 // handleAPIConfigExport writes the non-secret config profile to the USB drive
@@ -912,10 +923,10 @@ func handleAPIConfigExport(w http.ResponseWriter, r *http.Request) {
 	mutex.Unlock()
 	if err != nil {
 		logErrorf("web config export: %v", err)
-		fmt.Fprint(w, "Export failed: "+err.Error())
+		fmt.Fprintf(w, "<span class=\"err\">Export failed: %s</span>", html.EscapeString(err.Error()))
 		return
 	}
-	fmt.Fprint(w, "Config exported to USB drive.")
+	fmt.Fprint(w, "<span class=\"ok\">Config exported to USB drive.</span>")
 }
 
 // handleAPIConfigImport loads the USB config profile and applies it. On
@@ -927,11 +938,11 @@ func handleAPIConfigImport(w http.ResponseWriter, r *http.Request) {
 	mutex.Unlock()
 	if err != nil {
 		logErrorf("web config import: %v", err)
-		fmt.Fprint(w, "Import failed: "+err.Error())
+		fmt.Fprintf(w, "<span class=\"err\">Import failed: %s</span>", html.EscapeString(err.Error()))
 		return
 	}
 	w.Header().Set("HX-Refresh", "true")
-	fmt.Fprint(w, "Config imported from USB - reloading...")
+	fmt.Fprint(w, "<span class=\"ok\">Config imported from USB - reloading...</span>")
 }
 
 // The dashboard's header ("deck") mirrors the physical front panel left to
@@ -964,6 +975,9 @@ button{font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:#08192b
 button:hover{border-color:var(--glow);box-shadow:0 0 8px var(--glow)}
 button:active{background:#0f2a44}
 button:disabled{opacity:0.35;cursor:default;box-shadow:none}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--glow);outline-offset:2px}
+.ok{color:var(--idle)}
+.err{color:var(--rec)}
 .rec{color:var(--rec);font-weight:bold;text-shadow:0 0 8px var(--rec)}
 .idle{color:var(--idle)}
 table{border-collapse:collapse;width:100%;font-size:0.82em}
@@ -1276,6 +1290,7 @@ body.meters-collapsed{padding-bottom:4em}
   .r2r .reel-g.spinning .reel-spin,
   .r2r .tape.active,
   .meter-body{animation:none;transition:none}
+  .sci-switch-track,.sci-thumb{transition:none}
 }
 
 /* WiFi settings panel */
@@ -1505,7 +1520,7 @@ body.meters-collapsed{padding-bottom:4em}
         <h3 class="settings-group-title">Network</h3>
         <div id="wifi-settings">
           {{.WifiQRFragment}}
-          <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML">
+          <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML" hx-status:400="target:#wifi-error">
             <div class="setting-row setting-row--pair">
               <span class="field">
                 <label for="wifiSsid">SSID</label>
@@ -1526,6 +1541,7 @@ body.meters-collapsed{padding-bottom:4em}
             </div>
             <button type="submit" class="btn-primary">Save WiFi</button>
           </form>
+          <div id="wifi-error"></div>
         </div>
       </section>
     </div>
@@ -1598,7 +1614,7 @@ renderTransportRow();
 // When the Transport Buttons setting changes in the settings modal, htmx
 // swaps the fragment - listen for that and re-seed ICON_MODE from the
 // select's own value (0=icon,1=text) so the header updates instantly.
-document.body.addEventListener('htmx:afterSwap', function(e) {
+document.body.addEventListener('htmx:after:swap', function(e) {
   if (e.detail.target && e.detail.target.id === 'transportmode') {
     var sel = e.detail.target.querySelector('select[name="idx"]');
     if (sel) { ICON_MODE = (sel.value === '0'); renderTransportRow(); }
@@ -2165,18 +2181,10 @@ type meterResponse struct {
 	Paused     bool           `json:"paused"`
 	Monitoring bool           `json:"monitoring"`
 	MonOutput  bool           `json:"monOutput"`
-	// InfernoUp mirrors the Inferno server state (infernoState ==
-	// InfernoRunning) so the dashboard's INFERNO-LINK deck lamp reflects
-	// reality - it rides the existing 100ms meter push, so no separate
-	// stream or poll is needed.
 	InfernoUp  bool           `json:"infernoUp"`
 	Elapsed    string         `json:"elapsed"`
 	Channels   []channelLevel `json:"channels"`
-	// FloorDB is the currently configured VU-meter range floor (Settings ->
-	// Meter Range, see vuRangeOptions in main.go) - sent on every message
-	// so the dashboard's vuPct()/db-scale ticks track a change made from
-	// the OLED without needing a page reload.
-	FloorDB float64 `json:"floorDB"`
+	FloorDB    float64        `json:"floorDB"`
 }
 
 // jsonSafeDB coerces a dB level to a JSON-encodable value. encoding/json will
@@ -2224,7 +2232,7 @@ func currentMeterResponse() meterResponse {
 	count := channelCount
 	resp.Channels = make([]channelLevel, count)
 	for i := range resp.Channels {
-		if i < len(meterChannelPeakHeld) {
+		if i < len(meterChannelPeakHeld) && i < len(meterChannelRMS) {
 			resp.Channels[i] = channelLevel{PeakDB: jsonSafeDB(meterChannelPeakHeld[i]), RMSDB: jsonSafeDB(meterChannelRMS[i])}
 		} else {
 			resp.Channels[i] = channelLevel{PeakDB: meterSilence, RMSDB: meterSilence}
@@ -2236,8 +2244,6 @@ func currentMeterResponse() meterResponse {
 	case resp.Playing:
 		resp.Elapsed = formatDuration(time.Since(playbackStart))
 	case resp.Paused:
-		// Playback time is frozen while paused - the VFD must not keep
-		// counting. Format the captured duration captured at pause time.
 		resp.Elapsed = formatDuration(playbackPausedElapsed)
 	}
 	return resp
