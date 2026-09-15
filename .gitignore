@@ -30,8 +30,8 @@ go.work.sum
 # FiraCode fonts - downloaded by setup.sh, not committed
 fonts/
 
-# htmx.js - downloaded by setup.sh, not committed
-web/htmx.min.js
+# htmax.js (htmx + bundled extensions) - downloaded by setup.sh, not committed
+web/htmax.min.js
 
 # Built binaries
 /pi9696

@@ -18,8 +18,11 @@ TEMP_DIR="/tmp/pi9696_setup"
 # unversioned URL would silently serve 2.x instead of the 4.0 this app's
 # templates are written against.
 HTMX_VERSION="4.0.0"
-HTMX_URL="https://unpkg.com/htmx.org@${HTMX_VERSION}/dist/htmx.min.js"
-HTMX_SHA256="e484d9171a9db30a39c8f16e3d709d4137f3211c659f8e6125816635033d593f"
+# htmax is htmx 4 bundled with the commonly-used extensions (hx-sse, hx-ws,
+# hx-preload, hx-browser-indicator, hx-download, hx-pending, hx-targets,
+# hx-live, hx-upsert, hx-alpine-compat, hx-history-cache) in one file.
+HTMX_URL="https://unpkg.com/htmx.org@${HTMX_VERSION}/dist/htmax.min.js"
+HTMX_SHA256="2b90cb1844656b9f025805b479288cea2877c7f91068a845c4106ebf5d87a315"
 WEB_DIR="./web"
 
 # Colors for output
@@ -464,23 +467,23 @@ log_step "htmx Installation (Remote Control UI)"
 
 mkdir -p "$WEB_DIR"
 
-if [[ ! -f "$WEB_DIR/htmx.min.js" ]]; then
-    log_info "Downloading htmx v${HTMX_VERSION}..."
-    TMP_HTMX="/tmp/htmx.min.js"
+if [[ ! -f "$WEB_DIR/htmax.min.js" ]]; then
+    log_info "Downloading htmax v${HTMX_VERSION}..."
+    TMP_HTMX="/tmp/htmax.min.js"
 
     if ! wget -q -O "$TMP_HTMX" "$HTMX_URL"; then
-        log_error "Failed to download htmx"
+        log_error "Failed to download htmax"
         exit 1
     fi
 
     if ! echo "${HTMX_SHA256}  ${TMP_HTMX}" | sha256sum -c - > /dev/null 2>&1; then
-        log_error "htmx checksum mismatch - aborting"
+        log_error "htmax checksum mismatch - aborting"
         rm -f "$TMP_HTMX"
         exit 1
     fi
 
-    mv "$TMP_HTMX" "$WEB_DIR/htmx.min.js"
-    log_success "htmx v${HTMX_VERSION} installed to $WEB_DIR"
+    mv "$TMP_HTMX" "$WEB_DIR/htmax.min.js"
+    log_success "htmax v${HTMX_VERSION} installed to $WEB_DIR"
 else
     log_info "htmx already present, skipping download"
 fi
