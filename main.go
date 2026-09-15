@@ -726,6 +726,7 @@ var (
 	filesToCopy            = make(map[string]bool)
 	allFiles               []string
 	copyProgress           = 0
+	copyStarted            time.Time
 	infernoCmd             *exec.Cmd
 	ffmpegCmd              *exec.Cmd
 	fifoPath               string
@@ -2486,13 +2487,17 @@ func loadFilesToCopy() {
 }
 
 func startCopyOperation() {
-	if !usbMounted {
+	mutex.Lock()
+	if !usbMounted || isCopying {
+		mutex.Unlock()
 		return
 	}
 
 	currentState = StateCopying
 	isCopying = true
 	copyProgress = 0
+	copyStarted = time.Now()
+	mutex.Unlock()
 
 	go func() {
 		selectedFiles := []string{}
@@ -2511,7 +2516,10 @@ func startCopyOperation() {
 		}
 
 		for i, file := range selectedFiles {
-			if !isCopying {
+			mutex.Lock()
+			cancelled := !isCopying
+			mutex.Unlock()
+			if cancelled {
 				break
 			}
 
@@ -3492,11 +3500,12 @@ func renderCopyProgress() {
 	// Use FiraCode progress bar with enhanced typography
 	title := "Copying to USB..."
 
-	// Calculate estimated remaining time
+	// Calculate estimated remaining time from wall-clock progress.
 	remainingText := "Calculating..."
 	if copyProgress > 0 {
-		// Simple estimation based on current progress
-		remainingText = "~02:34 remaining"
+		elapsed := time.Since(copyStarted)
+		remaining := elapsed * time.Duration(100-copyProgress) / time.Duration(copyProgress)
+		remainingText = "~" + remaining.Round(time.Minute).String() + " remaining"
 	}
 
 	// Folded into one line - a 64px display has no room for the bar,
