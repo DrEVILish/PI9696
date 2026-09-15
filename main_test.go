@@ -1244,7 +1244,7 @@ func TestIdleBrowseNavigatesPagesAndReturnsToIdle(t *testing.T) {
 
 	mutex.Lock()
 	currentState = StateIdle
-	channelCount = 8 // idleVUChannelsPerPage=6 -> 2 VU pages + 1 waveform page + 1 info page = 4 stops
+	channelCount = 8 // idleVUChannelsPerPage=12 -> 1 VU page + 1 waveform page + 1 info page = 3 stops
 	mutex.Unlock()
 
 	// Any rotation from idle enters browse mode at page 0.
@@ -1256,9 +1256,9 @@ func TestIdleBrowseNavigatesPagesAndReturnsToIdle(t *testing.T) {
 		t.Fatalf("expected rotating from idle to enter StateIdleBrowse at page 0, got state=%v page=%d", currentState, idleBrowsePage)
 	}
 
-	// Rotating forward pages through the 2 VU pages, then the waveform
+	// Rotating forward pages through the VU page, then the waveform
 	// page, then the info page, then wraps back to page 0.
-	for i, want := range []int{1, 2, 3, 0} {
+	for i, want := range []int{1, 2, 0} {
 		onEncoderRotate(1)
 		mutex.Lock()
 		got := idleBrowsePage
@@ -1273,8 +1273,8 @@ func TestIdleBrowseNavigatesPagesAndReturnsToIdle(t *testing.T) {
 	mutex.Lock()
 	got := idleBrowsePage
 	mutex.Unlock()
-	if got != 3 {
-		t.Fatalf("expected backward rotation from page 0 to wrap to page 3, got %d", got)
+	if got != 2 {
+		t.Fatalf("expected backward rotation from page 0 to wrap to page 2, got %d", got)
 	}
 
 	// A click exits back to idle.
