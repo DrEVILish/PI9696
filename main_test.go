@@ -513,6 +513,31 @@ func TestRemoteLoginWrongTokenThenCorrectToken(t *testing.T) {
 	}
 }
 
+func TestRemoteAccessQRRedirectKeepsTokenQuery(t *testing.T) {
+	// The OLED access-QR encodes "/?t=<token>"; scanning it must land on the
+	// login page with the query intact so the boxes pre-fill. Without this the
+	// 303 from requireAuth drops ?t= and the code never pre-fills.
+	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
+	remoteToken = "TESTTOKEN2"
+	loginLimit = newLoginLimiter()
+	sessions = newSessionStore()
+	t.Cleanup(func() { remoteToken, loginLimit, sessions = origToken, origLimiter, origSessions })
+
+	mux := newRemoteMux()
+
+	// Unauthenticated request to the QR URL: redirect must keep ?t=.
+	req := httptest.NewRequest("GET", "/?t=TESTTOK", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("expected 303 redirect to login, got %d", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	if loc != "/login?t=TESTTOK" {
+		t.Fatalf("expected redirect to /login?t=TESTTOK, got %q", loc)
+	}
+}
+
 func TestRemoteSessionCookieIsNotTokenAndRevokes(t *testing.T) {
 	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
 	remoteToken = "TESTTOKEN2"
