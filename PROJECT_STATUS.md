@@ -159,7 +159,7 @@ Implementation status, product decisions, and feature history. For specs/usage �
 
 ### 1.19.x
 
-- **1.19.0** — Telemetry graphs: dropdown replaced by always-visible uPlot CPU/RAM time graphs (5 min window, themed to deck vars, locally hosted 1.6.32 bundle); deck review fixes (orphan guides removed, tape tucked under rims, lit idlers, gap/label/HUD seating, bottom-aligned seg7 SS)
+- **1.19.0** — Telemetry graphs: dropdown replaced by always-visible uPlot CPU (per-core lines) / RAM time graphs (5 min window, themed to deck vars, locally hosted 1.6.32 bundle); deck review fixes (orphan guides removed, tape tucked under rims, lit idlers, gap/label/HUD seating, bottom-aligned seg7 SS)
 
 ### 1.18.x
 
