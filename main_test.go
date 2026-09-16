@@ -515,31 +515,34 @@ func TestRemoteLoginWrongTokenThenCorrectToken(t *testing.T) {
 }
 
 func TestTelemetryHistAppendCap(t *testing.T) {
-	origT, origCPU, origApp, origSys := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys
+	origT, origCPU, origApp, origSys, origCores := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores
 	origPct := cpuPct
 	t.Cleanup(func() {
-		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys = origT, origCPU, origApp, origSys
+		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores = origT, origCPU, origApp, origSys, origCores
 		cpuPct = origPct
 	})
 
 	// Empty history accepts samples; parallel slices stay aligned.
-	teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys = nil, nil, nil, nil
+	teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores = nil, nil, nil, nil, nil
 	cpuPct = []float64{10, 30}
 	appendTelemetryHist()
 	appendTelemetryHist()
-	if len(teleHistT) != 2 || len(teleHistCPU) != 2 || len(teleHistRAMApp) != 2 || len(teleHistRAMSys) != 2 {
-		t.Fatalf("history slices drifted apart: %d %d %d %d", len(teleHistT), len(teleHistCPU), len(teleHistRAMApp), len(teleHistRAMSys))
+	if len(teleHistT) != 2 || len(teleHistCPU) != 2 || len(teleHistRAMApp) != 2 || len(teleHistRAMSys) != 2 || len(teleHistCores) != 2 {
+		t.Fatalf("history slices drifted apart: %d %d %d %d %d", len(teleHistT), len(teleHistCPU), len(teleHistRAMApp), len(teleHistRAMSys), len(teleHistCores))
 	}
 	if teleHistCPU[0] != 20 {
 		t.Fatalf("expected cross-core average 20, got %v", teleHistCPU[0])
+	}
+	if len(teleHistCores[0]) != 2 || teleHistCores[1][1] != 30 {
+		t.Fatalf("per-core rows wrong: %v", teleHistCores)
 	}
 
 	// Overflowing the cap trims oldest-first, newest kept.
 	for i := 0; i < teleHistN+10; i++ {
 		appendTelemetryHist()
 	}
-	if len(teleHistT) != teleHistN || len(teleHistCPU) != teleHistN || len(teleHistRAMApp) != teleHistN || len(teleHistRAMSys) != teleHistN {
-		t.Fatalf("expected cap %d on all slices, got %d %d %d %d", teleHistN, len(teleHistT), len(teleHistCPU), len(teleHistRAMApp), len(teleHistRAMSys))
+	if len(teleHistT) != teleHistN || len(teleHistCPU) != teleHistN || len(teleHistRAMApp) != teleHistN || len(teleHistRAMSys) != teleHistN || len(teleHistCores) != teleHistN {
+		t.Fatalf("expected cap %d on all slices, got %d %d %d %d %d", teleHistN, len(teleHistT), len(teleHistCPU), len(teleHistRAMApp), len(teleHistRAMSys), len(teleHistCores))
 	}
 	for i := 1; i < len(teleHistT); i++ {
 		if teleHistT[i] < teleHistT[i-1] {
@@ -550,13 +553,13 @@ func TestTelemetryHistAppendCap(t *testing.T) {
 
 func TestAPITelemetry(t *testing.T) {
 	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
-	origT, origCPU, origApp, origSys := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys
+	origT, origCPU, origApp, origSys, origCores := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores
 	remoteToken = "TESTTOKEN2"
 	loginLimit = newLoginLimiter()
 	sessions = newSessionStore()
 	t.Cleanup(func() {
 		remoteToken, loginLimit, sessions = origToken, origLimiter, origSessions
-		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys = origT, origCPU, origApp, origSys
+		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores = origT, origCPU, origApp, origSys, origCores
 	})
 
 	mux := newRemoteMux()
@@ -578,6 +581,7 @@ func TestAPITelemetry(t *testing.T) {
 
 	teleHistT = []int64{1000, 1002, 1004}
 	teleHistCPU = []float64{10, 20, 30}
+	teleHistCores = [][]float64{{5, 15}, {10, 30}, {15, 45}}
 	teleHistRAMApp = []float64{40, 41, 42}
 	teleHistRAMSys = []float64{1000, 1001, 1002}
 
@@ -592,11 +596,14 @@ func TestAPITelemetry(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&v); err != nil {
 		t.Fatalf("telemetry not JSON: %v", err)
 	}
-	if len(v.T) != 3 || len(v.CPU) != 3 || len(v.RAMApp) != 3 || len(v.RAMSys) != 3 {
+	if len(v.T) != 3 || len(v.CPU) != 3 || len(v.RAMApp) != 3 || len(v.RAMSys) != 3 || len(v.Cores) != 3 {
 		t.Fatalf("parallel arrays must match: %+v", v)
 	}
 	if v.T[0] != 1000 || v.CPU[2] != 30 || v.RAMApp[1] != 41 || v.RAMSys[2] != 1002 {
 		t.Fatalf("history values wrong: %+v", v)
+	}
+	if len(v.Cores[2]) != 2 || v.Cores[2][0] != 15 || v.Cores[2][1] != 45 {
+		t.Fatalf("per-core rows wrong: %+v", v.Cores)
 	}
 }
 
