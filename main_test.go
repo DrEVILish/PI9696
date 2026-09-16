@@ -515,20 +515,22 @@ func TestRemoteLoginWrongTokenThenCorrectToken(t *testing.T) {
 }
 
 func TestTelemetryHistAppendCap(t *testing.T) {
-	origT, origCPU, origApp, origSys, origCores := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores
+	origT, origCPU, origApp, origSys, origCores, origTemp, origDisk := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores, teleHistTemp, teleHistDisk
 	origPct := cpuPct
 	t.Cleanup(func() {
-		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores = origT, origCPU, origApp, origSys, origCores
+		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores, teleHistTemp, teleHistDisk = origT, origCPU, origApp, origSys, origCores, origTemp, origDisk
 		cpuPct = origPct
 	})
 
 	// Empty history accepts samples; parallel slices stay aligned.
-	teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores = nil, nil, nil, nil, nil
+	teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores, teleHistTemp, teleHistDisk = nil, nil, nil, nil, nil, nil, nil
 	cpuPct = []float64{10, 30}
 	appendTelemetryHist()
 	appendTelemetryHist()
-	if len(teleHistT) != 2 || len(teleHistCPU) != 2 || len(teleHistRAMApp) != 2 || len(teleHistRAMSys) != 2 || len(teleHistCores) != 2 {
-		t.Fatalf("history slices drifted apart: %d %d %d %d %d", len(teleHistT), len(teleHistCPU), len(teleHistRAMApp), len(teleHistRAMSys), len(teleHistCores))
+	for name, n := range map[string]int{"t": len(teleHistT), "cpu": len(teleHistCPU), "cores": len(teleHistCores), "ramApp": len(teleHistRAMApp), "ramSys": len(teleHistRAMSys), "temp": len(teleHistTemp), "disk": len(teleHistDisk)} {
+		if n != 2 {
+			t.Fatalf("history slice %s drifted: len %d", name, n)
+		}
 	}
 	if teleHistCPU[0] != 20 {
 		t.Fatalf("expected cross-core average 20, got %v", teleHistCPU[0])
@@ -541,8 +543,10 @@ func TestTelemetryHistAppendCap(t *testing.T) {
 	for i := 0; i < teleHistN+10; i++ {
 		appendTelemetryHist()
 	}
-	if len(teleHistT) != teleHistN || len(teleHistCPU) != teleHistN || len(teleHistRAMApp) != teleHistN || len(teleHistRAMSys) != teleHistN || len(teleHistCores) != teleHistN {
-		t.Fatalf("expected cap %d on all slices, got %d %d %d %d %d", teleHistN, len(teleHistT), len(teleHistCPU), len(teleHistRAMApp), len(teleHistRAMSys), len(teleHistCores))
+	for name, n := range map[string]int{"t": len(teleHistT), "cpu": len(teleHistCPU), "cores": len(teleHistCores), "ramApp": len(teleHistRAMApp), "ramSys": len(teleHistRAMSys), "temp": len(teleHistTemp), "disk": len(teleHistDisk)} {
+		if n != teleHistN {
+			t.Fatalf("expected cap %d on slice %s, got %d", teleHistN, name, n)
+		}
 	}
 	for i := 1; i < len(teleHistT); i++ {
 		if teleHistT[i] < teleHistT[i-1] {
@@ -553,13 +557,13 @@ func TestTelemetryHistAppendCap(t *testing.T) {
 
 func TestAPITelemetry(t *testing.T) {
 	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
-	origT, origCPU, origApp, origSys, origCores := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores
+	origT, origCPU, origApp, origSys, origCores, origTemp, origDisk := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores, teleHistTemp, teleHistDisk
 	remoteToken = "TESTTOKEN2"
 	loginLimit = newLoginLimiter()
 	sessions = newSessionStore()
 	t.Cleanup(func() {
 		remoteToken, loginLimit, sessions = origToken, origLimiter, origSessions
-		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores = origT, origCPU, origApp, origSys, origCores
+		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores, teleHistTemp, teleHistDisk = origT, origCPU, origApp, origSys, origCores, origTemp, origDisk
 	})
 
 	mux := newRemoteMux()
@@ -584,6 +588,8 @@ func TestAPITelemetry(t *testing.T) {
 	teleHistCores = [][]float64{{5, 15}, {10, 30}, {15, 45}}
 	teleHistRAMApp = []float64{40, 41, 42}
 	teleHistRAMSys = []float64{1000, 1001, 1002}
+	teleHistTemp = []float64{50, 51, 52}
+	teleHistDisk = []float64{60, 61, 62}
 
 	req = httptest.NewRequest("GET", "/api/telemetry", nil)
 	req.AddCookie(sessionCookie)
@@ -596,7 +602,7 @@ func TestAPITelemetry(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&v); err != nil {
 		t.Fatalf("telemetry not JSON: %v", err)
 	}
-	if len(v.T) != 3 || len(v.CPU) != 3 || len(v.RAMApp) != 3 || len(v.RAMSys) != 3 || len(v.Cores) != 3 {
+	if len(v.T) != 3 || len(v.CPU) != 3 || len(v.RAMApp) != 3 || len(v.RAMSys) != 3 || len(v.Cores) != 3 || len(v.Temp) != 3 || len(v.Disk) != 3 {
 		t.Fatalf("parallel arrays must match: %+v", v)
 	}
 	if v.T[0] != 1000 || v.CPU[2] != 30 || v.RAMApp[1] != 41 || v.RAMSys[2] != 1002 {
@@ -604,6 +610,88 @@ func TestAPITelemetry(t *testing.T) {
 	}
 	if len(v.Cores[2]) != 2 || v.Cores[2][0] != 15 || v.Cores[2][1] != 45 {
 		t.Fatalf("per-core rows wrong: %+v", v.Cores)
+	}
+}
+
+func TestDisplaySeqBumpsOnFrameChange(t *testing.T) {
+	initTestHardware(t)
+	origSeq, origHash := displaySeq, displayLastHash
+	t.Cleanup(func() { displaySeq, displayLastHash = origSeq, origHash })
+
+	mutex.Lock()
+	hwManager.ClearDisplay()
+	noteDisplayFrame()
+	afterClear := displaySeq
+	noteDisplayFrame() // identical frame: no bump
+	if displaySeq != afterClear {
+		t.Fatalf("identical frames must not bump displaySeq")
+	}
+	hwManager.DrawText(0, 10, "changed")
+	noteDisplayFrame()
+	mutex.Unlock()
+	if displaySeq != afterClear+1 {
+		t.Fatalf("changed frame must bump displaySeq once")
+	}
+}
+
+func TestTelemetryWSRoundtrip(t *testing.T) {
+	origT, origCPU := teleHistT, teleHistCPU
+	origHub := teleWSHub
+	teleWSHub = map[*websocket.Conn]bool{}
+	t.Cleanup(func() {
+		teleHistT, teleHistCPU = origT, origCPU
+		teleWSMu.Lock()
+		teleWSHub = origHub
+		teleWSMu.Unlock()
+	})
+	teleHistT = []int64{2000, 2002}
+	teleHistCPU = []float64{11, 22}
+
+	srv := httptest.NewServer(websocket.Handler(handleWSTelemetry))
+	defer srv.Close()
+	ws, err := websocket.Dial("ws://"+strings.TrimPrefix(srv.URL, "http://")+"/", "", "http://localhost/")
+	if err != nil {
+		t.Fatalf("dial telemetry WS: %v", err)
+	}
+	defer ws.Close()
+	ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	// Connect snapshot: status HTML first, history JSON second.
+	var statusMsg, histMsg teleWSMessage
+	if err := websocket.JSON.Receive(ws, &statusMsg); err != nil {
+		t.Fatalf("status message: %v", err)
+	}
+	if err := websocket.JSON.Receive(ws, &histMsg); err != nil {
+		t.Fatalf("history message: %v", err)
+	}
+	if statusMsg.Target != "#status" || !strings.Contains(statusMsg.Content, "sys-readout") {
+		t.Fatalf("bad status message target/content: %+v", statusMsg)
+	}
+	if histMsg.Target != "#teleHist" {
+		t.Fatalf("bad history message target: %+v", histMsg)
+	}
+	var h telemetryHistView
+	if err := json.Unmarshal([]byte(histMsg.Content), &h); err != nil {
+		t.Fatalf("history content not JSON: %v", err)
+	}
+	if len(h.T) != 2 || h.CPU[1] != 22 {
+		t.Fatalf("history values wrong: %+v", h)
+	}
+
+	// Closing the client unregisters it from the hub.
+	ws.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		teleWSMu.Lock()
+		n := len(teleWSHub)
+		teleWSMu.Unlock()
+		if n == 0 || time.Now().After(deadline) {
+			if n != 0 {
+				t.Fatalf("closed connection still in hub")
+			}
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

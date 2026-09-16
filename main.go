@@ -733,10 +733,12 @@ var (
 	peakHeldSetAt          []time.Time
 	bootTime               time.Time // set at startup, used by uptime readout
 	cpuPct                 []float64 // latest per-core usage % (cpuUsageLoop)
-	vuRangeIdx             = 3       // index into vuRangeOptions; -90dBFS default
-	peakHoldIdx            = 4       // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
-	transportMode          = "icon"  // web dashboard transport buttons: "icon" or "text" labels - persisted, see PersistedConfig
-	monitoring             bool      // input-monitor ffmpeg reading the Inferno FIFO for levels only, no recording - see startMonitor
+	displaySeq             uint64    // bumped when the panel framebuffer changes (see render); the WebUI mirror reloads on change, not on poll
+	displayLastHash        uint64
+	vuRangeIdx             = 3      // index into vuRangeOptions; -90dBFS default
+	peakHoldIdx            = 4      // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
+	transportMode          = "icon" // web dashboard transport buttons: "icon" or "text" labels - persisted, see PersistedConfig
+	monitoring             bool     // input-monitor ffmpeg reading the Inferno FIFO for levels only, no recording - see startMonitor
 	monitorCmd             *exec.Cmd
 	monitorDone            chan struct{}
 	monitoringOutput       bool          // playback's output-monitoring mode: the input monitor is stood down while a track plays (see startPlayback); UI shows "monitoring output" - no real output tap, so audio latency is untouched
@@ -856,6 +858,7 @@ func main() {
 	go peakHoldLoop()
 	go cpuUsageLoop()
 	go telemetryHistLoop()
+	go telemetryWSLoop()
 	go mdnsLoop()
 
 	// Bring the WiFi access point to the persisted startup state (OFF unless
@@ -2880,6 +2883,17 @@ func render() {
 	}
 
 	hwManager.UpdateDisplay()
+	noteDisplayFrame()
+}
+
+// noteDisplayFrame bumps displaySeq when the panel framebuffer differs from
+// the last render, so the WebUI mirror reloads on change instead of polling.
+// Must be called under the app mutex (render does).
+func noteDisplayFrame() {
+	if h := hwManager.FrameHash(); h != displayLastHash {
+		displayLastHash = h
+		displaySeq++
+	}
 }
 
 func renderStatusBar() {
@@ -4422,6 +4436,7 @@ const teleHistStep = 2 * time.Second
 
 var teleHistT []int64
 var teleHistCPU, teleHistRAMApp, teleHistRAMSys []float64
+var teleHistTemp, teleHistDisk []float64
 
 // teleHistCores mirrors teleHistT row-for-row: one per-core snapshot each.
 // Empty cpuPct repeats the previous row so columns never go ragged.
@@ -4440,6 +4455,12 @@ func appendTelemetryHist() {
 		avg /= float64(len(cpuPct))
 	}
 	sysUsed, _ := systemRAM()
+	temp, _ := readCPUTemp()
+	diskFree := -1.0
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(RecordPath, &stat); err == nil {
+		diskFree = float64(stat.Bavail*uint64(stat.Bsize)) / 1e9
+	}
 	row := append([]float64(nil), cpuPct...)
 	if len(row) == 0 && len(teleHistCores) > 0 {
 		row = append([]float64(nil), teleHistCores[len(teleHistCores)-1]...)
@@ -4449,6 +4470,8 @@ func appendTelemetryHist() {
 	teleHistCPU = append(teleHistCPU, avg)
 	teleHistRAMApp = append(teleHistRAMApp, ramMB(os.Getpid(), "VmRSS"))
 	teleHistRAMSys = append(teleHistRAMSys, sysUsed)
+	teleHistTemp = append(teleHistTemp, temp)
+	teleHistDisk = append(teleHistDisk, diskFree)
 	if len(teleHistT) > teleHistN {
 		cut := len(teleHistT) - teleHistN
 		teleHistT = append([]int64(nil), teleHistT[cut:]...)
@@ -4456,6 +4479,8 @@ func appendTelemetryHist() {
 		teleHistRAMApp = append([]float64(nil), teleHistRAMApp[cut:]...)
 		teleHistRAMSys = append([]float64(nil), teleHistRAMSys[cut:]...)
 		teleHistCores = append([][]float64(nil), teleHistCores[cut:]...)
+		teleHistTemp = append([]float64(nil), teleHistTemp[cut:]...)
+		teleHistDisk = append([]float64(nil), teleHistDisk[cut:]...)
 	}
 }
 

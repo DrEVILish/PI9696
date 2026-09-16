@@ -493,3 +493,12 @@ func (fcm *FiraCodeManager) UpdateDisplay() error {
 	}
 	return fmt.Errorf("display not initialized")
 }
+
+// FrameHash passes through to the panel buffer checksum (see TTFDisplay);
+// 0 when uninitialized so callers can distinguish "no display".
+func (fcm *FiraCodeManager) FrameHash() uint64 {
+	if fcm.display != nil {
+		return fcm.display.FrameHash()
+	}
+	return 0
+}
