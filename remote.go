@@ -1058,6 +1058,18 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .icon-btn svg{width:clamp(14px,1.8vw,18px);height:clamp(14px,1.8vw,18px);stroke:var(--glow)}
 .icon-btn:hover{border-color:var(--orange)}
 .icon-btn:hover svg{stroke:var(--orange)}
+/* Conn lamp: broadcast-pin showing the telemetry socket state - glow blue
+   while the server pushes, error red while disconnected. A span, not a
+   button: no pointer affordance, and no hover recolor (it must never read
+   as a control). The bi-broadcast-pin glyph is a fill path, so it takes
+   color rather than stroke. */
+.icon-btn.conn{cursor:default}
+.icon-btn.conn:hover{border-color:var(--border)}
+.icon-btn.conn svg{stroke:none}
+.icon-btn.conn.on{color:var(--glow)}
+.icon-btn.conn.on svg{fill:var(--glow);filter:drop-shadow(0 0 3px rgba(0,217,255,0.8))}
+.icon-btn.conn.off{color:var(--rec)}
+.icon-btn.conn.off svg{fill:var(--rec)}
 /* Download ALL: a small labeled action in the Recordings heading - text,
    not just an icon, so its function reads at a glance. */
 .dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:#08192b;border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal}
@@ -1279,7 +1291,7 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
 .sys-readout{margin-top:.5em;font-size:.72em;color:var(--dim)}
-.sys-readout summary{cursor:pointer;color:var(--glow);letter-spacing:.08em;font-weight:bold}
+.sys-readout p{margin:.25em 0}
 .sys-graphs{margin-top:.6em}
 .sys-graphs h3{font-size:.68em;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin:.7em 0 .2em}
 .sys-graphs .uplot{width:100%}
@@ -1340,6 +1352,9 @@ body.meters-collapsed{padding-bottom:4em}
   </div>
   <div class="transport-row" id="transportRow"></div>
   <div class="header-actions">
+    <span class="icon-btn conn off" id="connLamp" title="Server disconnected">
+      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.05 3.05a7 7 0 0 0 0 9.9.5.5 0 0 1-.707.707 8 8 0 0 1 0-11.314.5.5 0 0 1 .707.707m2.122 2.122a4 4 0 0 0 0 5.656.5.5 0 1 1-.708.708 5 5 0 0 1 0-7.072.5.5 0 0 1 .708.708m5.656-.708a.5.5 0 0 1 .708 0 5 5 0 0 1 0 7.072.5.5 0 1 1-.708-.708 4 4 0 0 0 0-5.656.5.5 0 0 1 0-.708m2.122-2.12a.5.5 0 0 1 .707 0 8 8 0 0 1 0 11.313.5.5 0 0 1-.707-.707 7 7 0 0 0 0-9.9.5.5 0 0 1 0-.707zM6 8a2 2 0 1 1 2.5 1.937V15.5a.5.5 0 0 1-1 0V9.937A2 2 0 0 1 6 8"/></svg>
+    </span>
     <button class="icon-btn" id="settingsBtn" type="button" title="Settings">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     </button>
@@ -1455,12 +1470,18 @@ body.meters-collapsed{padding-bottom:4em}
         <path class="deck-corner" d="M806 251 V235 H790"/>
       </svg>
     </div>
-    <div id="status" hx-get="/api/status" hx-trigger="load, every 2s" hx-swap="innerHTML">Loading...</div>
+    <div id="status">Loading...</div>
+    <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#status" hx-swap="innerHTML" hidden></div>
     <div class="sys-graphs">
       <h3>CPU %</h3>
       <div id="cpuChart"><span class="sys-wait">collecting&hellip;</span></div>
       <h3>RAM MB</h3>
       <div id="ramChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <h3>Temp &deg;C</h3>
+      <div id="tempChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <h3>Disk free GB</h3>
+      <div id="diskChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <pre id="teleHist" hidden></pre>
     </div>
   </div>
 
@@ -1595,15 +1616,10 @@ body.meters-collapsed{padding-bottom:4em}
 </div>
 
 <script>
-// Vanilla JS, not htmx: htmx swaps HTML fragments, and refreshing an <img>
-// is just "give it a new src" - a cache-busting query param on a plain
-// interval is simpler than contorting hx-swap to do the same thing.
-// 500ms rather than 300ms: EncodePNG now serves a supersampled 1024x256
-// frame (see webRenderScale in display_ttf.go) instead of a 256x64 one, and
-// this poll shares eth0 with Inferno's audio-over-IP traffic.
-setInterval(function() {
-  document.getElementById('oled').src = '/api/display.png?t=' + Date.now();
-}, 500);
+// The OLED mirror reloads on framebuffer generation change (see
+// displaySeq in the meter payload), not on a blind interval - static
+// screens cost zero image fetches, and this shares eth0 with Inferno's
+// audio-over-IP traffic.
 
 var settingsBtn = document.getElementById('settingsBtn');
 var settingsModal = document.getElementById('settingsModal');
@@ -1873,6 +1889,12 @@ function applyMeter(m) {
   FLOOR = m.floorDB;
   rebuildDbScale(m.floorDB);
 
+  // OLED mirror: reload only when the panel framebuffer actually changed.
+  if (m.displaySeq !== oledSeq) {
+    oledSeq = m.displaySeq;
+    document.getElementById('oled').src = '/api/display.png?t=' + Date.now();
+  }
+
   var paused = !!m.paused;
   // Reels and the tape-path pulse stop moving while paused (frozen transport)
   // but the head display still shows the frozen elapsed time rather than
@@ -1945,20 +1967,29 @@ function pollMeterFallback() {
   fetch('/api/meter').then(function(r) { return r.json(); }).then(applyMeter).catch(function() {});
   setTimeout(pollMeterFallback, 1000);
 }
-// System graphs: uPlot CPU/RAM history fed by /api/telemetry (2s cadence,
-// 150 samples = 5min). The containers live outside the htmx-swapped #status
-// so polls never destroy the chart instances; charts appear once 2+ samples
-// exist. Missing uPlot file degrades to the collecting placeholder.
-var teleCPU = null, teleRAM = null;
+// System graphs: uPlot history driven by the hx-ws telemetry socket (see
+// #teleSock), not by polling - the server pushes a status swap plus a
+// history JSON swap every 2s, and applyTeleHist redraws from the swap.
+// Charts appear once 2+ samples exist. Missing uPlot file degrades to the
+// collecting placeholder.
+var teleCPU = null, teleRAM = null, teleTemp = null, teleDisk = null;
 var telePalette = ['#00d9ff', '#2bffb0', '#ff8c1a', '#ff3355', '#5b8aa8', '#cfeeff'];
-function teleOpts(extraSeries, ymin, ymax) {
+// uPlot's built-in time axis is 12h + am/pm; the unit standard is 24h.
+function teleTimeValues(self, ticks) {
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  return ticks.map(function(t) {
+    var d = new Date(t * 1000);
+    return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  });
+}
+function teleOpts(extraSeries, ymin, ymax, h) {
   var o = {
-    width: 300, height: 90,
+    width: 300, height: h || 90,
     series: [{}].concat(extraSeries),
     cursor: {show: false},
     legend: {show: true},
     axes: [
-      {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}},
+      {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}, values: teleTimeValues},
       {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}}
     ]
   };
@@ -1969,50 +2000,90 @@ function teleWidth(el) {
   var w = el.clientWidth || 300;
   return w > 0 ? w : 300;
 }
+function teleSize(chart, el, h) {
+  if (chart) chart.setSize({width: teleWidth(el), height: h});
+}
 function initTeleCharts(ncores) {
   var cpuEl = document.getElementById('cpuChart');
   var ramEl = document.getElementById('ramChart');
-  if (!cpuEl || !ramEl) return false;
-  cpuEl.innerHTML = ''; ramEl.innerHTML = '';
+  var tempEl = document.getElementById('tempChart');
+  var diskEl = document.getElementById('diskChart');
+  if (!cpuEl || !ramEl || !tempEl || !diskEl) return false;
+  cpuEl.innerHTML = ''; ramEl.innerHTML = ''; tempEl.innerHTML = ''; diskEl.innerHTML = '';
   var cpuSeries = [];
   for (var i = 0; i < ncores; i++) {
     cpuSeries.push({label: 'CPU' + i, stroke: telePalette[i % telePalette.length], width: 1.5});
   }
   var dummy = [[0, 1]];
   for (var i = 0; i < ncores; i++) dummy.push([0, 0]);
-  teleCPU = new uPlot(teleOpts(cpuSeries, 0, 100), dummy, cpuEl);
+  teleCPU = new uPlot(teleOpts(cpuSeries, 0, 100, 90), dummy, cpuEl);
   teleRAM = new uPlot(teleOpts([
     {label: 'App MB', stroke: '#00d9ff', width: 1.5, fill: 'rgba(0,217,255,0.10)'},
     {label: 'Sys MB', stroke: '#ff8c1a', width: 1.5}
-  ], null, null), [[0, 1], [0, 0], [0, 0]], ramEl);
-  teleCPU.setSize({width: teleWidth(cpuEl), height: 90});
-  teleRAM.setSize({width: teleWidth(ramEl), height: 90});
+  ], null, null, 90), [[0, 1], [0, 0], [0, 0]], ramEl);
+  teleTemp = new uPlot(teleOpts([{label: 'Temp C', stroke: '#ff8c1a', width: 1.5}], null, null, 56), [[0, 1], [0, 0]], tempEl);
+  teleDisk = new uPlot(teleOpts([{label: 'Free GB', stroke: '#2bffb0', width: 1.5}], 0, null, 56), [[0, 1], [0, 0]], diskEl);
+  teleSize(teleCPU, cpuEl, 90); teleSize(teleRAM, ramEl, 90);
+  teleSize(teleTemp, tempEl, 56); teleSize(teleDisk, diskEl, 56);
   window.addEventListener('resize', function() {
-    if (teleCPU) teleCPU.setSize({width: teleWidth(cpuEl), height: 90});
-    if (teleRAM) teleRAM.setSize({width: teleWidth(ramEl), height: 90});
+    teleSize(teleCPU, cpuEl, 90); teleSize(teleRAM, ramEl, 90);
+    teleSize(teleTemp, tempEl, 56); teleSize(teleDisk, diskEl, 56);
   });
   return true;
 }
-function pollTelemetry() {
-  fetch('/api/telemetry').then(function(r) { return r.json(); }).then(function(h) {
-    if (!h || !h.t || h.t.length < 2) return;
-    var ncores = (h.cores && h.cores.length > 0 && h.cores[0]) ? h.cores[0].length : 0;
-    // Core count can only change across reboots; rebuild charts if it did.
-    if (!teleCPU && !initTeleCharts(ncores)) return;
-    if (teleCPU && teleCPU.series.length - 1 !== ncores) {
-      teleCPU = null; teleRAM = null;
-      if (!initTeleCharts(ncores)) return;
-    }
-    var cols = [h.t];
-    for (var i = 0; i < ncores; i++) {
-      cols.push(h.cores.map(function(row) { return (row && i < row.length) ? row[i] : null; }));
-    }
-    teleCPU.setData(cols);
-    teleRAM.setData([h.t, h.ramApp, h.ramSys]);
-  }).catch(function() {});
-  setTimeout(pollTelemetry, 2000);
+// Hidden tabs skip redraws (item: don't burn cycles on an unseen panel);
+// the latest payload is applied on return.
+var teleHidden = document.hidden, telePending = null;
+document.addEventListener('visibilitychange', function() {
+  teleHidden = document.hidden;
+  if (!teleHidden && telePending) { var h = telePending; telePending = null; applyTeleHist(h); }
+});
+function applyTeleHist(h) {
+  if (!window.uPlot || !h || !h.t || h.t.length < 2) return;
+  var ncores = (h.cores && h.cores.length > 0 && h.cores[0]) ? h.cores[0].length : 0;
+  // Core count can only change across reboots; rebuild charts if it did.
+  if (!teleCPU && !initTeleCharts(ncores)) return;
+  if (teleCPU && teleCPU.series.length - 1 !== ncores) {
+    teleCPU = null; teleRAM = null; teleTemp = null; teleDisk = null;
+    if (!initTeleCharts(ncores)) return;
+  }
+  var cols = [h.t];
+  for (var i = 0; i < ncores; i++) {
+    cols.push(h.cores.map(function(row) { return (row && i < row.length) ? row[i] : null; }));
+  }
+  teleCPU.setData(cols);
+  teleRAM.setData([h.t, h.ramApp, h.ramSys]);
+  if (h.temp) teleTemp.setData([h.t, h.temp]);
+  if (h.disk) teleDisk.setData([h.t, h.disk]);
 }
-if (window.uPlot) pollTelemetry();
+document.body.addEventListener('htmx:after:swap', function(e) {
+  if (e.detail && e.detail.target && e.detail.target.id === 'teleHist') {
+    var raw = e.detail.target.textContent;
+    if (teleHidden) { telePending = raw; return; }
+    try { applyTeleHist(JSON.parse(raw)); } catch (err) {}
+  }
+});
+// Conn lamp: blue while the telemetry socket pushes, error red while the
+// server is unreachable. hx-ws fires on the socket element; listen there
+// and on document in case the bundle retargets.
+function setConnLamp(on) {
+  var lamp = document.getElementById('connLamp');
+  if (!lamp) return;
+  lamp.classList.toggle('on', !!on);
+  lamp.classList.toggle('off', !on);
+  lamp.title = on ? 'Server connected' : 'Server disconnected';
+}
+function watchConnLamp(el) {
+  if (!el || !el.addEventListener) return;
+  el.addEventListener('htmx:ws:after:connection', function() { setConnLamp(true); });
+  el.addEventListener('htmx:ws:close', function() { setConnLamp(false); });
+  el.addEventListener('htmx:ws:error', function() { setConnLamp(false); });
+}
+watchConnLamp(document);
+watchConnLamp(document.getElementById('teleSock'));
+// OLED mirror reloads on framebuffer generation change (see displaySeq),
+// not on a blind interval.
+var oledSeq = -1;
 connectMeterSocket();
 </script>
 </body></html>`))
@@ -2222,11 +2293,11 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 <button hx-post="/api/monitor/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Monitor Input</button>
 {{if not .InfernoUp}}<p>(Inferno not running &mdash; build with <code>setup.sh</code> and restart)</p>{{end}}
 {{end}}
-<details class="sys-readout"><summary>System</summary>
+<div class="sys-readout">
 <p>Uptime {{.Uptime}} &middot; v{{.AppVersion}}</p>
 <p>Temp {{if ge .CPUTemp 0.0}}{{printf "%.0f" .CPUTemp}}&deg;{{else}}&mdash;{{end}}</p>
 <p>Disk /rec: {{printf "%.0f" .DiskTotal}}GB / {{printf "%.0f" .DiskFree}}GB free &middot; record: {{.RecordTime}}</p>
-</details>`))
+</div>`))
 
 type statusView struct {
 	Recording   bool
@@ -2253,7 +2324,7 @@ type statusView struct {
 	RecordTime  string
 }
 
-func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
+func currentStatusView() statusView {
 	mutex.Lock()
 	v := statusView{
 		Recording:  isRecording,
@@ -2281,7 +2352,19 @@ func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 	v.Uptime, v.AppVersion, v.CPUPerCore = t.Uptime, t.AppVersion, t.CPUPerCore
 	v.RAMApp, v.RAMInferno, v.RAMSysUsed, v.RAMSysTotal = t.RAMApp, t.RAMInferno, t.RAMSysUsed, t.RAMSysTotal
 	v.CPUTemp, v.DiskTotal, v.DiskFree, v.RecordTime = t.CPUTemp, t.DiskTotal, t.DiskFree, t.RecordTime
-	statusTmpl.Execute(w, v)
+	return v
+}
+
+func renderStatusHTML() (string, error) {
+	var buf bytes.Buffer
+	if err := statusTmpl.Execute(&buf, currentStatusView()); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
+}
+
+func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
+	statusTmpl.Execute(w, currentStatusView())
 }
 
 // telemetryHistView is the dashboard graphs' feed: parallel arrays, newest
@@ -2292,20 +2375,108 @@ type telemetryHistView struct {
 	Cores  [][]float64 `json:"cores"`
 	RAMApp []float64   `json:"ramApp"`
 	RAMSys []float64   `json:"ramSys"`
+	Temp   []float64   `json:"temp"`
+	Disk   []float64   `json:"disk"`
 }
 
-func handleAPITelemetry(w http.ResponseWriter, r *http.Request) {
+func currentTelemetryHist() telemetryHistView {
 	mutex.Lock()
-	v := telemetryHistView{
+	defer mutex.Unlock()
+	return telemetryHistView{
 		T:      append([]int64(nil), teleHistT...),
 		CPU:    append([]float64(nil), teleHistCPU...),
 		Cores:  append([][]float64(nil), teleHistCores...),
 		RAMApp: append([]float64(nil), teleHistRAMApp...),
 		RAMSys: append([]float64(nil), teleHistRAMSys...),
+		Temp:   append([]float64(nil), teleHistTemp...),
+		Disk:   append([]float64(nil), teleHistDisk...),
 	}
-	mutex.Unlock()
+}
+
+func handleAPITelemetry(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(v)
+	json.NewEncoder(w).Encode(currentTelemetryHist())
+}
+
+// teleWSHub tracks dashboard telemetry sockets; guarded by teleWSMu (never
+// the app mutex - broadcast renders status HTML which takes it).
+var teleWSHub = map[*websocket.Conn]bool{}
+var teleWSMu sync.Mutex
+
+// teleWSMessage is the hx-ws wire shape: target selects the swap element,
+// content is HTML for #status or the history JSON for #teleHist.
+type teleWSMessage struct {
+	Target  string `json:"target"`
+	Content string `json:"content"`
+}
+
+func teleWSSend(ws *websocket.Conn, target, content string) bool {
+	if err := ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
+		return false
+	}
+	return websocket.JSON.Send(ws, teleWSMessage{Target: target, Content: content}) == nil
+}
+
+// buildTelemetryWSMessages renders one broadcast round: status HTML plus the
+// history JSON payload. Factored for tests (no socket needed).
+func buildTelemetryWSMessages() (status, hist string, err error) {
+	status, err = renderStatusHTML()
+	if err != nil {
+		return "", "", err
+	}
+	raw, err := json.Marshal(currentTelemetryHist())
+	if err != nil {
+		return "", "", err
+	}
+	return status, string(raw), nil
+}
+
+func broadcastTelemetry() {
+	status, hist, err := buildTelemetryWSMessages()
+	if err != nil {
+		return
+	}
+	teleWSMu.Lock()
+	defer teleWSMu.Unlock()
+	for ws := range teleWSHub {
+		if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
+			ws.Close()
+			delete(teleWSHub, ws)
+		}
+	}
+}
+
+func handleWSTelemetry(ws *websocket.Conn) {
+	teleWSMu.Lock()
+	teleWSHub[ws] = true
+	teleWSMu.Unlock()
+	defer func() {
+		teleWSMu.Lock()
+		delete(teleWSHub, ws)
+		teleWSMu.Unlock()
+		ws.Close()
+	}()
+	// Instant first paint so a fresh dashboard never waits a full tick.
+	if status, hist, err := buildTelemetryWSMessages(); err == nil {
+		if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
+			return
+		}
+	}
+	// Read to EOF purely to notice the client going away; frames are ignored.
+	var discard any
+	for {
+		if websocket.JSON.Receive(ws, &discard) != nil {
+			return
+		}
+	}
+}
+
+func telemetryWSLoop() {
+	ticker := time.NewTicker(teleHistStep)
+	defer ticker.Stop()
+	for range ticker.C {
+		broadcastTelemetry()
+	}
 }
 
 // handleAPIMeter is deliberately separate from handleAPIStatus: the VU
@@ -2331,6 +2502,9 @@ type meterResponse struct {
 	Elapsed    string         `json:"elapsed"`
 	Channels   []channelLevel `json:"channels"`
 	FloorDB    float64        `json:"floorDB"`
+	// DisplaySeq is the OLED framebuffer generation (see render) so the
+	// dashboard mirror reloads on change instead of polling blindly.
+	DisplaySeq uint64 `json:"displaySeq"`
 }
 
 // jsonSafeDB coerces a dB level to a JSON-encodable value. encoding/json will
@@ -2365,6 +2539,7 @@ func currentMeterResponse() meterResponse {
 		MonOutput:  monitoringOutput,
 		InfernoUp:  infernoState == InfernoRunning,
 		FloorDB:    vuRangeOptions[vuRangeIdx],
+		DisplaySeq: displaySeq,
 	}
 	// Always size the meter bank to the configured channel count. During
 	// recording, the peak/RMS arrays are exactly channelCount (startRecording
@@ -2697,6 +2872,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/telemetry", requireAuth(handleAPITelemetry))
 	mux.HandleFunc("GET /api/meter", requireAuth(handleAPIMeter))
 	mux.HandleFunc("GET /ws/meter", requireAuth(websocket.Handler(handleWSMeter).ServeHTTP))
+	mux.HandleFunc("GET /ws/telemetry", requireAuth(websocket.Handler(handleWSTelemetry).ServeHTTP))
 	mux.HandleFunc("GET /api/config", requireAuth(handleAPIConfig))
 	mux.HandleFunc("POST /api/device-name", requireAuth(handleAPIDeviceName))
 	mux.HandleFunc("POST /api/settings/vu-range", requireAuth(handleAPISettingsVURange))

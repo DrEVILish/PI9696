@@ -492,6 +492,19 @@ func (d *TTFDisplay) Update() error {
 	return d.writeData(d.buffer)
 }
 
+// FrameHash is an FNV-1a checksum of the packed panel buffer - a cheap
+// change signal so the WebUI mirror can reload on change instead of polling.
+// Same lock discipline as EncodePNG: callers hold the app mutex.
+func (d *TTFDisplay) FrameHash() uint64 {
+	const offset, prime = 14695981039346656037, 1099511628211
+	h := uint64(offset)
+	for _, b := range d.buffer {
+		h ^= uint64(b)
+		h *= prime
+	}
+	return h
+}
+
 // dumpSimFrame writes the current canvas out as a PNG so the rendered UI can
 // be inspected on a dev machine without a physical OLED attached.
 func (d *TTFDisplay) dumpSimFrame() error {

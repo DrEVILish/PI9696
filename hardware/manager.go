@@ -136,6 +136,15 @@ func (hm *HardwareManager) EncodePNG(w io.Writer) error {
 	return hm.FiraCode.EncodePNG(w)
 }
 
+// FrameHash passes through to the panel buffer checksum for change-driven
+// mirror refreshes; 0 when uninitialized.
+func (hm *HardwareManager) FrameHash() uint64 {
+	if hm != nil && hm.FiraCode != nil {
+		return hm.FiraCode.FrameHash()
+	}
+	return 0
+}
+
 func (hm *HardwareManager) DrawPlaybackStatus(elapsed, total string, progress float64, filename string, paused bool) error {
 	return hm.FiraCode.DrawPlaybackStatus(elapsed, total, progress, filename, paused)
 }
