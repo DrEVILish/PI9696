@@ -1283,7 +1283,9 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .sys-graphs{margin-top:.6em}
 .sys-graphs h3{font-size:.68em;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin:.7em 0 .2em}
 .sys-graphs .uplot{width:100%}
-.sys-graphs .u-legend{display:none}
+.sys-graphs .u-legend{font-size:.68em;color:var(--dim);background:transparent;border:none;padding-left:0}
+.sys-graphs .u-legend th{font-weight:normal}
+.sys-graphs .u-legend .u-value{color:var(--text)}
 .sys-wait{font-size:.72em;color:var(--dim)}
 
 /* Mobile: stack the three-column grid, let the fixed OLED frame shrink to
@@ -1948,12 +1950,13 @@ function pollMeterFallback() {
 // so polls never destroy the chart instances; charts appear once 2+ samples
 // exist. Missing uPlot file degrades to the collecting placeholder.
 var teleCPU = null, teleRAM = null;
+var telePalette = ['#00d9ff', '#2bffb0', '#ff8c1a', '#ff3355', '#5b8aa8', '#cfeeff'];
 function teleOpts(extraSeries, ymin, ymax) {
   var o = {
     width: 300, height: 90,
     series: [{}].concat(extraSeries),
     cursor: {show: false},
-    legend: {show: false},
+    legend: {show: true},
     axes: [
       {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}},
       {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}}
@@ -1966,12 +1969,18 @@ function teleWidth(el) {
   var w = el.clientWidth || 300;
   return w > 0 ? w : 300;
 }
-function initTeleCharts() {
+function initTeleCharts(ncores) {
   var cpuEl = document.getElementById('cpuChart');
   var ramEl = document.getElementById('ramChart');
   if (!cpuEl || !ramEl) return false;
   cpuEl.innerHTML = ''; ramEl.innerHTML = '';
-  teleCPU = new uPlot(teleOpts([{label: 'CPU %', stroke: '#00d9ff', width: 1.5, fill: 'rgba(0,217,255,0.12)'}], 0, 100), [[0, 1], [0, 0]], cpuEl);
+  var cpuSeries = [];
+  for (var i = 0; i < ncores; i++) {
+    cpuSeries.push({label: 'CPU' + i, stroke: telePalette[i % telePalette.length], width: 1.5});
+  }
+  var dummy = [[0, 1]];
+  for (var i = 0; i < ncores; i++) dummy.push([0, 0]);
+  teleCPU = new uPlot(teleOpts(cpuSeries, 0, 100), dummy, cpuEl);
   teleRAM = new uPlot(teleOpts([
     {label: 'App MB', stroke: '#00d9ff', width: 1.5, fill: 'rgba(0,217,255,0.10)'},
     {label: 'Sys MB', stroke: '#ff8c1a', width: 1.5}
@@ -1987,8 +1996,18 @@ function initTeleCharts() {
 function pollTelemetry() {
   fetch('/api/telemetry').then(function(r) { return r.json(); }).then(function(h) {
     if (!h || !h.t || h.t.length < 2) return;
-    if (!teleCPU && !initTeleCharts()) return;
-    teleCPU.setData([h.t, h.cpu]);
+    var ncores = (h.cores && h.cores.length > 0 && h.cores[0]) ? h.cores[0].length : 0;
+    // Core count can only change across reboots; rebuild charts if it did.
+    if (!teleCPU && !initTeleCharts(ncores)) return;
+    if (teleCPU && teleCPU.series.length - 1 !== ncores) {
+      teleCPU = null; teleRAM = null;
+      if (!initTeleCharts(ncores)) return;
+    }
+    var cols = [h.t];
+    for (var i = 0; i < ncores; i++) {
+      cols.push(h.cores.map(function(row) { return (row && i < row.length) ? row[i] : null; }));
+    }
+    teleCPU.setData(cols);
     teleRAM.setData([h.t, h.ramApp, h.ramSys]);
   }).catch(function() {});
   setTimeout(pollTelemetry, 2000);
@@ -2268,10 +2287,11 @@ func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
 // telemetryHistView is the dashboard graphs' feed: parallel arrays, newest
 // last, sampled every teleHistStep (see appendTelemetryHist).
 type telemetryHistView struct {
-	T      []int64   `json:"t"`
-	CPU    []float64 `json:"cpu"`
-	RAMApp []float64 `json:"ramApp"`
-	RAMSys []float64 `json:"ramSys"`
+	T      []int64     `json:"t"`
+	CPU    []float64   `json:"cpu"`
+	Cores  [][]float64 `json:"cores"`
+	RAMApp []float64   `json:"ramApp"`
+	RAMSys []float64   `json:"ramSys"`
 }
 
 func handleAPITelemetry(w http.ResponseWriter, r *http.Request) {
@@ -2279,6 +2299,7 @@ func handleAPITelemetry(w http.ResponseWriter, r *http.Request) {
 	v := telemetryHistView{
 		T:      append([]int64(nil), teleHistT...),
 		CPU:    append([]float64(nil), teleHistCPU...),
+		Cores:  append([][]float64(nil), teleHistCores...),
 		RAMApp: append([]float64(nil), teleHistRAMApp...),
 		RAMSys: append([]float64(nil), teleHistRAMSys...),
 	}

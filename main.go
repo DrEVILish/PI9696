@@ -4423,6 +4423,10 @@ const teleHistStep = 2 * time.Second
 var teleHistT []int64
 var teleHistCPU, teleHistRAMApp, teleHistRAMSys []float64
 
+// teleHistCores mirrors teleHistT row-for-row: one per-core snapshot each.
+// Empty cpuPct repeats the previous row so columns never go ragged.
+var teleHistCores [][]float64
+
 // appendTelemetryHist records one history sample; trims equally so the
 // parallel slices can never drift apart in length.
 func appendTelemetryHist() {
@@ -4436,6 +4440,11 @@ func appendTelemetryHist() {
 		avg /= float64(len(cpuPct))
 	}
 	sysUsed, _ := systemRAM()
+	row := append([]float64(nil), cpuPct...)
+	if len(row) == 0 && len(teleHistCores) > 0 {
+		row = append([]float64(nil), teleHistCores[len(teleHistCores)-1]...)
+	}
+	teleHistCores = append(teleHistCores, row)
 	teleHistT = append(teleHistT, time.Now().Unix())
 	teleHistCPU = append(teleHistCPU, avg)
 	teleHistRAMApp = append(teleHistRAMApp, ramMB(os.Getpid(), "VmRSS"))
@@ -4446,6 +4455,7 @@ func appendTelemetryHist() {
 		teleHistCPU = append([]float64(nil), teleHistCPU[cut:]...)
 		teleHistRAMApp = append([]float64(nil), teleHistRAMApp[cut:]...)
 		teleHistRAMSys = append([]float64(nil), teleHistRAMSys[cut:]...)
+		teleHistCores = append([][]float64(nil), teleHistCores[cut:]...)
 	}
 }
 
