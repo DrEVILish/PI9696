@@ -2,7 +2,7 @@
 
 Implementation status, product decisions, and feature history. For specs/usage → `README.md`; for hardware → `WIRING.md`.
 
-**Version:** 1.19.0 · **Status:** feature-complete per Round 3 design; deployment blocked on hardware bring-up.
+**Version:** 1.20.0 · **Status:** feature-complete per Round 3 design; deployment blocked on hardware bring-up.
 
 ---
 
@@ -15,7 +15,7 @@ Implementation status, product decisions, and feature history. For specs/usage �
 | Recording | Inferno → FIFO → ffmpeg → 24-bit WAV in `/rec/YYYY-MM-DD/`, with start-time naming, tag presets, low-disk gating (30-min rule), fsync, mid-take auto-stop (<1 min) |
 | Playback | Most recent take to local ALSA; click=pause, rotate=seek, hold=exit; progress bar + elapsed/total |
 | OLED | Full menu system, status bar `[ETH] [INF] [USB]`, VU (12/page + `n/T` indicator)/waveform/info pages, access-QR on network page, brightness + auto-dim + menu timeout back to Standby |
-| WebUI | Live OLED mirror, on-screen encoder/buttons, settings modal, VU meters (100 ms WebSocket), recordings browser + Download-ALL ZIP + manifest, telemetry panel (uptime, per-core CPU, RAM, temp, disk), token pre-fill via `?t=` |
+| WebUI | Live OLED mirror (reloads on framebuffer change), on-screen encoder/buttons, settings modal, VU meters (100 ms WebSocket), telemetry over hx-ws push (status + CPU/RAM/temp/disk graphs, 24h clock) with conn lamp, recordings browser + Download-ALL ZIP + manifest, token pre-fill via `?t=` |
 | Auth | Token → session (12 h), rate-limited login, constant-time compare |
 | Files | Copy/delete/format USB; config export/import (non-secret JSON) |
 | Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log |
@@ -156,6 +156,10 @@ Implementation status, product decisions, and feature history. For specs/usage �
 ---
 
 ## Feature History
+
+### 1.20.x
+
+- **1.20.0** — Telemetry over hx-ws push (status + history swaps every 2s, no polling; System dropdown removed); broadcast-pin conn lamp (blue/red); OLED mirror reloads on framebuffer generation change; 24h graph clocks; temp/disk sparklines; hidden-tab redraw pause
 
 ### 1.19.x
 
