@@ -1750,11 +1750,21 @@ func enqueueInferno(cmd infernoCommand) {
 
 // stopInfernoAndWait enqueues a stop and blocks until it completes. Used
 // only during shutdown, where cleanup must actually finish before the
-// process exits.
+// process exits. Both the send and the wait are bounded: a worker stuck in
+// TERM->KILL must not hang shutdown forever.
 func stopInfernoAndWait() {
 	done := make(chan struct{})
-	infernoReqCh <- infernoRequest{cmd: infernoCmdStop, done: done}
-	<-done
+	select {
+	case infernoReqCh <- infernoRequest{cmd: infernoCmdStop, done: done}:
+	case <-time.After(5 * time.Second):
+		logWarnf("Shutdown: inferno worker unresponsive, skipping stop")
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		logWarnf("Shutdown: inferno stop timed out, continuing")
+	}
 }
 
 func infernoWorker() {
