@@ -1324,6 +1324,12 @@ func adjustChannelCount(direction int) {
 	// WAV supports the full 1-MaxChannelCount range - no per-format ceiling
 	// to fall back over.
 
+	// Page count depends on channel count: clamp the browse cursor so it
+	// can't point past the last page after a shrink.
+	if total := idleVUPageCount() + 2; idleBrowsePage >= total {
+		idleBrowsePage = total - 1
+	}
+
 	// Check if we need to restart Inferno server
 	checkInfernoRestart()
 	settingChanged()
