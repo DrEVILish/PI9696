@@ -85,8 +85,10 @@ func formatToken(t string) string {
 
 // normalizeToken strips whatever separator a user typed between the two
 // groups, so "K7M2 QX9F", "K7M2-QX9F", and "K7M2QX9F" all compare equal.
+// Uppercased first: the alphabet is uppercase-only, so a lowercase direct
+// POST (curl, QR ?t= URL) must not 401.
 func normalizeToken(s string) string {
-	return strings.NewReplacer(" ", "", "-", "").Replace(s)
+	return strings.NewReplacer(" ", "", "-", "").Replace(strings.ToUpper(s))
 }
 
 const remoteSessionCookie = "pi9696_session"
