@@ -2862,6 +2862,12 @@ func seekPlayback(direction int) {
 	if playbackCmd == nil || playbackCmd.Process == nil || playbackFile == "" {
 		return
 	}
+	// Unknown duration (foreign filename): the demo end-timer can't arm and
+	// the upper clamp is meaningless - refuse rather than hang till manual
+	// stop.
+	if playbackDuration <= 0 {
+		return
+	}
 
 	const seekStep = 5 * time.Second
 	pos := playbackPosition() + time.Duration(direction)*seekStep
