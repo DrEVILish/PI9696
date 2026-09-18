@@ -1466,7 +1466,7 @@ body.meters-collapsed{padding-bottom:4em}
 
 <header class="deck">
   <div class="deck-logo">{{.Logo}}</div>
-  <div class="oled-frame"><img id="oled" src="/api/display.png" alt="OLED display"></div>
+  <div class="oled-frame"><img id="oled" src="/api/display.png" alt="OLED display" onerror="if(!this.dataset.r){this.dataset.r=1;location.reload()}"></div>
   <div class="encoder-row">
     <button hx-post="/api/input/encoder/left">&#9664;</button>
     <button class="click" hx-post="/api/input/encoder/click">&#9679;</button>
