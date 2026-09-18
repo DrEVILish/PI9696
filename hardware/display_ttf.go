@@ -7,7 +7,6 @@ import (
 	"image/draw"
 	"image/png"
 	"io"
-	"io/ioutil"
 	"os"
 	"time"
 
@@ -144,7 +143,7 @@ func NewTTFDisplay(fontPath string, fontSize float64) (*TTFDisplay, error) {
 
 func loadTTFFont(fontPath string, fontSize float64) (font.Face, error) {
 	// Read font file
-	fontBytes, err := ioutil.ReadFile(fontPath)
+	fontBytes, err := os.ReadFile(fontPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read font file: %v", err)
 	}

@@ -36,8 +36,13 @@ func main() {
 			src = "/tmp/pi9696_sim_frame.png"
 		}
 		dst := fmt.Sprintf("/tmp/pi9696_shots/%s.png", name)
-		data, _ := os.ReadFile(src)
-		os.WriteFile(dst, data, 0644)
+		data, err := os.ReadFile(src)
+		if err != nil {
+			log.Fatalf("read sim frame %s: %v", src, err)
+		}
+		if err := os.WriteFile(dst, data, 0644); err != nil {
+			log.Fatalf("write shot %s: %v", dst, err)
+		}
 		fmt.Println("wrote", dst)
 	}
 
