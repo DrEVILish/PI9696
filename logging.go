@@ -45,6 +45,11 @@ func init() {
 	setupLogs("")
 }
 
+// logFileSink is the open on-device log handle, if any. setupLogs replaces
+// the handler on every call - without closing the previous file that leaked
+// an fd per re-setup.
+var logFileSink *os.File
+
 // setupLogs installs the default slog logger (threshold default Error) over
 // stderr plus, when path is non-empty and openable, the on-device log file.
 // Replaces any previously installed handler, so it's safe to call once at
@@ -52,8 +57,13 @@ func init() {
 func setupLogs(path string) {
 	slogLevel.Set(slog.LevelError)
 	w := io.Writer(os.Stderr)
+	if logFileSink != nil {
+		logFileSink.Close()
+		logFileSink = nil
+	}
 	if path != "" {
 		if f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0640); err == nil {
+			logFileSink = f
 			w = io.MultiWriter(os.Stderr, f)
 		}
 	}
