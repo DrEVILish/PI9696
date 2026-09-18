@@ -966,6 +966,15 @@ func main() {
 	gracefulShutdown()
 }
 
+// waitDone waits for a reaping goroutine with a shutdown-bounded timeout.
+func waitDone(done <-chan struct{}, what string) {
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		logWarnf("Shutdown: %s did not exit in time, continuing", what)
+	}
+}
+
 func gracefulShutdown() {
 	mutex.Lock()
 	recording := isRecording
@@ -992,15 +1001,17 @@ func gracefulShutdown() {
 	// Wait for the owning goroutines (see startRecording/startPlayback/
 	// startMonitor) to actually reap their processes before the app exits,
 	// so ffmpeg isn't orphaned and the recording's WAV header gets
-	// finalized.
+	// finalized. Bounded: a stuck ffmpeg used to hang shutdown forever until
+	// systemd SIGKILLed mid-WAV-header; now we log and move on (systemd's
+	// cgroup cleanup reaps the orphan).
 	if recDone != nil {
-		<-recDone
+		waitDone(recDone, "recording")
 	}
 	if playDone != nil {
-		<-playDone
+		waitDone(playDone, "playback")
 	}
 	if monDone != nil {
-		<-monDone
+		waitDone(monDone, "monitor")
 	}
 
 	// Stop the demo generator first so nothing is still writing the FIFO
