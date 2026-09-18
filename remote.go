@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/subtle"
+	"embed"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -3080,6 +3081,21 @@ func writeRecordingZip(dst io.Writer, base string, files []string) error {
 	return nil
 }
 
+//go:embed web/htmax.min.js web/uPlot.iife.min.js web/uPlot.min.css
+var embeddedWeb embed.FS
+
+// serveEmbeddedStatic serves a pinned vendored asset with immutable caching.
+func serveEmbeddedStatic(w http.ResponseWriter, r *http.Request, path, contentType string) {
+	data, err := embeddedWeb.ReadFile(path)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Write(data)
+}
+
 func newRemoteMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /manifest.json", handleManifest)
@@ -3130,18 +3146,18 @@ func newRemoteMux() *http.ServeMux {
 	// htmax.min.js (htmx 4.0 plus its bundled extensions) is vendored at
 	// install time (pinned to 4.0.0) rather than referencing an
 	// external CDN at runtime - this device shouldn't depend on internet
-	// access, only its own LAN, to serve its control page. A dedicated
-	// single-file handler (not http.FileServer mounted on the web/ dir) so
-	// this never exposes directory listing for anything else that might land
-	// in that directory.
+	// access, only its own LAN, to serve its control page. Embedded so the
+	// page works no matter what directory the binary runs from (the old
+	// relative web/ path 404d everything outside the service's
+	// WorkingDirectory); immutable cache headers since the bytes are pinned.
 	mux.HandleFunc("GET /static/htmax.min.js", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, filepath.Join("web", "htmax.min.js"))
+		serveEmbeddedStatic(w, r, "web/htmax.min.js", "text/javascript")
 	})
 	mux.HandleFunc("GET /static/uPlot.iife.min.js", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, filepath.Join("web", "uPlot.iife.min.js"))
+		serveEmbeddedStatic(w, r, "web/uPlot.iife.min.js", "text/javascript")
 	})
 	mux.HandleFunc("GET /static/uPlot.min.css", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, filepath.Join("web", "uPlot.min.css"))
+		serveEmbeddedStatic(w, r, "web/uPlot.min.css", "text/css")
 	})
 
 	return mux
