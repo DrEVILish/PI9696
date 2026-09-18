@@ -2903,8 +2903,11 @@ func restartPlaybackAt(pos time.Duration) {
 			if currentState == StatePlaying || currentState == StatePaused {
 				currentState = StateIdle
 			}
+			// Only the current generation resumes the monitor: a stale
+			// reaper from a pre-seek process must not stand the monitor
+			// back up while the new playback is running.
+			maybeResumeInputMonitorLocked()
 		}
-		maybeResumeInputMonitorLocked()
 		mutex.Unlock()
 		close(done)
 	}()
