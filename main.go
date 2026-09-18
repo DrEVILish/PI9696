@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -37,10 +38,10 @@ const (
 	meterSilence        = -100.0 // dB sentinel shown/reported when no recording is active
 )
 
-// InfernoBinary is the prebuilt Inferno server executable, produced once by
-// setup.sh (`cargo build --release`) rather than compiled at runtime. It's
+// InfernoBinary is the prebuilt Inferno server executable, produced once at
+// install time (`cargo build --release`) rather than compiled at runtime. It's
 // relative to the app's working directory (the systemd unit runs the app from
-// its project dir). See the inferno template README in setup.sh for the CLI
+// its project dir). See the inferno template README for the CLI
 // contract it implements.
 const InfernoBinary = "inferno/target/release/inferno"
 
@@ -121,11 +122,17 @@ func loadPersistedConfig() {
 	data, err := os.ReadFile(ConfigPath)
 	if err != nil {
 		logDebugf("No persisted config at %s (%v) - using defaults", ConfigPath, err)
+		if isSimMode() {
+			applyLogLevel(LogDebug)
+		}
 		return
 	}
 	var c PersistedConfig
 	if err := json.Unmarshal(data, &c); err != nil {
 		logErrorf("Corrupt config at %s (%v) - using defaults", ConfigPath, err)
+		if isSimMode() {
+			applyLogLevel(LogDebug)
+		}
 		return
 	}
 
@@ -165,6 +172,7 @@ func loadPersistedConfig() {
 	if c.MenuTimeoutIdx >= 0 && c.MenuTimeoutIdx < len(menuTimeoutOptions) {
 		menuTimeoutIdx = c.MenuTimeoutIdx
 	}
+	demoMode = c.DemoMode
 
 	wifiEnabled = c.WifiEnabled
 	wifiSSID = c.WifiSSID
@@ -191,6 +199,7 @@ func persistConfig() {
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
 		MenuTimeoutIdx:    menuTimeoutIdx,
+		DemoMode:          demoMode,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
 		WifiPassword:      wifiPassword,
@@ -255,6 +264,7 @@ func exportConfigTo(dir string) error {
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
 		MenuTimeoutIdx:    menuTimeoutIdx,
+		DemoMode:          demoMode,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
 		// WifiPassword deliberately omitted - it's a credential.
@@ -362,6 +372,20 @@ func showSysNotice(msg string) {
 	sysNoticeUntil = time.Now().Add(4 * time.Second)
 }
 
+// lastLoginPage is when the WebUI login page was last served (see
+// handleLoginGet): while fresh, the idle screen shows the access token so
+// the operator can read it straight off the panel. Guarded by the app mutex.
+var lastLoginPage time.Time
+
+// loginTokenShowFor is how long the idle screen keeps showing the token
+// after the login page was opened - long enough to walk over and read it,
+// short enough the token isn't parked on the panel indefinitely.
+const loginTokenShowFor = 2 * time.Minute
+
+func loginTokenFreshLocked() bool {
+	return time.Since(lastLoginPage) < loginTokenShowFor
+}
+
 // applyAutoDimLocked advances the display's dim/off state to whatever the
 // idle time dictates, applying a brightness transition only when the stage
 // changes (SPI writes on every 100ms render are pointless churn). Must be
@@ -428,7 +452,7 @@ func noteActivity() {
 // call it from a goroutine - applying the change can block on systemctl for a
 // moment, which must never run under the UI mutex.
 //
-// WiFi is OFF by default: nothing in setup.sh enables it, and wifiEnabled
+// WiFi is OFF by default: nothing enables it at install time, and wifiEnabled
 // starts false unless the operator persisted an explicit on. wifiSSID (the AP
 // name) defaults to the device name; the password is user-set via the web UI.
 func applyWifiConfig(ssid, pass string, enabled bool) {
@@ -513,13 +537,13 @@ func renderWifiQRScreen() {
 	if label == "" {
 		label = deviceName
 	}
-	hwManager.DrawText(4, 30, "SSID "+label)
-	hwManager.DrawText(4, 42, "Pass "+wifiPassword)
+	hwManager.DrawText(4, 30, fitText("SSID "+label, 190))
+	hwManager.DrawText(4, 42, fitText("Pass "+wifiPassword, 190))
 
-	// QR module bitmap compact: 1px modules, border disabled so the
-	// OLED black surround serves as quiet zone.
+	// QR access code, doubled to 2px modules where it fits (see
+	// drawQRBitmapFit); the OLED black surround serves as quiet zone.
 	bmp := qrBitmap(wifiQRContent())
-	drawQRBitmap(bmp, DisplayWidth-29, 17, 1)
+	drawQRBitmapFit(bmp)
 }
 
 // qrBitmap returns a QR-code bitmap for content with the quiet-zone
@@ -549,6 +573,32 @@ func drawQRBitmap(bmp [][]bool, x0, y0, modulePx int) {
 			}
 		}
 	}
+}
+
+// drawQRBitmapFit renders a QR bitmap right-aligned at 2px modules when
+// that fits the 64px panel height, else 1px, vertically centered - short
+// payloads get a big code and long ones still fit. QR screens skip the
+// status bar (see render) so a 2px code has the full height.
+func drawQRBitmapFit(bmp [][]bool) {
+	if bmp == nil {
+		return
+	}
+	n := len(bmp)
+	modulePx := 2
+	if n*modulePx > DisplayHeight {
+		modulePx = 1
+	}
+	size := n * modulePx
+	drawQRBitmap(bmp, DisplayWidth-size, (DisplayHeight-size)/2, modulePx)
+}
+
+// fitText truncates s so it renders within maxPx in the current font
+// context - keeps SSID/password/network lines clear of the QR code.
+func fitText(s string, maxPx int) string {
+	for len(s) > 0 && hwManager.GetTextWidth(s) > maxPx {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // sanitizeHostapd strips characters hostapd (or its parsing) would treat
@@ -813,6 +863,12 @@ type PersistedConfig struct {
 	// config without the field decodes to 0, which preserves the
 	// pre-feature behavior (menus never timed out).
 	MenuTimeoutIdx int `json:"menuTimeoutIdx"`
+	// DemoMode fakes the whole input chain for demonstrations (see
+	// setDemoMode): a synthesized PCM source feeds the Inferno FIFO path so
+	// monitoring/recording/VU pages behave exactly as with a live stream.
+	// Plain bool: absent in old configs decodes to false (off), the only
+	// safe default.
+	DemoMode bool `json:"demoMode"`
 
 	WifiEnabled  bool   `json:"wifiEnabled"`
 	WifiSSID     string `json:"wifiSSID"`
@@ -860,6 +916,16 @@ func main() {
 	go telemetryHistLoop()
 	go telemetryWSLoop()
 	go mdnsLoop()
+
+	// A persisted demo mode starts its generator (and the always-on input
+	// monitor over it) at boot, exactly like doStartInferno does for a real
+	// server - the network loop never fires for it.
+	if demoMode {
+		mutex.Lock()
+		syncDemoGeneratorLocked()
+		maybeResumeInputMonitorLocked()
+		mutex.Unlock()
+	}
 
 	// Bring the WiFi access point to the persisted startup state (OFF unless
 	// explicitly enabled+startup-armed), once the network is up enough to
@@ -936,6 +1002,12 @@ func gracefulShutdown() {
 	if monDone != nil {
 		<-monDone
 	}
+
+	// Stop the demo generator first so nothing is still writing the FIFO
+	// while the recording/monitor ffmpeg processes below are reaped.
+	mutex.Lock()
+	stopDemoGeneratorLocked()
+	mutex.Unlock()
 
 	stopInfernoAndWait()
 	hwManager.Close()
@@ -1348,7 +1420,7 @@ func navigateMenu(direction int) {
 
 	switch currentState {
 	case StateSettings:
-		maxItems = 11 // Audio, Metering, Display, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, WiFi, Exit
+		maxItems = 12 // Audio, Metering, Display, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, Monitoring, WiFi, Exit
 	case StateAudio:
 		maxItems = 5 // Sample Rate, Channel Count, Tag, Prefix, Back
 	case StateMetering:
@@ -1360,7 +1432,7 @@ func navigateMenu(direction int) {
 	case StateCopyFiles:
 		maxItems = len(allFiles) + 3 // Start Copy, [All], [NONE], files...
 	case StateSystemOptions:
-		maxItems = 7 // Delete All, Format USB, Export Config, Import Config, Shutdown, Restart, Exit
+		maxItems = 8 // Delete All, Format USB, Export Config, Import Config, Shutdown, Restart, Demo Mode, Exit
 	case StateWifi:
 		maxItems = 3 // Enable AP, Show QR, Back
 	}
@@ -1423,11 +1495,19 @@ func handleSettingsClick() {
 		menuMode = InfernoRestartConfirm
 		currentState = StateConfirm
 		confirmOption = ConfirmNo
-	case 9: // WiFi submenu (enable/disable + QR)
+	case 9: // Monitoring: immediate toggle like the WiFi AP row
+		if monitoring {
+			autoMonitor = false
+			stopMonitor()
+		} else {
+			autoMonitor = true
+			startMonitor()
+		}
+	case 10: // WiFi submenu (enable/disable + QR)
 		currentState = StateWifi
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 10: // Exit
+	case 11: // Exit
 		currentState = StateIdle
 		menuScrollOffset = 0
 	}
@@ -1557,7 +1637,9 @@ func handleSystemOptionsClick() {
 		menuMode = RestartConfirm
 		currentState = StateConfirm
 		confirmOption = ConfirmNo
-	case 6: // Exit
+	case 6: // Demo Mode: immediate toggle like the WiFi AP row, no confirm
+		setDemoModeLocked(!demoMode)
+	case 7: // Exit
 		currentState = StateSettings
 		selectedMenu = 0
 		menuScrollOffset = 0
@@ -1729,8 +1811,9 @@ func networkMonitorLoop() {
 		networkUp := hwManager.IsNetworkAvailable()
 
 		if networkUp && !networkWasUp {
-			// Network just came up, start Inferno if not running
-			if infernoState != InfernoRunning {
+			// Network just came up, start Inferno if not running (never in
+			// demo mode - the generator already owns the input chain)
+			if infernoState != InfernoRunning && !demoMode {
 				logInfof("Network available, starting Inferno server")
 				enqueueInferno(infernoCmdStart)
 			}
@@ -1752,9 +1835,193 @@ func networkMonitorLoop() {
 // a buffered channel, so this stays fast.
 func checkInfernoRestart() {
 	currentSampleRate := sampleRates[sampleRateIdx]
+	if demoMode {
+		// The demo generator re-reads settings per chunk, so there is
+		// nothing to restart - and must be no worker traffic either.
+		return
+	}
 	if (currentSampleRate != lastSampleRate || channelCount != lastChannelCount) && infernoState == InfernoRunning {
 		logInfof("Settings changed, restarting Inferno server")
 		enqueueInferno(infernoCmdRestart)
+	}
+}
+
+// Demo mode fakes the whole input chain for investor demonstrations: a
+// synthesized PCM source feeds a FIFO on the same path the Inferno server
+// would, so monitoring, recording, VU pages and the deck behave exactly as
+// with a live stream - and playback runs against a timer instead of ALSA.
+// It deliberately never touches infernoCmd/fifoPath/infernoState (those stay
+// infernoWorker-owned); everything downstream keys off infernoUp() and
+// audioFifoPath() instead, which is why enabling demo needs no Inferno
+// binary, no network and no audio hardware.
+var demoMode bool
+var demoFifoPath string
+var demoGenQuit chan struct{}
+var demoGenRunning bool
+
+// infernoUp reports whether audio is flowing, real or simulated. Every
+// "can we monitor/record/show link" gate routes through here; callers hold
+// the app mutex like they did for the raw infernoState comparison.
+func infernoUp() bool {
+	return infernoState == InfernoRunning || demoMode
+}
+
+// audioFifoPath is the FIFO ffmpeg readers (monitor, record) open: the demo
+// FIFO while demo mode owns the input chain, else the Inferno one. Callers
+// hold the app mutex.
+func audioFifoPath() string {
+	if demoMode && demoFifoPath != "" {
+		return demoFifoPath
+	}
+	return fifoPath
+}
+
+// syncDemoGeneratorLocked makes the generator match the flag: start it when
+// demo just turned on (or died unexpectedly - render() calls this every
+// tick), stop it when demo turned off. Fast-gated so the steady state is
+// two bool checks; callers hold the app mutex.
+func syncDemoGeneratorLocked() {
+	if demoMode && !demoGenRunning {
+		startDemoGeneratorLocked()
+	} else if !demoMode && demoGenRunning {
+		stopDemoGeneratorLocked()
+	}
+}
+
+func demoFifoName() string {
+	// Nanosecond stamp: two generations started within the same second
+	// (toggle off/on, or a test right after another) must never share a
+	// path, or the exiting generator's deferred remove deletes the live
+	// FIFO out from under its successor.
+	return filepath.Join(RawPath, fmt.Sprintf("demo_%d.raw", time.Now().UnixNano()))
+}
+
+func startDemoGeneratorLocked() {
+	os.MkdirAll(RawPath, 0755)
+	path := demoFifoName()
+	os.Remove(path)
+	if err := syscall.Mkfifo(path, 0666); err != nil {
+		logErrorf("demo: failed to create FIFO %s: %v", path, err)
+		return
+	}
+	demoFifoPath = path
+	quit := make(chan struct{})
+	demoGenQuit = quit
+	demoGenRunning = true
+	go demoGenLoop(path, quit)
+	logInfof("demo: generator started on %s", path)
+}
+
+// stopDemoGeneratorLocked signals the generator and forgets it (same
+// fire-and-forget discipline as stopMonitor/stopRecording): the loop exits
+// within one chunk, closes its fds and removes its own FIFO file.
+func stopDemoGeneratorLocked() {
+	if demoGenQuit != nil {
+		close(demoGenQuit)
+		demoGenQuit = nil
+	}
+	demoGenRunning = false
+	demoFifoPath = ""
+}
+
+// setDemoModeLocked flips demo mode from the OLED/WebUI toggles: syncs the
+// generator and persists. Callers hold the app mutex.
+func setDemoModeLocked(on bool) {
+	demoMode = on
+	syncDemoGeneratorLocked()
+	settingChanged()
+	logInfof("demo: mode %v", map[bool]string{true: "ON (simulated audio)", false: "off"}[on])
+}
+
+// demoGenLoop synthesizes s32le PCM into the demo FIFO: per-channel sine
+// stacks with independent slow tremolos plus a whisper of noise, so every
+// meter dances on its own and astats reports genuinely varying levels (not
+// canned dB numbers). Settings are re-read per chunk so rate/channel changes
+// apply to new readers.
+//
+// I/O uses raw syscalls, not os.File: Go's runtime parks os.File writes in
+// its poller instead of returning EAGAIN, which would wedge the loop with no
+// reader draining and ignore quit forever. Raw O_NONBLOCK writes give true
+// EAGAIN so every iteration stays responsive to quit.
+func demoGenLoop(path string, quit <-chan struct{}) {
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		logErrorf("demo: failed to open FIFO %s: %v", path, err)
+		mutex.Lock()
+		demoGenRunning = false
+		if demoFifoPath == path {
+			demoFifoPath = ""
+		}
+		mutex.Unlock()
+		return
+	}
+	defer syscall.Close(fd)
+	defer os.Remove(path)
+
+	const chunkFrames = 2048
+	var t float64
+	var lcg uint64 = 0x12345678
+	for {
+		select {
+		case <-quit:
+			return
+		default:
+		}
+		mutex.Lock()
+		sr := sampleRates[sampleRateIdx]
+		ch := channelCount
+		mutex.Unlock()
+		if ch < 1 {
+			ch = 1
+		}
+		if ch > MaxChannelCount {
+			ch = MaxChannelCount
+		}
+		buf := make([]byte, chunkFrames*ch*4)
+		for i := 0; i < chunkFrames; i++ {
+			tt := t + float64(i)/float64(sr)
+			for c := 0; c < ch; c++ {
+				cf := float64(c + 1)
+				lfo := 0.55 + 0.45*math.Sin(2*math.Pi*0.13*cf*tt+float64(c)*1.7)
+				lfo2 := 0.6 + 0.4*math.Sin(2*math.Pi*0.07*(cf+1)*tt)
+				lcg = lcg*6364136223846793005 + 1442695040888963407
+				noise := (float64(lcg>>33)/float64(1<<31) - 1) * 0.05
+				s := 0.42*math.Sin(2*math.Pi*110*cf*tt)*lfo +
+					0.21*math.Sin(2*math.Pi*220*cf*1.007*tt)*lfo2 + noise
+				if s > 1 {
+					s = 1
+				} else if s < -1 {
+					s = -1
+				}
+				binary.LittleEndian.PutUint32(buf[(i*ch+c)*4:], uint32(int32(s*2147483647)))
+			}
+		}
+		t += float64(chunkFrames) / float64(sr)
+		for off := 0; off < len(buf); {
+			select {
+			case <-quit:
+				return
+			default:
+			}
+			n, err := syscall.Write(fd, buf[off:])
+			if err != nil {
+				if err == syscall.EAGAIN {
+					time.Sleep(10 * time.Millisecond)
+					continue
+				}
+				// Unexpected (reader tore the FIFO down around us): mark
+				// not-running so the render-tick sync restarts us.
+				mutex.Lock()
+				demoGenRunning = false
+				mutex.Unlock()
+				return
+			}
+			if n == 0 {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			off += n
+		}
 	}
 }
 
@@ -1766,6 +2033,12 @@ func checkInfernoRestart() {
 func doStartInferno() {
 	mutex.Lock()
 	if infernoState == InfernoRunning || infernoState == InfernoStarting {
+		mutex.Unlock()
+		return
+	}
+	if demoMode {
+		// The demo generator already owns the input chain; never start a
+		// real server underneath it.
 		mutex.Unlock()
 		return
 	}
@@ -1796,13 +2069,13 @@ func doStartInferno() {
 		return
 	}
 
-	// The Inferno server is built once during installation (setup.sh runs
-	// `cargo build --release`), so at runtime we start the prebuilt binary
+	// The Inferno server is built once during installation
+	// (`cargo build --release`), so at runtime we start the prebuilt binary
 	// directly instead of invoking cargo - starting cargo at runtime made
 	// every restart spend the compile/link time again and, worse, blocked on
 	// cargo run while the (absent during build) FIFO was unavailable, which
 	// is what the recording-start guard in infernoWorker is about. See the
-	// inferno template README (setup.sh writes it) for the CLI contract this
+	// inferno template README (written at install time) for the CLI contract this
 	// binary has to satisfy: -c <channels> -o <output_fifo> and
 	// INFERNO_SAMPLE_RATE/INFERNO_NAME env vars.
 	//
@@ -1816,7 +2089,7 @@ func doStartInferno() {
 	// for command injection even with shell metacharacters in the name.
 	binary := InfernoBinary
 	if _, err := os.Stat(binary); err != nil {
-		logErrorf("Cannot start Inferno server: built binary %s not found (%v) - run setup.sh to build it", binary, err)
+		logErrorf("Cannot start Inferno server: built binary %s not found (%v) - build the Inferno binary first", binary, err)
 		mutex.Lock()
 		infernoState = InfernoFailed
 		mutex.Unlock()
@@ -1915,11 +2188,11 @@ func restartInfernoServer() {
 // systemOp and systemOpCh serialize the slow, destructive system operations
 // (USB format, shutdown, restart) onto a dedicated worker instead of running
 // them under the UI mutex. formatUSB in particular blocks for the length of a
-// mkfs.vfat plus a settle sleep - running that under the app mutex froze
+// mkfs plus a settle sleep - running that under the app mutex froze
 // render()/input the same way pre-worker Inferno stop/start used to (that
 // freeze is exactly what infernoWorker was added to eliminate). The sudo
-// calls also need a worker: on a real Pi NOPASSWD sudo is configured by
-// setup.sh, but if it isn't, sudo blocks on a password prompt with no TTY -
+// calls also need a worker: on a real Pi NOPASSWD sudo is configured at
+// install time, but if it isn't, sudo blocks on a password prompt with no TTY -
 // which must never hang the UI-facing mutex.
 type systemOp int
 
@@ -1955,7 +2228,7 @@ func systemOpWorker() {
 }
 
 func startRecording() {
-	if infernoState != InfernoRunning {
+	if !infernoUp() {
 		logErrorf("Cannot start recording: Inferno server not running")
 		return
 	}
@@ -1969,6 +2242,13 @@ func startRecording() {
 	// than building a fully synchronous handoff.
 	if monitoring {
 		stopMonitor()
+		// Claim monitor ownership synchronously: the old ffmpeg exits
+		// asynchronously, and its reaping goroutine clears the meter
+		// slices when monitorCmd still points at it - which would wipe
+		// the fresh take's slices allocated below and leave the whole
+		// take meterless. Disowning first makes that check fail.
+		monitorCmd = nil
+		monitoring = false
 	}
 
 	recordStart = time.Now()
@@ -1994,7 +2274,7 @@ func startRecording() {
 		"-nostdin",
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRate),
 		"-ac", fmt.Sprintf("%d", channelCount),
-		"-i", fifoPath,
+		"-i", audioFifoPath(),
 	}
 	// Only output format is WAV (PCM 24-bit) - see OutputBitsPerSample.
 	args = append(args, "-c:a", "pcm_s24le")
@@ -2198,14 +2478,14 @@ func stopRecording() {
 // levels beforehand. Mutually exclusive with an actual recording: see
 // startRecording's comment on why a FIFO can't have two real readers.
 func startMonitor() {
-	if infernoState != InfernoRunning || isRecording || monitoring {
+	if !infernoUp() || isRecording || monitoring {
 		return
 	}
 
 	cmd := exec.Command("ffmpeg", "-nostdin",
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRates[sampleRateIdx]),
 		"-ac", fmt.Sprintf("%d", channelCount),
-		"-i", fifoPath,
+		"-i", audioFifoPath(),
 		"-af", "astats=metadata=1:reset=1,ametadata=print:file=-",
 		"-f", "null", "-")
 
@@ -2334,14 +2614,18 @@ func startPlayback() {
 	// playback output is the source. This is purely a metering-mode flip -
 	// it touches only the input-monitor ffmpeg, never the ALSA playback
 	// process, so it can't degrade output responsiveness.
-	if monitoring {
+	//
+	// In demo mode there is no ALSA output to show, so the input monitor
+	// stays up instead: its live demo-synth levels stand in for output
+	// levels and the deck/VU pages keep dancing through the take.
+	if monitoring && !demoMode {
 		stopMonitor()
 	}
 	autoMonitor = false
 	monitoringOutput = true
 	playbackPausedElapsed = 0
 
-	cmd := exec.Command("ffmpeg", "-nostdin", "-i", file, "-f", "alsa", "default")
+	cmd := playbackCmdFor(file, 0)
 	if err := cmd.Start(); err != nil {
 		logErrorf("Failed to start playback: %v", err)
 		monitoringOutput = false
@@ -2354,6 +2638,7 @@ func startPlayback() {
 	currentState = StatePlaying
 	done := make(chan struct{})
 	playbackDone = done
+	armDemoPlaybackEnd(cmd, playbackDuration, done)
 
 	// cmd.Wait must only ever be called once, and this goroutine is its sole
 	// owner - whether playback finishes naturally (EOF) or is interrupted by
@@ -2378,7 +2663,49 @@ func startPlayback() {
 	}()
 }
 
-// pausePlayback freezes the playing ffmpeg in place with SIGSTOP (the whole
+// playbackCmdFor builds the playback subprocess: real ffmpeg to ALSA, or in
+// demo mode a sleep stand-in with the same signal semantics (SIGSTOP pauses,
+// SIGCONT resumes, SIGTERM ends, Wait reaps) so pause/resume/seek/stop all
+// work unmodified and only the sound itself is faked.
+func playbackCmdFor(file string, pos time.Duration) *exec.Cmd {
+	if demoMode {
+		return exec.Command("sleep", "86400")
+	}
+	if pos > 0 {
+		return exec.Command("ffmpeg", "-nostdin", "-ss", fmt.Sprintf("%.3f", pos.Seconds()), "-i", file, "-f", "alsa", "default")
+	}
+	return exec.Command("ffmpeg", "-nostdin", "-i", file, "-f", "alsa", "default")
+}
+
+// armDemoPlaybackEnd ends a simulated take when its duration elapses: a real
+// ffmpeg exits at EOF on its own, but the sleep stand-in never does. No-op
+// for real playback and for unknown (zero) durations. The done channel (closed
+// by the reaping goroutine) retires stale timers across seeks/stops.
+func armDemoPlaybackEnd(cmd *exec.Cmd, total time.Duration, done <-chan struct{}) {
+	if !demoMode || total <= 0 {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(total)
+		defer timer.Stop()
+		select {
+		case <-done:
+			return
+		case <-timer.C:
+			mutex.Lock()
+			cur := playbackCmd
+			mutex.Unlock()
+			if cur == cmd && cmd.Process != nil {
+				// SIGCONT first: a paused stand-in is SIGSTOP'd and would
+				// defer the TERM forever (same trap stopPlayback handles).
+				if err := cmd.Process.Signal(syscall.SIGCONT); err == nil {
+					_ = cmd.Process.Signal(syscall.SIGTERM)
+				}
+			}
+		}
+	}()
+}
+
 // process stops: no output, no position advance) and flips the UI into the
 // paused state. It doesn't reap the process - the goroutine started by
 // startPlayback remains the sole owner of cmd.Wait().
@@ -2419,7 +2746,7 @@ func maybeResumeInputMonitorLocked() {
 	if currentState != StateIdle && currentState != StateIdleBrowse {
 		return
 	}
-	if infernoState != InfernoRunning {
+	if !infernoUp() {
 		return
 	}
 	startMonitor()
@@ -2521,7 +2848,7 @@ func restartPlaybackAt(pos time.Duration) {
 		playbackCmd.Process.Signal(syscall.SIGCONT)
 	}
 
-	cmd := exec.Command("ffmpeg", "-nostdin", "-ss", fmt.Sprintf("%.3f", pos.Seconds()), "-i", playbackFile, "-f", "alsa", "default")
+	cmd := playbackCmdFor(playbackFile, pos)
 	if err := cmd.Start(); err != nil {
 		logErrorf("Failed to seek playback: %v", err)
 		return
@@ -2539,6 +2866,7 @@ func restartPlaybackAt(pos time.Duration) {
 
 	done := make(chan struct{})
 	playbackDone = done
+	armDemoPlaybackEnd(cmd, playbackDuration-pos, done)
 	go func() {
 		cmd.Wait()
 		mutex.Lock()
@@ -2679,17 +3007,23 @@ func formatUSB() {
 		return
 	}
 
-	// umount, then wipe and create a FAT32 filesystem. If NOPASSWD sudo is
-	// configured (setup.sh does this), these run unattended; otherwise the
-	// password prompt would block - hence this running on systemOpWorker, not
-	// the UI mutex.
+	// umount, then wipe and create a filesystem: exFAT first (no 4GB file
+	// ceiling, which matters at high channel counts), FAT32 fallback when
+	// exfatprogs isn't installed. If NOPASSWD sudo is configured (done at
+	// install time), these run unattended; otherwise the password prompt
+	// would block - hence this running on systemOpWorker, not the UI mutex.
 	if out, err := exec.Command("sudo", "umount", USBMountPoint).CombinedOutput(); err != nil {
 		logErrorf("format USB: umount failed: %v: %s", err, out)
 		return
 	}
-	if out, err := exec.Command("sudo", "mkfs.vfat", "-F", "32", device).CombinedOutput(); err != nil {
-		logErrorf("format USB: mkfs failed: %v: %s", err, out)
-		return
+	formatted := "exFAT"
+	if out, err := exec.Command("sudo", "mkfs.exfat", device).CombinedOutput(); err != nil {
+		logWarnf("format USB: mkfs.exfat failed (%v: %s) - falling back to FAT32", err, out)
+		if out, err := exec.Command("sudo", "mkfs.vfat", "-F", "32", device).CombinedOutput(); err != nil {
+			logErrorf("format USB: mkfs failed: %v: %s", err, out)
+			return
+		}
+		formatted = "FAT32"
 	}
 	time.Sleep(2 * time.Second)
 
@@ -2705,7 +3039,7 @@ func formatUSB() {
 		logErrorf("format USB: remount failed: %v: %s", err, out)
 		return
 	}
-	logInfof("USB drive formatted (FAT32) and remounted")
+	logInfof("USB drive formatted (%s) and remounted", formatted)
 }
 
 // usbDevicePath looks up the block device currently mounted at USBMountPoint.
@@ -2825,6 +3159,10 @@ func render() {
 	// same lock, same idle clock as auto-dim above.
 	applyMenuTimeoutLocked(time.Now())
 
+	// Keep the demo generator matching the flag (self-heals a generator
+	// that died unexpectedly); steady state is two bool checks.
+	syncDemoGeneratorLocked()
+
 	pushWaveformSample()
 
 	updateButtonLampsLocked()
@@ -2840,8 +3178,13 @@ func render() {
 
 	hwManager.ClearDisplay()
 
-	// Always render status bar first
-	renderStatusBar()
+	// QR screens (WiFi join code, idle network/token page) need the full
+	// 64px height for 2px QR modules, so the status bar steps aside there.
+	qrScreen := currentState == StateWifiQR ||
+		(currentState == StateIdleBrowse && idleBrowsePage > idleVUPageCount())
+	if !qrScreen {
+		renderStatusBar()
+	}
 
 	switch currentState {
 	case StateIdle:
@@ -2912,7 +3255,7 @@ func renderStatusBar() {
 	}
 
 	// Use context-aware FiraCode rendering with Inferno status
-	infernoRunning := (infernoState == InfernoRunning)
+	infernoRunning := infernoUp()
 	hwManager.DrawStatusBarWithInferno(formatStr, rightSide, infernoRunning)
 }
 
@@ -2940,6 +3283,15 @@ func renderIdleScreen() {
 			hwManager.DrawCenteredText("LOW DISK <30m", "selected", 48)
 			hwManager.DrawCenteredText("cannot record", "details", 58)
 		}
+		return
+	}
+
+	// Someone just opened the WebUI login page (see handleLoginGet): show
+	// the access token on the panel so the operator can read it off without
+	// digging into Settings -> Remote Access. Must hold the app mutex.
+	if loginTokenFreshLocked() {
+		hwManager.DrawCenteredText("Web login token:", "details", 48)
+		hwManager.DrawCenteredText("Token: "+formatToken(remoteToken), "selected", 58)
 		return
 	}
 
@@ -3227,18 +3579,19 @@ func renderIdleVUPage(page int) {
 // after checking input levels here.
 func renderIdleInfoPage() {
 	details := hwManager.GetDetailedNetworkInfo()
+	hwManager.SwitchToContext("details")
 	y := 22
 	for i, d := range details {
 		if i >= 2 {
 			break
 		}
-		hwManager.DrawCenteredText(d, "details", y)
+		hwManager.DrawText(4, y, fitText(d, 190))
 		y += 10
 	}
 	ip := anyInterfaceIP()
 	if ip != "" {
 		bmp := qrBitmap("http://" + ip + ":" + remoteControlPort + "/?t=" + remoteToken)
-		drawQRBitmap(bmp, DisplayWidth-29, 17, 1)
+		drawQRBitmapFit(bmp)
 	} else {
 		hwManager.DrawCenteredText("Token: "+formatToken(remoteToken), "selected", y+4)
 	}
@@ -3326,6 +3679,7 @@ func renderSettingsMenu() {
 		{Label: "Network Info →", Value: ""},
 		{Label: "Remote Access →", Value: ""},
 		{Label: "Restart Inferno", Value: getInfernoStatusText()},
+		{Label: "Monitoring", Value: map[bool]string{true: "on", false: "off"}[monitoring]},
 		{Label: "WiFi →", Value: map[bool]string{true: "on", false: "off"}[wifiEnabled]},
 		{Label: "Exit", Value: ""},
 	}
@@ -4014,6 +4368,7 @@ func renderSystemOptionsMenu() { // No separate header - see renderSettingsMenu 
 		{Label: "Import Config", Value: ""},
 		{Label: "Shutdown System", Value: ""},
 		{Label: "Restart System", Value: ""},
+		{Label: "Demo Mode: " + map[bool]string{true: "On", false: "Off"}[demoMode], Value: ""},
 		{Label: "← Exit", Value: ""},
 	}
 
@@ -4257,7 +4612,7 @@ func getFreeSpace() uint64 {
 
 // ---- telemetry helpers ----
 
-const appVersion = "1.17.1"
+const appVersion = "1.20.0"
 
 type cpuStat struct{ total, idle int64 }
 

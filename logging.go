@@ -8,7 +8,7 @@
 //
 // Output is a best-effort dual sink: stderr (which the systemd service feeds
 // to journald) plus an optional on-device file appender opened by
-// openLogFileSink (setup.sh creates /var/log/pi9696; logrotate rotates it),
+// openLogFileSink (created at install time under /var/log/pi9696; logrotate rotates it),
 // so crash/early-boot messages survive independent of journald's retention.
 // If the file can't be opened (e.g. sim mode as a non-root dev user), logging
 // silently degrades to stderr/journald only.

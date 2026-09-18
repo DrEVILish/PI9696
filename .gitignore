@@ -27,12 +27,12 @@ go.work.sum
 # env file
 .env
 
-# FiraCode fonts - downloaded by setup.sh, not committed
+# FiraCode fonts - downloaded at install time, not committed
 fonts/
 
-# htmax.js (htmx + bundled extensions) - downloaded by setup.sh, not committed
+# htmax.js (htmx + bundled extensions) - downloaded at install time, not committed
 web/htmax.min.js
-# uPlot bundle + CSS (telemetry graphs) - downloaded by setup.sh, not committed
+# uPlot bundle + CSS (telemetry graphs) - downloaded at install time, not committed
 web/uPlot.iife.min.js
 web/uPlot.min.css
 

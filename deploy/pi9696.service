@@ -16,7 +16,7 @@ User=root
 Group=root
 # The app resolves the Inferno binary via a relative path
 # (inferno/target/release/inferno), so it must run from the project directory.
-# __PI9696_DIR__ is substituted with the actual install path by setup.sh.
+# __PI9696_DIR__ is substituted with the actual install path at install time.
 WorkingDirectory=__PI9696_DIR__
 ExecStart=__PI9696_DIR__/pi9696
 # Straightforward restart path after rebuilding: `systemctl restart pi9696`.

@@ -12,12 +12,7 @@ WAV to SD card, operated from a 256×64 OLED front panel or a token-auth web das
 ```bash
 # Build and run
 go build -o pi9696 . && sudo ./pi9696
-
-# Simulator mode (no hardware)
-PI9696_SIM=1 ./pi9696
 ```
-
-The sim prints a token to stderr; the web UI is on port 8080.
 
 ---
 
@@ -72,7 +67,6 @@ Playback path:
 
 **Key design decisions:**
 - Single Go process owns everything behind one app mutex
-- 100 ms render tick redraws the OLED; webUI + meters + hardware callbacks funnel through it
 - Inferno lifecycle is `infernoWorker`-owned (the only goroutine that mutates inferno state)
 - Recording starts only from idle, never over an active take
 - Playback and recording are mutually exclusive in both directions
@@ -83,7 +77,7 @@ Playback path:
 
 ### Recording
 
-- Manual start/stop (no scheduling — removed from the product design)
+- Manual start/stop
 - Start refused when <30 min space remains at the current rate
 - Take auto-stops when <1 min space remains (graceful finalize, LOW DISK warning)
 - Tag presets (Show/Rehearsal/Soundcheck/Interview/Backup/None) + filename prefix
@@ -91,10 +85,9 @@ Playback path:
 
 ### Playback
 
-- Plays the most recent take to local ALSA (pause/resume via SIGSTOP/SIGCONT preserves position without gaps)
+- Plays to Inferno ALSA (pause/resume via SIGSTOP/SIGCONT preserves position without gaps)
 - Encoder: click = play/pause, rotate while paused = 5 s scrub, hold = exit
 - Progress bar + elapsed/total with [PAUSED] marker
-- **Target:** route out through Inferno/AoIP (blocked on Inferno contract — Known Gaps #1)
 
 ### Level Metering
 
@@ -107,13 +100,13 @@ Playback path:
 
 - Copy selected/all takes to USB (per-day structure preserved)
 - Delete with confirmation
-- Format USB drive (FAT32)
+- Format USB drive (FAT32 or exFAT)
 - WebUI: per-file download + Download-ALL as streaming ZIP with manifest
 
 ### Button Lamps
 
 - REC (GPIO12): lit while recording
-- PLAY (GPIO16): solid while playing, 250 ms blink while paused
+- PLAY (GPIO16): solid while playing, 250ms pulse while paused
 - STOP: no lamp (nothing a user waits on)
 
 ### Config Export/Import
@@ -162,14 +155,14 @@ Fixed 256×64 layout with FiraCode TTF rendering in named contexts:
 ### Prerequisites
 
 - Raspberry Pi 5, Raspberry Pi OS 64-bit (Trixie or newer)
-- Go 1.26+ (build), Rust/Cargo (Inferno, built by `setup.sh`)
+- Go 1.26+ (build), Rust/Cargo (Inferno AoIP server)
 - Root access for GPIO/SPI/ALSA/USB mounting
 
 ### On the Pi
 
 ```bash
 git clone <repo> /opt/PI9696 && cd /opt/PI9696
-sudo bash setup.sh          # system prep, SPI enable, fonts, Inferno, systemd
+# system prep: enable SPI, install fonts, build inferno/, install systemd unit
 sudo systemctl start pi9696
 sudo systemctl status pi9696
 sudo journalctl -u pi9696 -f
@@ -186,14 +179,15 @@ Sim facts:
 - Every frame dumped to `/tmp/pi9696_sim_frame.png` (override: `PI9696_SIM_OUT`)
 - Token printed to stderr: `sim mode: remote access token XX XX XXXX`
 - Config path: `/tmp/pi9696-config.json` (vs `/etc/pi9696/config.json` on real Pi)
-- Recording requires `inferno/target/release/inferno` (built by `setup.sh`)
+- Recording requires `inferno/target/release/inferno` (build it with `cargo build --release` in `inferno/`)
 
 ### Rebuilding
 
 ```bash
-./restart-pi9696.sh          # rebuild + restart service
-./restart-pi9696.sh logs     # tail logs
-./restart-pi9696.sh status   # service status
+go build -o pi9696 .          # rebuild
+sudo systemctl restart pi9696 # restart service
+sudo journalctl -u pi9696 -f  # tail logs
+sudo systemctl status pi9696  # service status
 ```
 
 ---
@@ -263,12 +257,10 @@ remote.go          web server: auth, dashboard, settings, downloads, meter push
 logging.go         log/slog (stderr + app.log, default Error-only)
 hardware/          SSD1322 display, encoder, buttons, lamps, network detection
 cmd/simcheck/      renders OLED screens to PNG via PI9696_SIM
-inferno/           Inferno AoIP server (Rust) — built by setup.sh
+inferno/           Inferno AoIP server (Rust) — prebuilt with `cargo build --release`
 deploy/            systemd unit
-setup.sh           one-step install
-restart-pi9696.sh  rebuild + restart helper
 rec/               recordings (per-day folders), raw FIFO scratch
-fonts/             FiraCode TTFs (fetched by setup.sh)
+fonts/             FiraCode TTFs
 ```
 
 ---
