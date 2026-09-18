@@ -2466,6 +2466,9 @@ func sanitizeMeterDB(v float64) float64 {
 // (process exit) - no separate stop signal needed.
 func meterReader(stdout io.Reader) {
 	scanner := bufio.NewScanner(stdout)
+	// astats lines for 128ch takes exceed the 64KB default: one long line
+	// would silently kill meters for the whole take.
+	scanner.Buffer(make([]byte, 1<<20), 1<<20)
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
@@ -2499,6 +2502,9 @@ func meterReader(stdout io.Reader) {
 				mutex.Unlock()
 			}
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		logWarnf("meter reader ended: %v", err)
 	}
 }
 
