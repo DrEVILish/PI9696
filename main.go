@@ -1668,6 +1668,12 @@ func handleConfirmClick() {
 	if confirmOption == ConfirmYes {
 		switch menuMode {
 		case DeleteConfirm:
+			// Never delete under an active take/playback/copy: ffmpeg
+			// may be writing/reading the very files being removed.
+			if isRecording || playbackCmd != nil || isCopying {
+				showSysNotice("BUSY - STOP FIRST")
+				break
+			}
 			deleteAllRecordings()
 		case FormatConfirm:
 			enqueueSystemOp(opFormatUSB)
