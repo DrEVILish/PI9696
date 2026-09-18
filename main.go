@@ -2900,7 +2900,7 @@ func restartPlaybackAt(pos time.Duration) {
 		playbackPausedElapsed = pos
 		cmd.Process.Signal(syscall.SIGSTOP)
 	} else {
-		playbackStart = time.Now()
+		playbackStart = time.Now().Add(-pos)
 		playbackPausedElapsed = 0
 	}
 
