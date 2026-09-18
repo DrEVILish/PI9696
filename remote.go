@@ -1011,6 +1011,13 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, `<span class="err">Password must be at least 8 characters</span>`)
 			return
 		}
+		if len(ssid) > 32 {
+			mutex.Unlock()
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `<span class="err">SSID must be at most 32 characters</span>`)
+			return
+		}
 		wifiSSID = ssid
 		wifiPassword = pass
 	}
@@ -1025,7 +1032,7 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 	var qrBuf bytes.Buffer
 	var qrBase64 string
 	if enabled {
-		if code, err := qrcode.New(fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", ssid, pass), qrcode.Medium); err == nil {
+		if code, err := qrcode.New(fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", escapeWifiField(ssid), escapeWifiField(pass)), qrcode.Medium); err == nil {
 			png, _ := code.PNG(256)
 			qrBase64 = base64.StdEncoding.EncodeToString(png)
 		}

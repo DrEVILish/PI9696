@@ -514,7 +514,14 @@ func updateWifiCredentials(ssid, pass string) {
 func wifiQRContent() string {
 	// WIFI:T:<security>;S:<ssid>;P:<password>;; - the de-facto standard QR
 	// WiFi barcode format understood by iOS/Android camera apps.
-	return fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", wifiSSID, wifiPassword)
+	return fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", escapeWifiField(wifiSSID), escapeWifiField(wifiPassword))
+}
+
+// escapeWifiField escapes a WiFi QR text field per spec: \ ; , : " must be
+// backslash-escaped or the code won't scan.
+func escapeWifiField(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `;`, `\;`, `,`, `\,`, `:`, `\:`, `"`, `\"`)
+	return r.Replace(s)
 }
 
 // renderWifiQRScreen draws the WiFi join QR code plus the SSID/password text
