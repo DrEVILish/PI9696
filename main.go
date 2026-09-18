@@ -2075,8 +2075,10 @@ func doStartInferno() {
 	channels := channelCount
 	name := deviceName
 
-	// Create a persistent FIFO for Inferno output
-	timestamp := time.Now().Format("20060102_150405")
+	// Create a persistent FIFO for Inferno output. Nanosecond name like the
+	// demo path: a same-second restart must not make doStopInferno's
+	// os.Remove(path) delete the successor's live FIFO.
+	timestamp := fmt.Sprintf("%d", time.Now().UnixNano())
 	baseFileName := fmt.Sprintf("inferno_%s_ch%d_%dkHz.raw", timestamp, channels, sampleRate/1000)
 	path := fmt.Sprintf("%s/%s", RawPath, baseFileName)
 	mutex.Unlock()
