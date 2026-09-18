@@ -2916,16 +2916,18 @@ func startCopyOperation() {
 	isCopying = true
 	copyProgress = 0
 	copyStarted = time.Now()
+	// Snapshot the selection under lock: the goroutine below reads this
+	// without holding mutex, and filesToCopy is mutated under mutex
+	// elsewhere (concurrent map read+write panics).
+	selectedFiles := []string{}
+	for file, selected := range filesToCopy {
+		if selected {
+			selectedFiles = append(selectedFiles, file)
+		}
+	}
 	mutex.Unlock()
 
 	go func() {
-		selectedFiles := []string{}
-		for file, selected := range filesToCopy {
-			if selected {
-				selectedFiles = append(selectedFiles, file)
-			}
-		}
-
 		if len(selectedFiles) == 0 {
 			mutex.Lock()
 			isCopying = false
