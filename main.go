@@ -4576,13 +4576,15 @@ func estimateRemainingTime() time.Duration {
 }
 
 // lowDisk reports whether the current storage can't sustain more than
-// diskWarnMinutes of recording at the currently configured rate. An estimate
-// of 0 (unavailable/unwritable storage) is deliberately not treated as "low" -
-// that would spam warnings; the recording path already fails cleanly if the
-// FIFO/disk isn't there.
+// diskWarnMinutes of recording at the currently configured rate. An
+// unstatable/unwritable path counts as low: refusing the take up front beats
+// letting ffmpeg die mid-write with a corrupt header.
 const diskWarnMinutes = 30
 
 func lowDisk() bool {
+	if storageUnwritable() {
+		return true
+	}
 	r := estimateRemainingTime()
 	return r > 0 && r < diskWarnMinutes*time.Minute
 }
@@ -4599,8 +4601,7 @@ var lastMidTakeDiskCheck time.Time
 
 // checkMidTakeDiskLocked auto-stops an in-progress take when the estimated
 // remaining disk time drops below midTakeDiskStopThreshold. Callers must hold
-// mutex. Silently no-ops if estimate 0 (unwritable/unknown storage) - same
-// principle as lowDisk; the recording path fails cleanly on its own then.
+// mutex. Unwritable storage also triggers (see shouldAutoStopTake).
 func checkMidTakeDiskLocked() {
 	if now := time.Now(); now.Sub(lastMidTakeDiskCheck) < time.Second {
 		return
@@ -4616,10 +4617,12 @@ func checkMidTakeDiskLocked() {
 
 // shouldAutoStopTake reports whether an in-progress take should be stopped
 // because the remaining disk time has dropped below the auto-stop threshold.
-// A zero/unknown estimate deliberately returns false, matching lowDisk's
-// principle - unknowable storage isn't "low", the recording path fails
-// cleanly on its own.
+// Unstatable storage also triggers: same reasoning as lowDisk - stop while
+// ffmpeg can still finalize the WAV instead of dying mid-write.
 func shouldAutoStopTake(remaining time.Duration) bool {
+	if storageUnwritable() {
+		return true
+	}
 	return remaining > 0 && remaining < midTakeDiskStopThreshold
 }
 
@@ -4641,6 +4644,14 @@ func getRemainingStorage() string {
 	}
 }
 
+// storageUnwritable reports whether the recording path can't be stat'd
+// (unmounted/unwritable). One Statfs per call; callers already gate to
+// ~1Hz (checkMidTakeDiskLocked) or event-driven (lowDisk on record start).
+func storageUnwritable() bool {
+	var stat syscall.Statfs_t
+	return syscall.Statfs(RecordPath, &stat) != nil
+}
+
 // getFreeSpace returns the free bytes on the recording media (RecordPath).
 // It always measures RecordPath, never the USB stick: recordings are written
 // to /rec (the SD card) regardless of whether a USB drive is mounted, and USB
@@ -4648,7 +4659,8 @@ func getRemainingStorage() string {
 // recording is allowed at all, and getRemainingStorage() is what the idle
 // screen / WebUI report - both must reflect the volume a new take will
 // actually land on. If the recording path can't be stat'd (unmounted/unwritable)
-// it returns 0, which lowDisk() deliberately doesn't treat as "low".
+// it returns 0, which lowDisk()/shouldAutoStopTake treat as low via
+// storageUnwritable.
 func getFreeSpace() uint64 {
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(RecordPath, &stat); err != nil {
