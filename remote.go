@@ -769,8 +769,12 @@ func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
 	var done chan struct{}
 	mutex.Lock()
 	if enabled {
-		autoMonitor = true
 		startMonitor()
+		// startMonitor no-ops when Inferno is down/recording: only claim
+		// an auto session that actually exists (see doStartInferno).
+		if monitoring {
+			autoMonitor = true
+		}
 	} else {
 		autoMonitor = false
 		done = monitorDone
