@@ -2276,10 +2276,13 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	current := deviceName
 	mutex.Unlock()
-	fmt.Fprintf(w, `<form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML">
+	// Wrap in the outer #devicename div: the form targets it with
+	// outerHTML, and a bare <form> response would destroy the target so
+	// the name is editable exactly once per page load.
+	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="setting-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML">
 <input name="name" value="%s" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
 <button type="submit">Save</button>
-</form>`, template.HTMLEscapeString(current))
+</form></div></div>`, template.HTMLEscapeString(current))
 }
 
 // handleDisplayPNG mirrors the OLED exactly - encoded from the same packed
