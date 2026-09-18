@@ -2945,9 +2945,16 @@ func startCopyOperation() {
 		for i, file := range selectedFiles {
 			mutex.Lock()
 			cancelled := !isCopying
+			// Never copy the take currently being written: it would
+			// back up a half-finalized WAV.
+			active := isRecording && filepath.Join(RecordPath, file) == recordingFile
 			mutex.Unlock()
 			if cancelled {
 				break
+			}
+			if active {
+				logWarnf("Skipping in-progress take %s during copy", file)
+				continue
 			}
 
 			src := filepath.Join(RecordPath, file)
@@ -2972,6 +2979,8 @@ func startCopyOperation() {
 // copyFile streams src to dst rather than reading it fully into memory:
 // multi-channel high-sample-rate recordings can reach many GB (e.g. 128ch at
 // 192kHz/32-bit is ~98MB/s), which would exhaust RAM with os.ReadFile.
+// Writes to dst.tmp + Sync + Rename so a failed/cancelled copy never leaves
+// a truncated file masquerading as a good backup; partial removed on error.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -2985,16 +2994,26 @@ func copyFile(src, dst string) error {
 		return err
 	}
 
-	out, err := os.Create(dst)
+	tmp := dst + ".tmp"
+	out, err := os.Create(tmp)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(tmp)
 		return err
 	}
-	return out.Close()
+	if err := out.Sync(); err != nil {
+		out.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := out.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, dst)
 }
 
 func deleteAllRecordings() {
