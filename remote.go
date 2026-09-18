@@ -2846,7 +2846,7 @@ type recordingRow struct {
 // first _ before the timestamp is the prefix and the rest is unambiguous.
 // Everything but duration/end time is recoverable straight from the name;
 // duration needs the file's actual content (see recordingDuration).
-var recFilenameRe = regexp.MustCompile(`^([A-Za-z0-9 -]+)_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz\.(\w+)$`)
+var recFilenameRe = regexp.MustCompile(`^([A-Za-z0-9 -]+)_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz(-\d+)?\.(\w+)$`)
 
 func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	info, err := os.Stat(path)
@@ -2885,7 +2885,7 @@ func buildRecordingRow(path string) recordingRow {
 	}
 	channels, _ := strconv.Atoi(m[4])
 	sampleRate, _ := strconv.Atoi(m[5])
-	format := strings.ToUpper(m[6])
+	format := strings.ToUpper(m[7])
 
 	row.Channels = channels
 	row.SampleRate = sampleRate
