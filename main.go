@@ -2760,7 +2760,10 @@ func pausePlayback() {
 		return
 	}
 	playbackPausedElapsed = time.Since(playbackStart)
-	playbackCmd.Process.Signal(syscall.SIGSTOP)
+	if err := playbackCmd.Process.Signal(syscall.SIGSTOP); err != nil {
+		logWarnf("Playback pause failed: %v", err)
+		return
+	}
 	currentState = StatePaused
 	logInfof("Playback paused")
 }
@@ -2771,7 +2774,10 @@ func resumePlayback() {
 	if currentState != StatePaused || playbackCmd == nil || playbackCmd.Process == nil {
 		return
 	}
-	playbackCmd.Process.Signal(syscall.SIGCONT)
+	if err := playbackCmd.Process.Signal(syscall.SIGCONT); err != nil {
+		logWarnf("Playback resume failed: %v", err)
+		return
+	}
 	// The wall-clock start is now stale (it includes the paused gap), so
 	// slide it forward by that gap to keep the elapsed readout accurate.
 	playbackStart = playbackStart.Add(time.Since(playbackStart) - playbackPausedElapsed)
