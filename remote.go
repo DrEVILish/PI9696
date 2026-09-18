@@ -402,6 +402,7 @@ document.getElementById('loginForm').addEventListener('submit', function() {
 func handleLoginGet(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	name := deviceName
+	lastLoginPage = time.Now()
 	mutex.Unlock()
 	loginPageTmpl.Execute(w, loginPageData{DeviceName: name, Logo: template.HTML(pi9696LogoSVG)})
 }
@@ -465,6 +466,8 @@ type dashboardData struct {
 	LogLevelFragment     template.HTML
 	BrightnessFragment   template.HTML
 	AutoDimFragment      template.HTML
+	MonitorFragment      template.HTML
+	DemoFragment         template.HTML
 	WifiEnabled          bool
 	WifiSSID             string
 	WifiPassword         string
@@ -686,6 +689,94 @@ func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
 	settingChanged()
 	mutex.Unlock()
 	autoDimFragmentTmpl.Execute(w, autoDimViewData())
+}
+
+// demoFragmentTmpl is the Demo -> Demo Mode setting: an on/off switch for
+// the simulated-audio demonstration mode. Mirrors the Auto Dim switch.
+var demoFragmentTmpl = template.Must(template.New("demo").Parse(`<div id="demo" class="setting-cell">
+<div class="setting-row setting-row--switch">
+<form hx-post="/api/settings/demo" hx-target="#demo" hx-swap="outerHTML">
+<label for="demoToggle">Demo Mode</label>
+<label class="sci-switch" for="demoToggle">
+<input id="demoToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
+<span class="sci-switch-track"><span class="sci-thumb"></span></span>
+<span class="switch-readout" data-on="DEMO" data-off="LIVE"></span>
+</label>
+</form>
+</div>
+</div>`))
+
+// demoView carries the demo-mode flag the fragment renders, so both the
+// dashboard and the htmx POST handler share one template.
+type demoView struct {
+	Enabled bool
+}
+
+func demoViewData() demoView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return demoView{Enabled: demoMode}
+}
+
+func handleAPISettingsDemoMode(w http.ResponseWriter, r *http.Request) {
+	enabled := r.FormValue("enabled") != ""
+	mutex.Lock()
+	setDemoModeLocked(enabled)
+	noteActivity()
+	mutex.Unlock()
+	demoFragmentTmpl.Execute(w, demoViewData())
+}
+
+// monitorFragmentTmpl is the Audio -> Monitoring setting: an on/off switch
+// for the input monitor. Mirrors the Demo Mode switch.
+var monitorFragmentTmpl = template.Must(template.New("monitor").Parse(`<div id="monitor" class="setting-cell">
+<div class="setting-row setting-row--switch">
+<form hx-post="/api/settings/monitor" hx-target="#monitor" hx-swap="outerHTML">
+<label for="monitorToggle">Monitoring</label>
+<label class="sci-switch" for="monitorToggle">
+<input id="monitorToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
+<span class="sci-switch-track"><span class="sci-thumb"></span></span>
+<span class="switch-readout" data-on="ON" data-off="OFF"></span>
+</label>
+</form>
+</div>
+</div>`))
+
+// monitorView carries the monitoring flag the fragment renders, so both the
+// dashboard and the htmx POST handler share one template.
+type monitorView struct {
+	Enabled bool
+}
+
+func monitorViewData() monitorView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return monitorView{Enabled: monitoring}
+}
+
+func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
+	enabled := r.FormValue("enabled") != ""
+	var done chan struct{}
+	mutex.Lock()
+	if enabled {
+		autoMonitor = true
+		startMonitor()
+	} else {
+		autoMonitor = false
+		done = monitorDone
+		stopMonitor()
+	}
+	noteActivity()
+	mutex.Unlock()
+	// stopMonitor only signals; the reaper clears the flag. Wait for it
+	// (mutex-free) so the re-rendered switch reflects the real state.
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+		}
+	}
+	monitorFragmentTmpl.Execute(w, monitorViewData())
 }
 
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
@@ -1075,21 +1166,29 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:#08192b;border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal}
 .dl-all:hover{border-color:var(--glow)}
 
-.grid{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:1.2em;max-width:1400px;margin:0 auto}
+.grid{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:1.2em}
 
-/* The recordings browser is a big scrollable list that fills whatever
-   vertical space the viewport has left (header deck above, meter footer
-   below) instead of growing past it and scrolling the whole page -
-   pagination was explicitly ruled out, so a long take list scrolls inside
-   its own panel. On desktop the page is a fixed-height flex column: the
-   grid stretches to fill, panels become columns, and the recordings area
-   is the flexible, scrolling member. */
+.recordings-section{padding:0 1.2em 1.2em}
+.recordings-section h2{margin:1.2em 0 0.6em;font-size:1.1em;letter-spacing:0.05em}
+.recordings-table{width:100%;border-collapse:collapse;font-size:0.85em}
+.recordings-table th,.recordings-table td{padding:0.6em 0.8em;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
+.recordings-table th{color:var(--glow);font-weight:600;font-size:0.7em;letter-spacing:0.1em;text-transform:uppercase;background:#08162a;position:sticky;top:0;z-index:10}
+.recordings-table tr:hover td{background:#08162a}
+.recordings-table td:last-child{text-align:right}
+.recordings-table .dl-link{color:var(--glow);text-decoration:none;border:1px solid var(--border);border-radius:4px;padding:0.2em 0.6em;font-size:0.85em;white-space:nowrap}
+.recordings-table .dl-link:hover{border-color:var(--glow);background:rgba(0,217,255,0.1)}
+.recordings-table .empty{color:var(--dim);font-style:italic;padding:2em;text-align:center}
+
+/* Scrollable table wrapper for narrow viewports */
+.recordings-wrap{overflow-x:auto;max-width:100%}
+
 @media (min-width:801px){
   body{min-height:100vh;display:flex;flex-direction:column}
   .grid{flex:1;min-height:0;align-self:stretch}
   .panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
   .panel h2{flex:none}
-  #recordings{flex:1;min-height:0;overflow-y:auto;margin-top:0.5em;padding-top:0.4em;border-top:1px solid var(--border)}
+  .recordings-section{flex:0 0 auto}
+  #recordings{overflow-y:auto;max-height:30vh}
 }
 
 /* Modals: the settings sheet and the stop-recording confirmation. */
@@ -1367,8 +1466,18 @@ body.meters-collapsed{padding-bottom:4em}
 <div class="grid">
 
   <div class="panel left">
-    <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)">Download ALL (.zip)</a></h2>
-    <div id="recordings" hx-get="/api/recordings" hx-trigger="load, every 15s" hx-swap="innerHTML">Loading...</div>
+    <h2>System</h2>
+    <div class="sys-graphs">
+      <h3>CPU %</h3>
+      <div id="cpuChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <h3>RAM MB</h3>
+      <div id="ramChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <h3>Temp &deg;C</h3>
+      <div id="tempChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <h3>Disk free GB</h3>
+      <div id="diskChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <pre id="teleHist" hidden></pre>
+    </div>
   </div>
 
   <div class="panel center">
@@ -1472,24 +1581,18 @@ body.meters-collapsed{padding-bottom:4em}
     </div>
     <div id="status">Loading...</div>
     <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#status" hx-swap="innerHTML" hidden></div>
-    <div class="sys-graphs">
-      <h3>CPU %</h3>
-      <div id="cpuChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <h3>RAM MB</h3>
-      <div id="ramChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <h3>Temp &deg;C</h3>
-      <div id="tempChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <h3>Disk free GB</h3>
-      <div id="diskChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <pre id="teleHist" hidden></pre>
-    </div>
   </div>
 
   <div class="panel right">
     <h2>Status</h2>
-    <div id="config" hx-get="/api/config" hx-trigger="load, every 3s" hx-swap="innerHTML">Loading...</div>
+    <div id="config" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
   </div>
 
+</div>
+
+<div class="recordings-section">
+  <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)">Download ALL (.zip)</a></h2>
+  <div id="recordings" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
 </div>
 
 <footer class="meter-footer" id="meterFooter">
@@ -1532,6 +1635,7 @@ body.meters-collapsed{padding-bottom:4em}
         <h3 class="settings-group-title">Audio</h3>
         {{.SampleRateFragment}}
         {{.ChannelCountFragment}}
+        {{.MonitorFragment}}
       </section>
 
       <section class="settings-group">
@@ -1555,6 +1659,11 @@ body.meters-collapsed{padding-bottom:4em}
         <h3 class="settings-group-title">Display</h3>
         {{.BrightnessFragment}}
         {{.AutoDimFragment}}
+      </section>
+
+      <section class="settings-group">
+        <h3 class="settings-group-title">Demo</h3>
+        {{.DemoFragment}}
       </section>
 
       <section class="settings-group">
@@ -1943,29 +2052,14 @@ function applyMeter(m) {
 
 // WebSocket push instead of polling /api/meter: the server streams a
 // snapshot every 100ms (see handleWSMeter) over one persistent connection
-// rather than the dashboard opening a new HTTP request per tick. Falls
-// back to a slow poll only if the socket can't be opened at all (e.g. a
-// very old browser or a proxy stripping the Upgrade header) so the
-// dashboard still shows live-ish levels rather than going dark.
-var wsMeterWorking = false;
+// rather than the dashboard opening a new HTTP request per tick. If the
+// socket drops it reconnects after a second; there is no polling fallback.
 function connectMeterSocket() {
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   var ws = new WebSocket(proto + '//' + location.host + '/ws/meter');
-  ws.onmessage = function(ev) { wsMeterWorking = true; applyMeter(JSON.parse(ev.data)); };
-  ws.onclose = function() { wsMeterWorking = false; setTimeout(connectMeterSocket, 1000); };
+  ws.onmessage = function(ev) { applyMeter(JSON.parse(ev.data)); };
+  ws.onclose = function() { setTimeout(connectMeterSocket, 1000); };
   ws.onerror = function() { ws.close(); };
-  setTimeout(function() {
-    if (!wsMeterWorking) pollMeterFallback();
-  }, 2000);
-}
-// pollMeterFallback stops itself as soon as the WebSocket starts delivering
-// messages - it only exists to cover a socket that never connects at all
-// (very old browser, a proxy stripping the Upgrade header), not to run
-// alongside a working one.
-function pollMeterFallback() {
-  if (wsMeterWorking) return;
-  fetch('/api/meter').then(function(r) { return r.json(); }).then(applyMeter).catch(function() {});
-  setTimeout(pollMeterFallback, 1000);
 }
 // System graphs: uPlot history driven by the hx-ws telemetry socket (see
 // #teleSock), not by polling - the server pushes a status swap plus a
@@ -2057,8 +2151,13 @@ function applyTeleHist(h) {
   if (h.disk) teleDisk.setData([h.t, h.disk]);
 }
 document.body.addEventListener('htmx:after:swap', function(e) {
-  if (e.detail && e.detail.target && e.detail.target.id === 'teleHist') {
-    var raw = e.detail.target.textContent;
+  // WS-driven swaps carry no detail.target (htmx 4 shape is {ctx,
+  // cancelled}) - the swapped selector lives on detail.ctx.target as a
+  // string like "#teleHist", while plain swaps still use detail.target.
+  var d = e.detail || {}, t = d.target || (d.ctx && d.ctx.target);
+  var id = t && (t.id || t);
+  if (id === 'teleHist' || id === '#teleHist') {
+    var raw = document.getElementById('teleHist').textContent;
     if (teleHidden) { telePending = raw; return; }
     try { applyTeleHist(JSON.parse(raw)); } catch (err) {}
   }
@@ -2097,7 +2196,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	transportIcon := transportMode != "text"
 	mutex.Unlock()
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, qrBuf bytes.Buffer
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf bytes.Buffer
 	selectFragmentTmpl.Execute(&vuBuf, vuRangeSelect())
 	selectFragmentTmpl.Execute(&holdBuf, peakHoldSelect())
 	selectFragmentTmpl.Execute(&srBuf, sampleRateSelect())
@@ -2108,6 +2207,8 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	selectFragmentTmpl.Execute(&logLevelBuf, logLevelSelect())
 	brightnessFragmentTmpl.Execute(&brightnessBuf, brightnessViewData())
 	autoDimFragmentTmpl.Execute(&autoDimBuf, autoDimViewData())
+	demoFragmentTmpl.Execute(&demoBuf, demoViewData())
+	monitorFragmentTmpl.Execute(&monitorBuf, monitorViewData())
 
 	// Generate WiFi QR code as base64 PNG for the settings modal
 	var qrBase64 string
@@ -2132,6 +2233,8 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		LogLevelFragment:     template.HTML(logLevelBuf.String()),
 		BrightnessFragment:   template.HTML(brightnessBuf.String()),
 		AutoDimFragment:      template.HTML(autoDimBuf.String()),
+		MonitorFragment:      template.HTML(monitorBuf.String()),
+		DemoFragment:         template.HTML(demoBuf.String()),
 		WifiEnabled:          wifiEn,
 		WifiSSID:             wifiS,
 		WifiPassword:         wifiP,
@@ -2262,6 +2365,18 @@ type configView struct {
 // the encoder/button controls above (the same state machine the OLED menu
 // system already guards), not a second, parallel settings form here.
 func handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	html, err := renderConfigHTML()
+	if err != nil {
+		http.Error(w, "config unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(html))
+}
+
+// renderConfigHTML renders the dashboard Status panel; shared by the
+// one-shot GET (initial paint) and the telemetry-socket push.
+func renderConfigHTML() (string, error) {
 	mutex.Lock()
 	v := configView{
 		SampleRate: sampleRates[sampleRateIdx] / 1000,
@@ -2274,7 +2389,11 @@ func handleAPIConfig(w http.ResponseWriter, r *http.Request) {
 
 	_, v.Network = hwManager.Network.GetNetworkStatus()
 
-	configTmpl.Execute(w, v)
+	var buf bytes.Buffer
+	if err := configTmpl.Execute(&buf, v); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 var statusTmpl = template.Must(template.New("status").Parse(`
@@ -2284,14 +2403,10 @@ var statusTmpl = template.Must(template.New("status").Parse(`
  {{else if .Playing}}<p>&#9654; Playing back - {{.Elapsed}}</p>
  {{else if .Paused}}<p>&#10074;&#10074; Paused - {{.Elapsed}}</p>
  {{else if .MonOutput}}<p class="idle">&#9654; Monitoring output - playing {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch {{.Elapsed}}</p>
-<button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML">Start Recording</button>
  {{else if .Monitoring}}<p class="idle">&#128266; Monitoring input - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
-<button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML">Start Recording</button>
-<button hx-post="/api/monitor/stop" hx-target="#status" hx-swap="innerHTML">Stop Monitoring</button>
 {{else}}<p class="idle">Idle - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
-<button hx-post="/api/record/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Start Recording</button>
-<button hx-post="/api/monitor/start" hx-target="#status" hx-swap="innerHTML" {{if not .InfernoUp}}disabled{{end}}>Monitor Input</button>
-{{if not .InfernoUp}}<p>(Inferno not running &mdash; build with <code>setup.sh</code> and restart)</p>{{end}}
+{{if not .InfernoUp}}<p>(Inferno not running &mdash; build the Inferno binary and restart)</p>{{end}}
+{{if .DemoMode}}<p>(Demo mode &mdash; simulated audio)</p>{{end}}
 {{end}}
 <div class="sys-readout">
 <p>Uptime {{.Uptime}} &middot; v{{.AppVersion}}</p>
@@ -2311,6 +2426,7 @@ type statusView struct {
 	SampleRate  int
 	Channels    int
 	InfernoUp   bool
+	DemoMode    bool
 	Uptime      string
 	AppVersion  string
 	CPUPerCore  []float64
@@ -2335,7 +2451,8 @@ func currentStatusView() statusView {
 		Format:     "WAV",
 		SampleRate: sampleRates[sampleRateIdx] / 1000,
 		Channels:   channelCount,
-		InfernoUp:  infernoState == InfernoRunning,
+		InfernoUp:  infernoUp(),
+		DemoMode:   demoMode,
 	}
 	switch {
 	case v.Recording:
@@ -2438,12 +2555,44 @@ func broadcastTelemetry() {
 	}
 	teleWSMu.Lock()
 	defer teleWSMu.Unlock()
+	config, recs, configChanged, recsChanged := panelWSMessages()
 	for ws := range teleWSHub {
 		if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
 			ws.Close()
 			delete(teleWSHub, ws)
+			continue
+		}
+		if configChanged && !teleWSSend(ws, "#config", config) {
+			ws.Close()
+			delete(teleWSHub, ws)
+			continue
+		}
+		if recsChanged && !teleWSSend(ws, "#recordings", recs) {
+			ws.Close()
+			delete(teleWSHub, ws)
 		}
 	}
+}
+
+// lastPanelConfig/lastPanelRecs are the last pushed panel bodies; the
+// Status and Recordings panels only go out over the socket when they
+// actually changed, so an idle dashboard costs no re-renders. Guarded by
+// teleWSMu - panelWSMessages renders (taking the app mutex inside), so
+// never call it with the app mutex already held.
+var lastPanelConfig, lastPanelRecs string
+
+// panelWSMessages renders both panels, stores the new bodies, and reports
+// whether each changed since the last push. Call with teleWSMu held.
+func panelWSMessages() (config, recs string, configChanged, recsChanged bool) {
+	if c, err := renderConfigHTML(); err == nil {
+		config, configChanged = c, c != lastPanelConfig
+		lastPanelConfig = c
+	}
+	if r, err := renderRecordingsHTML(); err == nil {
+		recs, recsChanged = r, r != lastPanelRecs
+		lastPanelRecs = r
+	}
+	return config, recs, configChanged, recsChanged
 }
 
 func handleWSTelemetry(ws *websocket.Conn) {
@@ -2456,11 +2605,22 @@ func handleWSTelemetry(ws *websocket.Conn) {
 		teleWSMu.Unlock()
 		ws.Close()
 	}()
-	// Instant first paint so a fresh dashboard never waits a full tick.
+	// Instant first paint so a fresh dashboard never waits a full tick:
+	// status + history plus both panels (a new socket hasn't seen anything,
+	// so send unconditionally - this also seeds the change cache).
 	if status, hist, err := buildTelemetryWSMessages(); err == nil {
 		if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
 			return
 		}
+	}
+	teleWSMu.Lock()
+	config, recs, _, _ := panelWSMessages()
+	teleWSMu.Unlock()
+	if config != "" && !teleWSSend(ws, "#config", config) {
+		return
+	}
+	if recs != "" && !teleWSSend(ws, "#recordings", recs) {
+		return
 	}
 	// Read to EOF purely to notice the client going away; frames are ignored.
 	var discard any
@@ -2480,9 +2640,9 @@ func telemetryWSLoop() {
 }
 
 // handleAPIMeter is deliberately separate from handleAPIStatus: the VU
-// hologram needs numeric dB values on a fast (~150ms) poll to look live,
-// while /api/status's 2s poll is fine for everything else on the dashboard.
-// meterPeakDB/meterRMSDB fall back to meterSilence whenever nothing is
+// hologram needs numeric dB values on a fast (~150ms) push to look live,
+// while the 2s telemetry-socket push is fine for everything else on the
+// dashboard. meterPeakDB/meterRMSDB fall back to meterSilence whenever nothing is
 // recording (see main.go's stopRecording/meterReader), so the hologram
 // correctly goes quiet rather than showing a stale level.
 type channelLevel struct {
@@ -2537,7 +2697,7 @@ func currentMeterResponse() meterResponse {
 		Paused:     currentState == StatePaused,
 		Monitoring: monitoring,
 		MonOutput:  monitoringOutput,
-		InfernoUp:  infernoState == InfernoRunning,
+		InfernoUp:  infernoUp(),
 		FloorDB:    vuRangeOptions[vuRangeIdx],
 		DisplaySeq: displaySeq,
 	}
@@ -2648,9 +2808,11 @@ func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
 }
 
 var recordingsTmpl = template.Must(template.New("recordings").Parse(`
-<table>
-<tr><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr>
-{{if not .}}<tr><td colspan="7">None yet.</td></tr>{{else}}
+<div class="recordings-wrap">
+<table class="recordings-table">
+<thead><tr><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
+<tbody>
+{{if not .}}<tr><td class="empty" colspan="7">None yet.</td></tr>{{else}}
 {{range .}}<tr>
 <td>{{.Name}}</td>
 <td>{{.Channels}}</td>
@@ -2658,10 +2820,12 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <td>{{.StartStr}}</td>
 <td>{{.EndStr}}</td>
 <td>{{.DurationStr}}</td>
-<td><a href="/download/{{.RelPath}}">download</a></td>
+<td><a class="dl-link" href="/download/{{.RelPath}}">download</a></td>
 </tr>{{end}}
 {{end}}
+</tbody>
 </table>
+</div>
 `))
 
 type recordingRow struct {
@@ -2743,11 +2907,27 @@ func buildRecordingRow(path string) recordingRow {
 }
 
 func handleAPIRecordings(w http.ResponseWriter, r *http.Request) {
+	html, err := renderRecordingsHTML()
+	if err != nil {
+		http.Error(w, "recordings unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(html))
+}
+
+// renderRecordingsHTML renders the dashboard recordings list; shared by the
+// one-shot GET (initial paint) and the telemetry-socket push.
+func renderRecordingsHTML() (string, error) {
 	var rows []recordingRow
 	for _, f := range recordingFiles() {
 		rows = append(rows, buildRecordingRow(f))
 	}
-	recordingsTmpl.Execute(w, rows)
+	var buf bytes.Buffer
+	if err := recordingsTmpl.Execute(&buf, rows); err != nil {
+		return "", err
+	}
+	return buf.String(), nil
 }
 
 // handleDownload only serves files that appear in the app's own current
@@ -2880,6 +3060,8 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/log-level", requireAuth(handleAPISettingsLogLevel))
 	mux.HandleFunc("POST /api/settings/brightness", requireAuth(handleAPISettingsBrightness))
 	mux.HandleFunc("POST /api/settings/dim", requireAuth(handleAPISettingsAutoDim))
+	mux.HandleFunc("POST /api/settings/demo", requireAuth(handleAPISettingsDemoMode))
+	mux.HandleFunc("POST /api/settings/monitor", requireAuth(handleAPISettingsMonitor))
 	mux.HandleFunc("POST /api/settings/sample-rate", requireAuth(handleAPISettingsSampleRate))
 	mux.HandleFunc("POST /api/settings/channels", requireAuth(handleAPISettingsChannels))
 	mux.HandleFunc("POST /api/settings/tag", requireAuth(handleAPISettingsTag))
@@ -2905,8 +3087,8 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/input/button/stop", requireAuth(handleInputButton(hardware.StopButton)))
 	mux.HandleFunc("POST /api/input/button/play", requireAuth(handleInputButton(hardware.PlayButton)))
 
-	// htmax.min.js (htmx 4.0 plus its bundled extensions) is downloaded by
-	// setup.sh (pinned to 4.0.0, see setup.sh) rather than referencing an
+	// htmax.min.js (htmx 4.0 plus its bundled extensions) is vendored at
+	// install time (pinned to 4.0.0) rather than referencing an
 	// external CDN at runtime - this device shouldn't depend on internet
 	// access, only its own LAN, to serve its control page. A dedicated
 	// single-file handler (not http.FileServer mounted on the web/ dir) so
