@@ -101,10 +101,11 @@ type loginLimiter struct {
 	mu       sync.Mutex
 	failures map[string]int
 	lockedAt map[string]time.Time
+	seenAt   map[string]time.Time
 }
 
 func newLoginLimiter() *loginLimiter {
-	return &loginLimiter{failures: make(map[string]int), lockedAt: make(map[string]time.Time)}
+	return &loginLimiter{failures: make(map[string]int), lockedAt: make(map[string]time.Time), seenAt: make(map[string]time.Time)}
 }
 
 func (l *loginLimiter) allowed(ip string) bool {
@@ -117,6 +118,18 @@ func (l *loginLimiter) allowed(ip string) bool {
 		delete(l.lockedAt, ip)
 		delete(l.failures, ip)
 	}
+	// Sweep stale entries: sessions.create prunes its own map, but
+	// probed-never-locked IPs would otherwise grow these maps forever.
+	// O(n) over attacker IPs per login attempt - logins are rare.
+	for probe, at := range l.seenAt {
+		if time.Since(at) >= 60*time.Second {
+			if _, locked := l.lockedAt[probe]; !locked {
+				delete(l.seenAt, probe)
+				delete(l.failures, probe)
+			}
+		}
+	}
+	l.seenAt[ip] = time.Now()
 	return true
 }
 
@@ -124,6 +137,7 @@ func (l *loginLimiter) recordFailure(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.failures[ip]++
+	l.seenAt[ip] = time.Now()
 	if l.failures[ip] >= 5 {
 		l.lockedAt[ip] = time.Now()
 	}
@@ -134,6 +148,7 @@ func (l *loginLimiter) recordSuccess(ip string) {
 	defer l.mu.Unlock()
 	delete(l.failures, ip)
 	delete(l.lockedAt, ip)
+	delete(l.seenAt, ip)
 }
 
 var loginLimit = newLoginLimiter()
