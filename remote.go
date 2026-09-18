@@ -1774,8 +1774,12 @@ renderTransportRow();
 // swaps the fragment - listen for that and re-seed ICON_MODE from the
 // select's own value (0=icon,1=text) so the header updates instantly.
 document.body.addEventListener('htmx:after:swap', function(e) {
-  if (e.detail.target && e.detail.target.id === 'transportmode') {
-    var sel = e.detail.target.querySelector('select[name="idx"]');
+  // htmx 4 shape is {ctx, cancelled}: target lives on detail.ctx.target
+  // (same fallback as the teleHist listener below).
+  var d = e.detail || {}, t = d.target || (d.ctx && d.ctx.target);
+  var id = t && (t.id || t);
+  if (id === 'transportmode' || id === '#transportmode') {
+    var sel = (t.querySelector ? t : document.getElementById('transportmode')).querySelector('select[name="idx"]');
     if (sel) { ICON_MODE = (sel.value === '0'); renderTransportRow(); }
   }
 });
