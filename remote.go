@@ -2831,6 +2831,7 @@ func handleAPIRecordStop(w http.ResponseWriter, r *http.Request) {
 
 func handleAPIMonitorStart(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
+	autoMonitor = true
 	startMonitor()
 	mutex.Unlock()
 	handleAPIStatus(w, r)
@@ -2839,6 +2840,7 @@ func handleAPIMonitorStart(w http.ResponseWriter, r *http.Request) {
 func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	if monitoring {
+		autoMonitor = false
 		stopMonitor()
 	}
 	mutex.Unlock()
