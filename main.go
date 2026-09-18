@@ -350,7 +350,7 @@ func importConfigFrom(dir string) error {
 		menuTimeoutIdx = c.MenuTimeoutIdx
 	}
 
-	if c.WifiPassword != "" {
+	if c.WifiPassword != "" && c.WifiSSID != "" && len(c.WifiPassword) >= 8 && len(c.WifiSSID) <= 32 {
 		wifiSSID, wifiPassword, wifiEnabled = c.WifiSSID, c.WifiPassword, c.WifiEnabled
 		go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
 	}
