@@ -2265,6 +2265,15 @@ func startRecording() {
 	// unset prefix keeps the historical "recording_..." default.
 	recordingFile = filepath.Join(recordingSubdir(recordStart),
 		fmt.Sprintf("%s_%s_ch%d_%dkHz.wav", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000))
+	// Second-resolution timestamps collide when takes start within the same
+	// second (ffmpeg would truncate the previous take): suffix -1, -2...
+	for n := 1; ; n++ {
+		if _, err := os.Stat(recordingFile); os.IsNotExist(err) {
+			break
+		}
+		recordingFile = filepath.Join(recordingSubdir(recordStart),
+			fmt.Sprintf("%s_%s_ch%d_%dkHz-%d.wav", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000, n))
+	}
 
 	// Create recording directory
 	os.MkdirAll(filepath.Dir(recordingFile), 0755)
