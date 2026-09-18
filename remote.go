@@ -811,12 +811,13 @@ type prefixView struct {
 // filename-safe charset server-side.
 var filePrefixFragmentTmpl = template.Must(template.New("fileprefix").Parse(`<div id="fileprefix" class="setting-cell">
 <div class="setting-row">
-<form hx-post="/api/settings/prefix" hx-target="#fileprefix" hx-swap="outerHTML">
+<form hx-post="/api/settings/prefix" hx-target="#fileprefix" hx-swap="outerHTML" hx-status:400="target:#prefix-error">
 <label for="filePrefixInput">Prefix</label>
 <input id="filePrefixInput" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
 <span class="hint">file_YYYYMMDD…</span>
 <button type="submit" class="btn-primary">Save</button>
 </form>
+<div id="prefix-error"></div>
 </div>
 </div>`))
 
@@ -836,8 +837,14 @@ func handleAPISettingsPrefix(w http.ResponseWriter, r *http.Request) {
 		logInfof("recording prefix set to %q via remote", effectiveFilePrefix())
 	} else {
 		logWarnf("rejected invalid recording prefix %q via remote", prefix)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `<span class="err">Letters, numbers, spaces and - only (max 32)</span>`)
+		return
 	}
 	filePrefixFragmentTmpl.Execute(w, filePrefixView())
+	// OOB swap: clear any stale validation error from #prefix-error on success.
+	fmt.Fprint(w, "\n<div id=\"prefix-error\" hx-swap-oob=\"innerHTML\"></div>")
 }
 
 // transportSelect switches the main transport buttons between icon
