@@ -229,6 +229,13 @@ func validSession(r *http.Request) bool {
 func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !validSession(r) {
+			// WS handshakes and API/fetch callers can't follow a 303
+			// (handshake just fails, <img> renders login HTML): give
+			// them a 401 they can act on instead.
+			if strings.HasPrefix(r.URL.Path, "/ws/") || strings.HasPrefix(r.URL.Path, "/api/") {
+				http.Error(w, "session expired", http.StatusUnauthorized)
+				return
+			}
 			// Preserve the query (the OLED access-QR encodes /?t=<token>) so a
 			// scanned code still pre-fills the login boxes after the 303.
 			target := "/login"
@@ -2062,7 +2069,15 @@ function connectMeterSocket() {
   var proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   var ws = new WebSocket(proto + '//' + location.host + '/ws/meter');
   ws.onmessage = function(ev) { applyMeter(JSON.parse(ev.data)); };
-  ws.onclose = function() { setTimeout(connectMeterSocket, 1000); };
+  // A 401-capable world (see requireAuth): an expired session now fails the
+  // handshake instead of spinning reconnects forever - check once and offer
+  // the login page rather than a dead red lamp.
+  ws.onclose = function() {
+    fetch('/api/status').then(function(r) {
+      if (r.status === 401) { location.href = '/login'; return; }
+      setTimeout(connectMeterSocket, 1000);
+    }).catch(function() { setTimeout(connectMeterSocket, 1000); });
+  };
   ws.onerror = function() { ws.close(); };
 }
 // System graphs: uPlot history driven by the hx-ws telemetry socket (see
