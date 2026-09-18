@@ -1834,8 +1834,10 @@ func infernoWorker() {
 
 func networkMonitorLoop() {
 	for {
-		mutex.Lock()
+		// Probe outside the lock: network I/O must never stall
+		// render()/input handling behind the app mutex.
 		networkUp := hwManager.IsNetworkAvailable()
+		mutex.Lock()
 
 		if networkUp && !networkWasUp {
 			// Network just came up, start Inferno if not running (never in
@@ -4827,24 +4829,38 @@ type telemetryData struct {
 }
 
 func snapshotTelemetry() telemetryData {
+	// Copy the guarded scalars, then do every /proc|/sys read and Statfs
+	// lock-free: holding the app mutex across filesystem I/O stalled
+	// render()/buttons/HTTP on slow storage.
 	mutex.Lock()
-	defer mutex.Unlock()
+	cores := append([]float64(nil), cpuPct...)
+	infernoPid := 0
+	if infernoCmd != nil && infernoCmd.Process != nil {
+		infernoPid = infernoCmd.Process.Pid
+	}
+	bps := float64(sampleRates[sampleRateIdx] * channelCount * OutputBitsPerSample / 8)
+	mutex.Unlock()
+
 	v := telemetryData{
 		Uptime:     time.Since(bootTime).String(),
 		AppVersion: appVersion,
-		CPUPerCore: append([]float64(nil), cpuPct...),
+		CPUPerCore: cores,
 		RAMApp:     ramMB(os.Getpid(), "VmRSS"),
 		CPUTemp:    -1,
 	}
-	if infernoCmd != nil && infernoCmd.Process != nil {
-		v.RAMInferno = ramMB(infernoCmd.Process.Pid, "VmRSS")
+	if infernoPid != 0 {
+		v.RAMInferno = ramMB(infernoPid, "VmRSS")
 	}
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(RecordPath, &stat); err == nil {
 		v.DiskTotal = float64(stat.Blocks*uint64(stat.Bsize)) / 1e9
 		v.DiskFree = float64(stat.Bavail*uint64(stat.Bsize)) / 1e9
 	}
-	v.RecordTime = recordTimeAvailable()
+	if bps > 0 && v.DiskFree > 0 {
+		v.RecordTime = formatDuration(time.Duration(v.DiskFree*1e9/bps) * time.Second)
+	} else {
+		v.RecordTime = "\u2014"
+	}
 	ramSysUsed, ramSysTotal := systemRAM()
 	v.RAMSysUsed, v.RAMSysTotal = ramSysUsed, ramSysTotal
 	if t, ok := readCPUTemp(); ok {
@@ -4872,17 +4888,24 @@ var teleHistTemp, teleHistDisk []float64
 var teleHistCores [][]float64
 
 // appendTelemetryHist records one history sample; trims equally so the
-// parallel slices can never drift apart in length.
+// parallel slices can never drift apart in length. Filesystem sampling
+// happens lock-free (see snapshotTelemetry); only the slice appends hold
+// the mutex.
 func appendTelemetryHist() {
 	mutex.Lock()
-	defer mutex.Unlock()
-	avg := 0.0
-	if len(cpuPct) > 0 {
-		for _, p := range cpuPct {
-			avg += p
-		}
-		avg /= float64(len(cpuPct))
+	cores := append([]float64(nil), cpuPct...)
+	if len(cores) == 0 && len(teleHistCores) > 0 {
+		cores = append([]float64(nil), teleHistCores[len(teleHistCores)-1]...)
 	}
+	avg := 0.0
+	for _, p := range cores {
+		avg += p
+	}
+	if len(cores) > 0 {
+		avg /= float64(len(cores))
+	}
+	mutex.Unlock()
+
 	sysUsed, _ := systemRAM()
 	temp, _ := readCPUTemp()
 	diskFree := -1.0
@@ -4890,14 +4913,14 @@ func appendTelemetryHist() {
 	if err := syscall.Statfs(RecordPath, &stat); err == nil {
 		diskFree = float64(stat.Bavail*uint64(stat.Bsize)) / 1e9
 	}
-	row := append([]float64(nil), cpuPct...)
-	if len(row) == 0 && len(teleHistCores) > 0 {
-		row = append([]float64(nil), teleHistCores[len(teleHistCores)-1]...)
-	}
-	teleHistCores = append(teleHistCores, row)
+	ramApp := ramMB(os.Getpid(), "VmRSS")
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	teleHistCores = append(teleHistCores, cores)
 	teleHistT = append(teleHistT, time.Now().Unix())
 	teleHistCPU = append(teleHistCPU, avg)
-	teleHistRAMApp = append(teleHistRAMApp, ramMB(os.Getpid(), "VmRSS"))
+	teleHistRAMApp = append(teleHistRAMApp, ramApp)
 	teleHistRAMSys = append(teleHistRAMSys, sysUsed)
 	teleHistTemp = append(teleHistTemp, temp)
 	teleHistDisk = append(teleHistDisk, diskFree)
