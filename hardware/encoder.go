@@ -90,6 +90,11 @@ func (e *Encoder) readEncoder() {
 	currentA := e.pinA.Read()
 	currentB := e.pinB.Read()
 
+	// Fields below are also touched by GetPosition/handleRotation under
+	// e.mutex - hold it here too (race). Decide under lock, act outside:
+	// handleRotation takes e.mutex itself.
+	e.mutex.Lock()
+	dir := 0
 	if currentA != e.lastA {
 		if currentA == gpio.Low {
 			// Falling edge on A. Mechanical contact bounce on EC11-style
@@ -102,10 +107,10 @@ func (e *Encoder) readEncoder() {
 			if time.Since(e.lastRotationTime) >= 5*time.Millisecond {
 				if currentB == gpio.Low {
 					// B is also low, clockwise
-					e.handleRotation(1)
+					dir = 1
 				} else {
 					// B is high, counter-clockwise
-					e.handleRotation(-1)
+					dir = -1
 				}
 				e.lastRotationTime = time.Now()
 			}
@@ -114,6 +119,11 @@ func (e *Encoder) readEncoder() {
 
 	e.lastA = currentA
 	e.lastB = currentB
+	e.mutex.Unlock()
+
+	if dir != 0 {
+		e.handleRotation(dir)
+	}
 }
 
 // buttonDebounce is the settling window applied to the encoder's push-switch.
