@@ -2819,3 +2819,44 @@ func TestDemoSystemOptionsToggle(t *testing.T) {
 	}
 	demoMode = origDemoMode
 }
+
+// TestMeterDeckFlagsDriveReelAnimation locks the contract the reel-to-reel
+// deck animation keys on: applyMeter spins the reels iff the meter payload
+// reports recording||playing. If these flags ever lie, the deck sits frozen
+// mid-take with no error anywhere.
+func TestMeterDeckFlagsDriveReelAnimation(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	origRec, origState, origStart := isRecording, currentState, recordStart
+	isRecording = true
+	currentState = StateRecording
+	recordStart = time.Now().Add(-time.Second)
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		isRecording, currentState, recordStart = origRec, origState, origStart
+		mutex.Unlock()
+	})
+
+	resp := currentMeterResponse()
+	if !resp.Recording || resp.Playing || resp.Paused {
+		t.Fatalf("take flags wrong: recording=%v playing=%v paused=%v (deck needs recording=true)",
+			resp.Recording, resp.Playing, resp.Paused)
+	}
+	if resp.Elapsed == "" {
+		t.Fatal("take must report elapsed time for the head display")
+	}
+
+	// Template wiring: the static markup/JS must carry the hooks applyMeter
+	// toggles, else a rename silently freezes the deck.
+	var buf bytes.Buffer
+	if err := dashboardTmpl.Execute(&buf, dashboardData{}); err != nil {
+		t.Fatalf("dashboard render: %v", err)
+	}
+	page := buf.String()
+	for _, want := range []string{`class="reel-g"`, `id="tapePath"`, `classList.toggle('spinning'`, `classList.toggle('active'`, `@keyframes spin`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("dashboard missing deck-animation hook %q", want)
+		}
+	}
+}
