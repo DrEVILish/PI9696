@@ -47,6 +47,9 @@ LimitNPROC=4096
 Environment=HOME=/root
 Environment=USER=root
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Per-host overrides (e.g. PI9696_SIM=1 on a dev box without SPI/GPIO).
+# The leading dash makes the file optional: the unit still starts when absent.
+EnvironmentFile=-__PI9696_DIR__/.env
 
 # Logging
 StandardOutput=journal
