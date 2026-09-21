@@ -160,6 +160,9 @@ func TestThemePostSwapsStylesheetOutOfBand(t *testing.T) {
 		!strings.Contains(body, `hx-swap-oob="outerHTML"`) {
 		t.Errorf("expected an OOB stylesheet swap, got:\n%s", body)
 	}
+	if !strings.Contains(body, `teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null`) {
+		t.Error("theme swap should drop charts so the next push rebuilds them in the new palette")
+	}
 	if themeSlug != "lcars" {
 		t.Errorf("themeSlug = %q, want lcars", themeSlug)
 	}

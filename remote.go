@@ -629,7 +629,10 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 			href = fmt.Sprintf(" href=%q", "/static/themes/"+active+".css")
 		}
 		fmt.Fprintf(w, "\n<link id=\"themecss\" rel=\"stylesheet\"%s hx-swap-oob=\"outerHTML\">", href)
-		fmt.Fprintf(w, "\n<script>document.documentElement.setAttribute(\"data-theme\",%q)</script>", active)
+		// Charts snapshot the palette at creation (see telePaletteInit), so
+		// drop them: the next telemetry push (<=2s) rebuilds them in the new
+		// theme's colors instead of keeping stale ones until a reload.
+		fmt.Fprintf(w, "\n<script>document.documentElement.setAttribute(\"data-theme\",%q);teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null</script>", active)
 	}
 }
 
