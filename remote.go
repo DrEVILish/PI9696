@@ -2465,6 +2465,14 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if activeTheme != themeNone {
 		activeThemeCSS = "/static/themes/" + activeTheme + ".css"
 	}
+	// ?preview=<slug> renders a theme for this browser only, without
+	// persisting it: try-before-apply on shared hardware, where selecting
+	// rewrites the unit's look for every browser. Unknown slugs fall back
+	// to the persisted theme, never to an error page.
+	if pv := r.URL.Query().Get("preview"); isKnownTheme(pv) {
+		activeTheme = pv
+		activeThemeCSS = "/static/themes/" + pv + ".css"
+	}
 
 	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf bytes.Buffer
 	selectFragmentTmpl.Execute(&vuBuf, vuRangeSelect())
