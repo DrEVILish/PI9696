@@ -211,3 +211,27 @@ func TestLoginPageCarriesActiveTheme(t *testing.T) {
 		t.Error("login page should link the active theme bundle")
 	}
 }
+
+func TestDashboardCarriesAppShell(t *testing.T) {
+	mux := newRemoteMux()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(sessionCookie(t, mux))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	// Shell slots (ftl-themes#3): dual-classed so the built-in look keeps
+	// matching its own selectors while layout themes gain regions.
+	for _, want := range []string{
+		`<body class="ftl-app">`,
+		`class="deck ftl-app-bar"`,
+		`<aside class="ftl-app-rail" aria-hidden="true"></aside>`,
+		`<main class="ftl-app-main">`,
+		`class="meter-footer ftl-app-status"`,
+		`main.ftl-app-main{display:contents}`,
+		`.ftl-app-rail:empty{display:none}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard missing shell hook %q", want)
+		}
+	}
+}
