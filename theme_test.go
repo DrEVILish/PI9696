@@ -235,3 +235,34 @@ func TestDashboardCarriesAppShell(t *testing.T) {
 		}
 	}
 }
+
+func TestPreviewRendersWithoutPersisting(t *testing.T) {
+	defer func() { themeSlug = themeNone }()
+	themeSlug = themeNone
+	mux := newRemoteMux()
+	cookie := sessionCookie(t, mux)
+
+	get := func(target string) string {
+		req := httptest.NewRequest("GET", target, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d", target, rr.Code)
+		}
+		return rr.Body.String()
+	}
+
+	body := get("/?preview=blue-future")
+	if !strings.Contains(body, `<html data-theme="blue-future">`) ||
+		!strings.Contains(body, `href="/static/themes/blue-future.css"`) {
+		t.Error("preview should render the requested bundle")
+	}
+	if themeSlug != themeNone {
+		t.Errorf("preview must not persist: themeSlug = %q", themeSlug)
+	}
+	body = get("/?preview=nope")
+	if !strings.Contains(body, `<html data-theme="none">`) {
+		t.Error("unknown preview slug should fall back to the persisted theme")
+	}
+}
