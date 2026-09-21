@@ -177,3 +177,37 @@ func TestThemePostSwapsStylesheetOutOfBand(t *testing.T) {
 		t.Errorf("themeSlug = %q, want %q", themeSlug, themeNone)
 	}
 }
+
+func TestLoginPageCarriesActiveTheme(t *testing.T) {
+	defer func() { themeSlug = themeNone }()
+	mux := newRemoteMux()
+
+	// Unthemed: marker "none", no theme stylesheet.
+	themeSlug = themeNone
+	req := httptest.NewRequest("GET", "/login", nil)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	if !strings.Contains(body, `<html data-theme="none">`) {
+		t.Error("login page should carry data-theme=none when unthemed")
+	}
+	if strings.Contains(body, `/static/themes/`) {
+		t.Error("login page must not link a theme stylesheet when unthemed")
+	}
+
+	// Themed: marker + bundle link, so --ftl-* tokens the page reads resolve.
+	themeSlug = "blue-future"
+	if currentTheme() != "blue-future" {
+		t.Skip("blue-future bundle not embedded (submodule uninitialized?)")
+	}
+	req = httptest.NewRequest("GET", "/login", nil)
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	body = rr.Body.String()
+	if !strings.Contains(body, `<html data-theme="blue-future">`) {
+		t.Error("login page should carry the active theme marker")
+	}
+	if !strings.Contains(body, `href="/static/themes/blue-future.css"`) {
+		t.Error("login page should link the active theme bundle")
+	}
+}

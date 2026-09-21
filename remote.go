@@ -345,11 +345,29 @@ func handleManifest(w http.ResponseWriter, r *http.Request) {
 type loginPageData struct {
 	Error, DeviceName string
 	Logo              template.HTML
+	// Theme/ThemeCSS mirror the dashboard's opt-in theming so the login
+	// page is the same product, not a stranger: data-theme scopes the
+	// --ftl-* tokens (e.g. --ftl-font) the stylesheet reads. Unthemed
+	// renders exactly as before (no marker beyond "none", no href).
+	Theme, ThemeCSS string
+}
+
+// loginPageTheme returns the dashboard's active theme for the login page.
+func loginPageTheme() (string, string) {
+	active := currentTheme()
+	css := ""
+	if active != themeNone {
+		css = "/static/themes/" + active + ".css"
+	}
+	return active, css
 }
 
 var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
-<html><head><title>{{.DeviceName}} Remote</title>
+<html data-theme="{{.Theme}}"><head><title>{{.DeviceName}} Remote</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+{{if .ThemeCSS}}<link rel="stylesheet" href="{{.ThemeCSS}}">{{end}}
 <style>
 body{font-family:var(--ftl-font,"Consolas",monospace);background:radial-gradient(ellipse at center,#0a1a2e,#020509 75%);color:#cfeeff;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
 .logo-svg{width:480px;max-width:85vw;display:block}
@@ -429,7 +447,8 @@ func handleLoginGet(w http.ResponseWriter, r *http.Request) {
 	name := deviceName
 	lastLoginPage = time.Now()
 	mutex.Unlock()
-	loginPageTmpl.Execute(w, loginPageData{DeviceName: name, Logo: template.HTML(pi9696LogoSVG)})
+	theme, css := loginPageTheme()
+	loginPageTmpl.Execute(w, loginPageData{DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css})
 }
 
 func handleLoginPost(w http.ResponseWriter, r *http.Request) {
@@ -439,7 +458,8 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !loginLimit.allowed(ip) {
 		w.WriteHeader(http.StatusTooManyRequests)
-		loginPageTmpl.Execute(w, loginPageData{Error: "Too many attempts, wait a minute", DeviceName: name, Logo: template.HTML(pi9696LogoSVG)})
+		theme, css := loginPageTheme()
+		loginPageTmpl.Execute(w, loginPageData{Error: "Too many attempts, wait a minute", DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css})
 		return
 	}
 
@@ -447,7 +467,8 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(submitted), []byte(remoteToken)) != 1 {
 		loginLimit.recordFailure(ip)
 		w.WriteHeader(http.StatusUnauthorized)
-		loginPageTmpl.Execute(w, loginPageData{Error: "Invalid token", DeviceName: name, Logo: template.HTML(pi9696LogoSVG)})
+		theme, css := loginPageTheme()
+		loginPageTmpl.Execute(w, loginPageData{Error: "Invalid token", DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css})
 		return
 	}
 
