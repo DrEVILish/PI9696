@@ -2309,7 +2309,24 @@ function connectMeterSocket() {
 // Charts appear once 2+ samples exist. Missing uPlot file degrades to the
 // collecting placeholder.
 var teleCPU = null, teleRAM = null, teleTemp = null, teleDisk = null;
-var telePalette = ['#00d9ff', '#2bffb0', '#ff8c1a', '#ff3355', '#5b8aa8', '#cfeeff'];
+// teleCSS reads a bridge token's resolved value so charts follow the active
+// theme (none-case: the :root literal; themed: the theme's value through the
+// bridge). Falls back to the literal when tokens are unavailable.
+function teleCSS(name, fallback) {
+  try {
+    var v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return v || fallback;
+  } catch (e) { return fallback; }
+}
+var telePalette = null; // built lazily at chart init, after styles resolve
+function telePaletteInit() {
+  if (!telePalette) telePalette = [
+    teleCSS('--glow', '#00d9ff'), teleCSS('--idle', '#2bffb0'),
+    teleCSS('--orange', '#ff8c1a'), teleCSS('--rec', '#ff3355'),
+    teleCSS('--dim', '#5b8aa8'), teleCSS('--text', '#cfeeff')
+  ];
+  return telePalette;
+}
 // uPlot's built-in time axis is 12h + am/pm; the unit standard is 24h.
 function teleTimeValues(self, ticks) {
   function p(n) { return (n < 10 ? '0' : '') + n; }
@@ -2319,14 +2336,16 @@ function teleTimeValues(self, ticks) {
   });
 }
 function teleOpts(extraSeries, ymin, ymax, h) {
+  var dim = teleCSS('--dim', '#5b8aa8');
+  var font = '9px ' + teleCSS('--ftl-font', 'Consolas,monospace');
   var o = {
     width: 300, height: h || 90,
     series: [{}].concat(extraSeries),
     cursor: {show: false},
     legend: {show: true},
     axes: [
-      {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}, values: teleTimeValues},
-      {stroke: '#5b8aa8', font: '9px Consolas,monospace', grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}}
+      {stroke: dim, font: font, grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}, values: teleTimeValues},
+      {stroke: dim, font: font, grid: {stroke: 'rgba(0,217,255,0.12)', width: 1}}
     ]
   };
   if (ymin !== null) o.scales = {y: {range: [ymin, ymax]}};
@@ -2347,18 +2366,19 @@ function initTeleCharts(ncores) {
   if (!cpuEl || !ramEl || !tempEl || !diskEl) return false;
   cpuEl.innerHTML = ''; ramEl.innerHTML = ''; tempEl.innerHTML = ''; diskEl.innerHTML = '';
   var cpuSeries = [];
+  var pal = telePaletteInit();
   for (var i = 0; i < ncores; i++) {
-    cpuSeries.push({label: 'CPU' + i, stroke: telePalette[i % telePalette.length], width: 1.5});
+    cpuSeries.push({label: 'CPU' + i, stroke: pal[i % pal.length], width: 1.5});
   }
   var dummy = [[0, 1]];
   for (var i = 0; i < ncores; i++) dummy.push([0, 0]);
   teleCPU = new uPlot(teleOpts(cpuSeries, 0, 100, 90), dummy, cpuEl);
   teleRAM = new uPlot(teleOpts([
-    {label: 'App MB', stroke: '#00d9ff', width: 1.5, fill: 'rgba(0,217,255,0.10)'},
-    {label: 'Sys MB', stroke: '#ff8c1a', width: 1.5}
+    {label: 'App MB', stroke: pal[0], width: 1.5, fill: 'rgba(0,217,255,0.10)'},
+    {label: 'Sys MB', stroke: pal[2], width: 1.5}
   ], null, null, 90), [[0, 1], [0, 0], [0, 0]], ramEl);
-  teleTemp = new uPlot(teleOpts([{label: 'Temp C', stroke: '#ff8c1a', width: 1.5}], null, null, 56), [[0, 1], [0, 0]], tempEl);
-  teleDisk = new uPlot(teleOpts([{label: 'Free GB', stroke: '#2bffb0', width: 1.5}], 0, null, 56), [[0, 1], [0, 0]], diskEl);
+  teleTemp = new uPlot(teleOpts([{label: 'Temp C', stroke: pal[2], width: 1.5}], null, null, 56), [[0, 1], [0, 0]], tempEl);
+  teleDisk = new uPlot(teleOpts([{label: 'Free GB', stroke: pal[1], width: 1.5}], 0, null, 56), [[0, 1], [0, 0]], diskEl);
   teleSize(teleCPU, cpuEl, 90); teleSize(teleRAM, ramEl, 90);
   teleSize(teleTemp, tempEl, 56); teleSize(teleDisk, diskEl, 56);
   window.addEventListener('resize', function() {
