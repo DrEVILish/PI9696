@@ -266,3 +266,24 @@ func TestPreviewRendersWithoutPersisting(t *testing.T) {
 		t.Error("unknown preview slug should fall back to the persisted theme")
 	}
 }
+
+func TestLayoutBridgeKeepsBuiltInGeometry(t *testing.T) {
+	themeSlug = themeNone
+	mux := newRemoteMux()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(sessionCookie(t, mux))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	// Layout bridge: identical-fallback vars themes may turn. Unthemed,
+	// every fallback is the long-standing geometry.
+	for _, want := range []string{
+		`grid-template-columns:var(--pi-columns,1fr 1.6fr 1fr)`,
+		`gap:var(--pi-gap,1.2em)`,
+		`flex-direction:var(--pi-deck-dir,row)`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("layout bridge lost %q", want)
+		}
+	}
+}
