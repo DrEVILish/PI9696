@@ -1499,22 +1499,24 @@ main.ftl-app-main{display:contents}
 .r2r{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
 .r2r .plate{fill:url(#deckBg)}
 .r2r .plate-bezel{fill:none;stroke:rgba(0,217,255,0.28);stroke-width:1.5}
-.r2r .plate-screw{fill:#0d1c31;stroke:rgba(0,217,255,0.35);stroke-width:1}
+.r2r .plate-screw{fill:var(--ftl-deck-well,#0d1c31);stroke:rgba(0,217,255,0.35);stroke-width:1}
 .r2r .deck-grid{fill:none;stroke:rgba(15,58,92,0.55);stroke-width:1}
 .r2r .deck-corner{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.45}
 /* Reels: a near-black engineering-grade flange disc (gradient so the face
    reads as machined metal rather than flat), with a thin trim ring that
    lights up as the reel spins, faint tape windings and a bright hub. Only
    the inner spindle group (.reel-spin) rotates so the winding looks like
-   it's turning while the plate and take-off point stay put. */
-.r2r .reel-disc{fill:#112842;stroke:#1d5c8f;stroke-width:2}
-.r2r .reel-ring{fill:none;stroke:#1d5c8f;stroke-width:1.5}
+   it's turning while the plate and take-off point stay put. Flat fills go
+   through --ftl-deck-* (fallbacks = the reference values) so layout themes
+   can reskin the metalwork; glow accents stay on --glow. */
+.r2r .reel-disc{fill:var(--ftl-deck-face,#112842);stroke:var(--ftl-deck-trim,#1d5c8f);stroke-width:2}
+.r2r .reel-ring{fill:none;stroke:var(--ftl-deck-trim,#1d5c8f);stroke-width:1.5}
 .r2r .reel-g.spinning .reel-ring{stroke:rgba(0,217,255,0.5);filter:drop-shadow(0 0 4px rgba(0,217,255,0.6))}
 .r2r .reel-wind{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.35}
-.r2r .reel-hub{fill:#11304a;stroke:var(--glow);stroke-width:1.5;opacity:0.85}
+.r2r .reel-hub{fill:var(--ftl-deck-hub,#11304a);stroke:var(--glow);stroke-width:1.5;opacity:0.85}
 .r2r .reel-g.spinning .reel-hub{fill:var(--glow);filter:drop-shadow(0 0 5px rgba(0,217,255,0.6))}
-.r2r .reel-center{fill:#071729}
-.r2r .reel-spoke{fill:#16345c;stroke:rgba(0,217,255,0.5);stroke-width:1.2}
+.r2r .reel-center{fill:var(--ftl-deck-well,#071729)}
+.r2r .reel-spoke{fill:var(--ftl-deck-spoke,#16345c);stroke:rgba(0,217,255,0.5);stroke-width:1.2}
 .r2r .reel-g.spinning .reel-spoke{stroke:rgba(0,217,255,0.75)}
 .r2r .reel-spin{transform-box:fill-box;transform-origin:center}
 .r2r .reel-g.spinning .reel-spin{animation:spin 2.2s linear infinite}
@@ -1525,12 +1527,12 @@ main.ftl-app-main{display:contents}
    tape depth; one stroked path carries the travelling pulse (dash animation)
    from supply reel, over the head, to the take-up reel exactly like real
    tape. */
-.r2r .tape-shadow{fill:none;stroke:#04121f;stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.9}
-.r2r .tape{fill:none;stroke:#14507e;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.8}
+.r2r .tape-shadow{fill:none;stroke:var(--ftl-deck-shadow,#04121f);stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.9}
+.r2r .tape{fill:none;stroke:var(--ftl-deck-tape,#14507e);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.8}
 .r2r .tape.active{stroke:var(--glow);stroke-width:3;opacity:0.85;stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite;filter:drop-shadow(0 0 5px rgba(0,217,255,0.45))}
 @keyframes tapeflow{to{stroke-dashoffset:-36}}
 /* Guide idlers: lit rims so the tape path reads at a glance. */
-.r2r .guide{fill:#0a1830;stroke:rgba(0,217,255,0.55);stroke-width:1.5}
+.r2r .guide{fill:var(--ftl-deck-well,#0a1830);stroke:rgba(0,217,255,0.55);stroke-width:1.5}
 /* The read/write head block: a chamfered angular castle rising out of the
    tape gap, with glowing trim rails on its mounting cheeks, the red centre
    gap line and the large 7-segment digital time counter in its display
