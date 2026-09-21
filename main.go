@@ -157,6 +157,9 @@ func loadPersistedConfig() {
 	if c.PeakHoldIdx >= 0 && c.PeakHoldIdx < len(peakHoldOptions) {
 		peakHoldIdx = c.PeakHoldIdx
 	}
+	if c.Theme != "" {
+		themeSlug = c.Theme
+	}
 	if c.TransportMode == "icon" || c.TransportMode == "text" {
 		transportMode = c.TransportMode
 	}
@@ -195,6 +198,7 @@ func persistConfig() {
 		VURangeIdx:        vuRangeIdx,
 		PeakHoldIdx:       peakHoldIdx,
 		TransportMode:     transportMode,
+		Theme:             themeSlug,
 		LogLevelIdx:       int(currentLogLevel()),
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
@@ -260,6 +264,7 @@ func exportConfigTo(dir string) error {
 		VURangeIdx:        vuRangeIdx,
 		PeakHoldIdx:       peakHoldIdx,
 		TransportMode:     transportMode,
+		Theme:             themeSlug,
 		LogLevelIdx:       int(currentLogLevel()),
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
@@ -332,6 +337,9 @@ func importConfigFrom(dir string) error {
 	}
 	if c.PeakHoldIdx >= 0 && c.PeakHoldIdx < len(peakHoldOptions) {
 		peakHoldIdx = c.PeakHoldIdx
+	}
+	if c.Theme != "" {
+		themeSlug = c.Theme
 	}
 	if c.TransportMode == "icon" || c.TransportMode == "text" {
 		transportMode = c.TransportMode
@@ -856,6 +864,10 @@ type PersistedConfig struct {
 	VURangeIdx    int    `json:"vuRangeIdx"`
 	PeakHoldIdx   int    `json:"peakHoldIdx"`
 	TransportMode string `json:"transportMode"`
+	// Theme is the web dashboard's ftl-themes slug, or "none"/absent for the
+	// built-in look. Absent in pre-theme configs, which therefore stay on the
+	// built-in look after an upgrade.
+	Theme string `json:"theme,omitempty"`
 	// LogLevelIdx persists the current log threshold (0-3 = Error..Debug).
 	LogLevelIdx int `json:"logLevelIdx"`
 	// OledBrightnessPct holds the display brightness (0-100). Pointer so a
