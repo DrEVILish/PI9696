@@ -1,0 +1,4 @@
+[submodule "third_party/ftl-themes"]
+	path = third_party/ftl-themes
+	url = https://github.com/DrEVILish/ftl-themes
+	branch = claude/theme-engine-v3
