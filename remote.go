@@ -351,7 +351,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <html><head><title>{{.DeviceName}} Remote</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at center,#0a1a2e,#020509 75%);color:#cfeeff;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
+body{font-family:var(--ftl-font,"Consolas",monospace);background:radial-gradient(ellipse at center,#0a1a2e,#020509 75%);color:#cfeeff;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
 .logo-svg{width:480px;max-width:85vw;display:block}
 form{background:#0a1526;padding:2em 3em;border-radius:10px;border:1px solid #0f3a5c;box-shadow:0 0 30px rgba(0,180,255,0.15);text-align:center}
 .token-row{display:flex;align-items:center;justify-content:center;gap:0.4em;margin-bottom:1em}
@@ -478,9 +478,146 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
+// --- Themes ---------------------------------------------------------------
+//
+// The dashboard ships with its own look baked into the inline stylesheet
+// below; a theme from the ftl-themes submodule is an OPT-IN overlay on top
+// of it. With no theme selected (the default, and every existing install
+// after upgrade) nothing extra is linked and the page renders exactly as it
+// did before: the inline :root block's var(--ftl-*, <original value>)
+// fallbacks resolve to the original values because no --ftl-* token exists.
+//
+// Selecting a theme links one self-contained bundle, which defines the
+// --ftl-* tokens and so re-colours every existing rule through those same
+// fallbacks - plus the app shell, which re-lays-out the page.
+
+// themeNone is the slug meaning "no theme file; use the built-in look".
+const themeNone = "none"
+
+// themeSlug names the bundle the dashboard links, or themeNone for the
+// built-in look - the default, so an upgraded unit keeps rendering exactly
+// as it did. Persisted in the unit's config like every other setting, so the
+// choice follows the device rather than one browser. Guarded by mutex.
+var themeSlug = themeNone
+
+// themeManifest mirrors ftl-themes' dist/themes.json entries.
+type themeManifest struct {
+	Slug        string `json:"slug"`
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+// themeAssetPath maps a path inside the submodule to its embed path.
+func themeAssetPath(rel string) string { return "third_party/ftl-themes/" + rel }
+
+var (
+	themeListOnce sync.Once
+	themeList     []themeManifest
+)
+
+// availableThemes reads the embedded manifest once. The "none" entry is
+// synthesised: it is this device's own look, not one of ftl-themes'.
+func availableThemes() []themeManifest {
+	themeListOnce.Do(func() {
+		themeList = []themeManifest{{Slug: themeNone, Label: "Built-in", Description: "The unit's own look"}}
+		data, err := embeddedThemes.ReadFile(themeAssetPath("dist/themes.json"))
+		if err != nil {
+			logWarnf("theme manifest unreadable: %v", err)
+			return
+		}
+		var parsed []themeManifest
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			logWarnf("theme manifest unparseable: %v", err)
+			return
+		}
+		themeList = append(themeList, parsed...)
+	})
+	return themeList
+}
+
+// isKnownTheme reports whether a slug names a bundle that is actually
+// embedded. Guards the static route and any persisted value.
+func isKnownTheme(slug string) bool {
+	if slug == "" || slug == themeNone {
+		return false
+	}
+	for _, t := range availableThemes() {
+		if t.Slug == slug && t.Slug != themeNone {
+			return true
+		}
+	}
+	return false
+}
+
+// currentTheme returns the active slug, or themeNone. Caller holds no lock.
+func currentTheme() string {
+	mutex.Lock()
+	defer mutex.Unlock()
+	if !isKnownTheme(themeSlug) {
+		return themeNone
+	}
+	return themeSlug
+}
+
+func themeOptionsView() optionsView {
+	all := availableThemes()
+	opts := make([]string, 0, len(all))
+	idx := 0
+	active := currentTheme()
+	for i, t := range all {
+		opts = append(opts, t.Label)
+		if t.Slug == active {
+			idx = i
+		}
+	}
+	return optionsView{Options: opts, Idx: idx}
+}
+
+func themeSelect() selectView {
+	return settingSelect("theme", "/api/settings/theme", "Theme", "", themeOptionsView)
+}
+
+// handleAPISettingsTheme persists the chosen theme and tells the page to
+// swap its stylesheet. The theme lives in the unit's config beside every
+// other setting, so it follows the device rather than the browser - the
+// front panel and the web UI share one state, as they do for brightness.
+func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
+	changed := false
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+		all := availableThemes()
+		if idx >= 0 && idx < len(all) {
+			mutex.Lock()
+			if themeSlug != all[idx].Slug {
+				themeSlug = all[idx].Slug
+				changed = true
+				settingChanged()
+			}
+			mutex.Unlock()
+		}
+	}
+	selectFragmentTmpl.Execute(w, themeSelect())
+	if changed {
+		// Out-of-band swap of the <link> and the <html data-theme> marker so
+		// the change is visible immediately, without a reload that would lose
+		// the live meter and telemetry sockets.
+		active := currentTheme()
+		// No href attribute at all when unthemed: href="" would resolve to the
+		// dashboard's own URL and the browser would fetch the page as CSS.
+		href := ""
+		if active != themeNone {
+			href = fmt.Sprintf(" href=%q", "/static/themes/"+active+".css")
+		}
+		fmt.Fprintf(w, "\n<link id=\"themecss\" rel=\"stylesheet\"%s hx-swap-oob=\"outerHTML\">", href)
+		fmt.Fprintf(w, "\n<script>document.documentElement.setAttribute(\"data-theme\",%q)</script>", active)
+	}
+}
+
 type dashboardData struct {
 	DeviceName           string
 	Logo                 template.HTML
+	Theme                string
+	ThemeCSS             string
+	ThemeFragment        template.HTML
 	VURangeFragment      template.HTML
 	PeakHoldFragment     template.HTML
 	SampleRateFragment   template.HTML
@@ -1105,7 +1242,7 @@ func handleAPIConfigImport(w http.ResponseWriter, r *http.Request) {
 // Status/config/recordings (read-only info) sit in the three-column body;
 // the reel transport follows it and the level meters stay pinned to the footer.
 var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE html>
-<html><head><title>{{.DeviceName}} Remote</title>
+<html data-theme="{{.Theme}}"><head><title>{{.DeviceName}} Remote</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -1117,7 +1254,14 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 <link rel="stylesheet" href="/static/uPlot.min.css">
 <script src="/static/uPlot.iife.min.js"></script>
 <style>
-:root{--glow:#00d9ff;--panel:#0a1526;--border:#0f3a5c;--text:#cfeeff;--dim:#5b8aa8;--rec:#ff3355;--idle:#2bffb0;--orange:#ff8c1a;--meter-h:120px}
+/* Theme bridge: each built-in variable reads its ftl-themes token and
+   falls back to the value it has always had. With no theme linked no
+   --ftl-* token exists, every fallback applies, and the dashboard is
+   byte-identical to before. With a theme linked, every rule below
+   re-colours through these same names - no rule needed editing.
+   --meter-h and the JS-set --vu-* stay app-owned: they are geometry
+   and live signal data, not theming. */
+:root{--glow:var(--ftl-accent,#00d9ff);--panel:var(--ftl-surface,#0a1526);--border:var(--ftl-border,#0f3a5c);--text:var(--ftl-text,#cfeeff);--dim:var(--ftl-muted,#5b8aa8);--rec:var(--ftl-danger,#ff3355);--idle:var(--ftl-success,#2bffb0);--orange:var(--ftl-warning,#ff8c1a);--meter-h:120px}
 *{box-sizing:border-box}
 body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,#0a1a2e,#020509 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
 h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 0.8em}
@@ -1481,7 +1625,12 @@ body.meters-collapsed{padding-bottom:4em}
 .wifi-qr-row{display:flex;align-items:center;gap:1em;flex-wrap:wrap}
 .wifi-qr-info p{margin:0.2em 0;font-size:0.85em}
 .wifi-qr-img img{width:180px;height:180px;image-rendering:pixelated;border:1px solid var(--border);border-radius:4px}
-</style></head>
+/* Only when a theme is active: let the theme's own page background show
+   through instead of the built-in gradient. With data-theme="none" this
+   selector never matches and the dashboard paints exactly as before. */
+html[data-theme]:not([data-theme="none"]) body{background:transparent}
+</style>
+<link id="themecss" rel="stylesheet"{{if .ThemeCSS}} href="{{.ThemeCSS}}"{{end}}></head>
 <body>
 
 <header class="deck">
@@ -1700,6 +1849,7 @@ body.meters-collapsed{padding-bottom:4em}
 
       <section class="settings-group">
         <h3 class="settings-group-title">Display</h3>
+        {{.ThemeFragment}}
         {{.BrightnessFragment}}
         {{.AutoDimFragment}}
       </section>
@@ -2251,7 +2401,13 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	transportIcon := transportMode != "text"
 	mutex.Unlock()
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf bytes.Buffer
+	activeTheme := currentTheme()
+	activeThemeCSS := ""
+	if activeTheme != themeNone {
+		activeThemeCSS = "/static/themes/" + activeTheme + ".css"
+	}
+
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf bytes.Buffer
 	selectFragmentTmpl.Execute(&vuBuf, vuRangeSelect())
 	selectFragmentTmpl.Execute(&holdBuf, peakHoldSelect())
 	selectFragmentTmpl.Execute(&srBuf, sampleRateSelect())
@@ -2260,6 +2416,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	filePrefixFragmentTmpl.Execute(&prefixBuf, filePrefixView())
 	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
 	selectFragmentTmpl.Execute(&logLevelBuf, logLevelSelect())
+	selectFragmentTmpl.Execute(&themeBuf, themeSelect())
 	brightnessFragmentTmpl.Execute(&brightnessBuf, brightnessViewData())
 	autoDimFragmentTmpl.Execute(&autoDimBuf, autoDimViewData())
 	demoFragmentTmpl.Execute(&demoBuf, demoViewData())
@@ -2278,6 +2435,8 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	dashboardTmpl.Execute(w, dashboardData{
 		DeviceName:           name,
 		Logo:                 template.HTML(pi9696LogoSVG),
+		Theme:                activeTheme,
+		ThemeCSS:             activeThemeCSS,
 		VURangeFragment:      template.HTML(vuBuf.String()),
 		PeakHoldFragment:     template.HTML(holdBuf.String()),
 		SampleRateFragment:   template.HTML(srBuf.String()),
@@ -2286,6 +2445,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		PrefixFragment:       template.HTML(prefixBuf.String()),
 		TransportFragment:    template.HTML(transportBuf.String()),
 		LogLevelFragment:     template.HTML(logLevelBuf.String()),
+		ThemeFragment:        template.HTML(themeBuf.String()),
 		BrightnessFragment:   template.HTML(brightnessBuf.String()),
 		AutoDimFragment:      template.HTML(autoDimBuf.String()),
 		MonitorFragment:      template.HTML(monitorBuf.String()),
@@ -3103,9 +3263,21 @@ func writeRecordingZip(dst io.Writer, base string, files []string) error {
 //go:embed web/htmax.min.js web/uPlot.iife.min.js web/uPlot.min.css
 var embeddedWeb embed.FS
 
-// serveEmbeddedStatic serves a pinned vendored asset with immutable caching.
-func serveEmbeddedStatic(w http.ResponseWriter, r *http.Request, path, contentType string) {
-	data, err := embeddedWeb.ReadFile(path)
+// Theme bundles come from the ftl-themes submodule rather than web/: they are
+// version-pinned with the repo instead of downloaded at install time, so the
+// dashboard cannot end up serving a theme that disagrees with this binary.
+// Each dist/<slug>.css is self-contained (reset + components + app shell +
+// theme); the fonts sit alongside because a bundle references them as
+// ../assets/fonts/... relative to its own served path.
+//
+//go:embed third_party/ftl-themes/dist/*.css third_party/ftl-themes/dist/themes.json third_party/ftl-themes/assets/fonts/*.woff2
+var embeddedThemes embed.FS
+
+// serveEmbeddedStatic serves a pinned vendored asset with immutable caching,
+// from whichever embedded set holds it (web/ for the vendored JS/CSS,
+// third_party/ for the theme bundles and their fonts).
+func serveEmbeddedStatic(w http.ResponseWriter, r *http.Request, src embed.FS, path, contentType string) {
+	data, err := src.ReadFile(path)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -3133,6 +3305,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/vu-range", requireAuth(handleAPISettingsVURange))
 	mux.HandleFunc("POST /api/settings/peak-hold", requireAuth(handleAPISettingsPeakHold))
 	mux.HandleFunc("POST /api/settings/log-level", requireAuth(handleAPISettingsLogLevel))
+	mux.HandleFunc("POST /api/settings/theme", requireAuth(handleAPISettingsTheme))
 	mux.HandleFunc("POST /api/settings/brightness", requireAuth(handleAPISettingsBrightness))
 	mux.HandleFunc("POST /api/settings/dim", requireAuth(handleAPISettingsAutoDim))
 	mux.HandleFunc("POST /api/settings/demo", requireAuth(handleAPISettingsDemoMode))
@@ -3170,13 +3343,37 @@ func newRemoteMux() *http.ServeMux {
 	// relative web/ path 404d everything outside the service's
 	// WorkingDirectory); immutable cache headers since the bytes are pinned.
 	mux.HandleFunc("GET /static/htmax.min.js", func(w http.ResponseWriter, r *http.Request) {
-		serveEmbeddedStatic(w, r, "web/htmax.min.js", "text/javascript")
+		serveEmbeddedStatic(w, r, embeddedWeb, "web/htmax.min.js", "text/javascript")
 	})
 	mux.HandleFunc("GET /static/uPlot.iife.min.js", func(w http.ResponseWriter, r *http.Request) {
-		serveEmbeddedStatic(w, r, "web/uPlot.iife.min.js", "text/javascript")
+		serveEmbeddedStatic(w, r, embeddedWeb, "web/uPlot.iife.min.js", "text/javascript")
 	})
 	mux.HandleFunc("GET /static/uPlot.min.css", func(w http.ResponseWriter, r *http.Request) {
-		serveEmbeddedStatic(w, r, "web/uPlot.min.css", "text/css")
+		serveEmbeddedStatic(w, r, embeddedWeb, "web/uPlot.min.css", "text/css")
+	})
+
+	// Theme bundles and their fonts, served as siblings (/static/themes/x.css
+	// resolves ../assets/fonts/... to /static/assets/fonts/...), which is the
+	// layout ftl-themes' CONTRACT.md requires. Only a slug that exists in the
+	// embedded set is served, so a stale or hand-typed slug 404s rather than
+	// escaping the embed with a traversal.
+	// A ServeMux wildcard must span a whole path segment, so the ".css" is
+	// matched here rather than in the pattern.
+	mux.HandleFunc("GET /static/themes/{file}", func(w http.ResponseWriter, r *http.Request) {
+		slug, ok := strings.CutSuffix(r.PathValue("file"), ".css")
+		if !ok || !isKnownTheme(slug) {
+			http.NotFound(w, r)
+			return
+		}
+		serveEmbeddedStatic(w, r, embeddedThemes, themeAssetPath("dist/"+slug+".css"), "text/css")
+	})
+	mux.HandleFunc("GET /static/assets/fonts/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if !strings.HasSuffix(name, ".woff2") || strings.ContainsAny(name, "/\\") {
+			http.NotFound(w, r)
+			return
+		}
+		serveEmbeddedStatic(w, r, embeddedThemes, themeAssetPath("assets/fonts/"+name), "font/woff2")
 	})
 
 	return mux
