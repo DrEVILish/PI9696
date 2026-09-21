@@ -1376,6 +1376,14 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 
 .grid{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:1.2em}
 
+/* ftl-app shell none-case (ftl-themes#3): with no theme linked these hooks
+   must generate zero boxes, so the built-in look renders exactly as before
+   the shell existed. display:contents dissolves the wrapper (children lay
+   out against body as they always did); the decorative rail is always empty
+   in this app, so it never displays. Linked themes override both. */
+main.ftl-app-main{display:contents}
+.ftl-app-rail:empty{display:none}
+
 .recordings-section{padding:0 1.2em 1.2em}
 .recordings-section h2{margin:1.2em 0 0.6em;font-size:1.1em;letter-spacing:0.05em}
 .recordings-table{width:100%;border-collapse:collapse;font-size:0.85em}
@@ -1652,9 +1660,13 @@ body.meters-collapsed{padding-bottom:4em}
 html[data-theme]:not([data-theme="none"]) body{background:transparent}
 </style>
 <link id="themecss" rel="stylesheet"{{if .ThemeCSS}} href="{{.ThemeCSS}}"{{end}}></head>
-<body>
+<body class="ftl-app">
 
-<header class="deck">
+<!-- ftl-app shell (ftl-themes#3): dual-classed regions so layout themes can
+     arrange the page while the built-in look (no theme linked) renders
+     exactly as before - the app's own selectors keep matching, and the
+     none-case rules below neutralize the new hooks. -->
+<header class="deck ftl-app-bar">
   <div class="deck-logo">{{.Logo}}</div>
   <div class="oled-frame"><img id="oled" src="/api/display.png" alt="OLED display" onerror="if(!this.dataset.r){this.dataset.r=1;location.reload()}"></div>
   <div class="encoder-row">
@@ -1676,6 +1688,9 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
   </div>
 </header>
 
+<aside class="ftl-app-rail" aria-hidden="true"></aside>
+
+<main class="ftl-app-main">
 <div class="grid">
 
   <div class="panel left">
@@ -1807,8 +1822,9 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
   <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)">Download ALL (.zip)</a></h2>
   <div id="recordings" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
 </div>
+</main>
 
-<footer class="meter-footer" id="meterFooter">
+<footer class="meter-footer ftl-app-status" id="meterFooter">
   <div class="meter-bar">
     <span class="meter-title">Level meters</span>
     <span class="meter-badge" id="meterBadge">--</span>
