@@ -1320,7 +1320,7 @@ th{color:var(--dim);text-transform:uppercase;font-size:0.72em;letter-spacing:0.0
    narrows the whole deck shrinks in BOTH width and height together on one
    row - no overflow, no horizontal scroll - instead of only dropping to a
    small size at one fixed breakpoint. */
-header.deck{position:relative;display:flex;align-items:center;justify-content:center;gap:clamp(0.3em,1.2vw,1.6em);flex-wrap:nowrap;padding:clamp(0.6em,1.2vw,1.2em) clamp(0.5em,2.5vw,5.5em);border-bottom:1px solid var(--border);margin-bottom:1.5em}
+header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row);align-items:center;justify-content:center;gap:clamp(0.3em,1.2vw,1.6em);flex-wrap:nowrap;padding:clamp(0.6em,1.2vw,1.2em) clamp(0.5em,2.5vw,5.5em);border-bottom:1px solid var(--border);margin-bottom:1.5em}
 .deck-logo .logo-svg{width:clamp(0px,11vw,255px)}
 .oled-frame{background:#000;border:2px solid var(--border);border-radius:6px;padding:clamp(3px,0.6vw,8px);display:inline-block;box-shadow:0 0 25px rgba(0,180,255,0.15)}
 .oled-frame img{width:clamp(170px,32vw,440px);height:auto;aspect-ratio:4/1;image-rendering:pixelated;display:block}
@@ -1374,7 +1374,14 @@ header.deck{position:relative;display:flex;align-items:center;justify-content:ce
 .dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:#08192b;border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal}
 .dl-all:hover{border-color:var(--glow)}
 
-.grid{display:grid;grid-template-columns:1fr 1.6fr 1fr;gap:1.2em}
+.grid{display:grid;grid-template-columns:var(--pi-columns,1fr 1.6fr 1fr);gap:var(--pi-gap,1.2em)}
+/* Layout bridge (companion to the :root color bridge above): the structural
+   knobs a layout theme may turn, with the built-in geometry as fallback.
+   Themes set --pi-* under their own scope to reflow the page (e.g. a wall
+   panel stacking to one column); unthemed, every fallback applies and the
+   layout is byte-identical. Deliberately a short list - deck internals,
+   meter footer and modal sheets stay app-owned (see blue-future's
+   stays-app-side section); regions themselves are shell-arranged. */
 
 /* ftl-app shell none-case (ftl-themes#3): with no theme linked these hooks
    must generate zero boxes, so the built-in look renders exactly as before
