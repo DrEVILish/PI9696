@@ -290,3 +290,25 @@ func TestLayoutBridgeKeepsBuiltInGeometry(t *testing.T) {
 		}
 	}
 }
+
+func TestUnknownPersistedThemeFallsBackToNone(t *testing.T) {
+	defer func() { themeSlug = themeNone }()
+	// A theme removed upstream (e.g. winxp-zune) must degrade to the
+	// built-in look, never to a broken page or a stale link.
+	themeSlug = "winxp-zune"
+	if got := currentTheme(); got != themeNone {
+		t.Fatalf("currentTheme() = %q for a removed slug, want %q", got, themeNone)
+	}
+	mux := newRemoteMux()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(sessionCookie(t, mux))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	if !strings.Contains(body, `<html data-theme="none">`) {
+		t.Error("removed persisted theme should render data-theme=none")
+	}
+	if strings.Contains(body, `/static/themes/`) {
+		t.Error("removed persisted theme must not link any bundle")
+	}
+}
