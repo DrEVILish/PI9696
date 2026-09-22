@@ -321,3 +321,29 @@ func TestUnknownPersistedThemeFallsBackToNone(t *testing.T) {
 		t.Error("removed persisted theme must not link any bundle")
 	}
 }
+
+func TestDualClassMarkupPresent(t *testing.T) {
+	themeSlug = themeNone
+	mux := newRemoteMux()
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(sessionCookie(t, mux))
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	body := rr.Body.String()
+	// Dual-class hooks: inert under none (no bundle linked), styled by
+	// the theme bundle whenever one is active. If a hook is dropped from
+	// the markup, that surface silently stops theming.
+	for _, want := range []string{
+		`class="setting-row ftl-field-row"`,
+		`class="btn-primary ftl-btn"`,
+		`class="panel left ftl-panel"`,
+		`class="icon-btn ftl-btn ftl-btn-icon"`,
+		`'transport-row ftl-transport'`,
+		`is-pause`,
+		`is-play`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard lost dual-class hook %q", want)
+		}
+	}
+}
