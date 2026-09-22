@@ -1712,6 +1712,12 @@ func handleConfirmClick() {
 			}
 			deleteAllRecordings()
 		case FormatConfirm:
+			// Same guard as DeleteConfirm: mkfs/umount under a live take,
+			// playback or copy corrupts the media and the copy target.
+			if isRecording || playbackCmd != nil || isCopying {
+				showSysNotice("BUSY - STOP FIRST")
+				break
+			}
 			enqueueSystemOp(opFormatUSB)
 		case ShutdownConfirm:
 			enqueueSystemOp(opShutdown)
