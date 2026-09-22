@@ -1694,9 +1694,11 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
     <button class="icon-btn" id="settingsBtn" type="button" title="Settings">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     </button>
-    <a class="icon-btn" href="/logout" title="Log out">
+    <form action="/logout" method="POST" style="display:inline;margin:0">
+      <button class="icon-btn" title="Log out" aria-label="Log out">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 17l5-5-5-5M21 12H9M12 19H5a2 2 0 01-2-2V7a2 2 0 012-2h7"/></svg>
-    </a>
+      </button>
+    </form>
   </div>
 </header>
 
@@ -3377,7 +3379,12 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("GET /icon.svg", handleIcon)
 	mux.HandleFunc("GET /login", handleLoginGet)
 	mux.HandleFunc("POST /login", handleLoginPost)
-	mux.HandleFunc("GET /logout", handleLogout)
+	mux.HandleFunc("POST /logout", requireAuth(handleLogout))
+	// State change lives on POST (logout-CSRF via top-level navigation);
+	// plain GETs just land back on the dashboard.
+	mux.HandleFunc("GET /logout", requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+	}))
 	mux.HandleFunc("GET /", requireAuth(handleDashboard))
 	mux.HandleFunc("GET /api/status", requireAuth(handleAPIStatus))
 	mux.HandleFunc("GET /api/telemetry", requireAuth(handleAPITelemetry))
