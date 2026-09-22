@@ -22,6 +22,7 @@ type Encoder struct {
 	pressSince       time.Time
 	releasePending   bool
 	releaseSince     time.Time
+	quit             chan struct{}
 	mutex            sync.Mutex
 	callbacks        struct {
 		onRotate func(direction int) // +1 for clockwise, -1 for counter-clockwise
@@ -34,7 +35,7 @@ func NewEncoder() (*Encoder, error) {
 	if simMode() {
 		// No real GPIO on a dev machine; callbacks simply won't fire from
 		// hardware input, but the rest of the app can still run.
-		return &Encoder{position: 0}, nil
+		return &Encoder{position: 0, quit: make(chan struct{})}, nil
 	}
 
 	pinA := gpioreg.ByName("GPIO17")
@@ -68,6 +69,7 @@ func NewEncoder() (*Encoder, error) {
 		lastA:     pinA.Read(),
 		lastB:     pinB.Read(),
 		position:  0,
+		quit:      make(chan struct{}),
 	}
 
 	// Start monitoring goroutine
@@ -80,9 +82,25 @@ func (e *Encoder) monitor() {
 	ticker := time.NewTicker(1 * time.Millisecond)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		e.readEncoder()
-		e.readButton()
+	for {
+		select {
+		case <-e.quit:
+			return
+		case <-ticker.C:
+			e.readEncoder()
+			e.readButton()
+		}
+	}
+}
+
+// Close stops the monitor goroutine and releases the pins.
+func (e *Encoder) Close() {
+	e.mutex.Lock()
+	defer e.mutex.Unlock()
+	select {
+	case <-e.quit:
+	default:
+		close(e.quit)
 	}
 }
 
