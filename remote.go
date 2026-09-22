@@ -383,17 +383,17 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 {{if .ThemeCSS}}<link rel="stylesheet" href="{{.ThemeCSS}}">{{end}}
 <style>
-body{font-family:var(--ftl-font,"Consolas",monospace);background:radial-gradient(ellipse at center,#0a1a2e,#020509 75%);color:#cfeeff;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
+body{font-family:var(--ftl-font,"Consolas",monospace);background:radial-gradient(ellipse at center,var(--ftl-surface,#0a1a2e),var(--ftl-bg,#020509) 75%);color:var(--ftl-text,#cfeeff);display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
 .logo-svg{width:480px;max-width:85vw;display:block}
-form{background:#0a1526;padding:2em 3em;border-radius:10px;border:1px solid #0f3a5c;box-shadow:0 0 30px rgba(0,180,255,0.15);text-align:center}
+form{background:var(--ftl-surface,#0a1526);padding:2em 3em;border-radius:10px;border:1px solid var(--ftl-border,#0f3a5c);box-shadow:var(--ftl-panel-shadow,0 0 30px rgba(0,180,255,0.15));text-align:center}
 .token-row{display:flex;align-items:center;justify-content:center;gap:0.4em;margin-bottom:1em}
-.token-row input{font-family:inherit;font-size:1.3em;width:1.4em;padding:0.4em 0;background:#08192b;color:#cfeeff;border:1px solid #0f3a5c;border-radius:4px;text-align:center;text-transform:uppercase}
-.token-row input:focus{outline:none;border-color:#00d9ff;box-shadow:0 0 8px #00d9ff}
-.token-row .dash{color:#5b8aa8;font-size:1.3em}
-button{font-family:inherit;font-size:1.1em;padding:0.5em 1.2em;background:#08192b;color:#00d9ff;border:1px solid #0f3a5c;border-radius:4px;cursor:pointer}
-button:hover{border-color:#00d9ff;box-shadow:0 0 8px #00d9ff}
-.err{color:#ff3355}
-.hint{color:#5b8aa8;font-size:0.85em;margin-top:1em}
+.token-row input{font-family:inherit;font-size:1.3em;width:1.4em;padding:0.4em 0;background:var(--ftl-input-bg,#08192b);color:var(--ftl-text,#cfeeff);border:1px solid var(--ftl-border,#0f3a5c);border-radius:4px;text-align:center;text-transform:uppercase}
+.token-row input:focus{outline:none;border-color:var(--ftl-accent,#00d9ff);box-shadow:0 0 8px var(--ftl-accent,#00d9ff)}
+.token-row .dash{color:var(--ftl-muted,#5b8aa8);font-size:1.3em}
+button{font-family:inherit;font-size:1.1em;padding:0.5em 1.2em;background:var(--ftl-surface-2,#08192b);color:var(--ftl-accent,#00d9ff);border:1px solid var(--ftl-border,#0f3a5c);border-radius:4px;cursor:pointer}
+button:hover{border-color:var(--ftl-accent,#00d9ff);box-shadow:0 0 8px var(--ftl-accent,#00d9ff)}
+.err{color:var(--ftl-danger,#ff3355)}
+.hint{color:var(--ftl-muted,#5b8aa8);font-size:0.85em;margin-top:1em}
 
 @media (max-width: 480px) {
   form{padding:1.5em 1.2em}
@@ -821,7 +821,7 @@ var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<di
 <form hx-post="/api/settings/brightness" hx-target="#brightness" hx-swap="outerHTML">
 <label for="brightnessRange">Brightness</label>
 <span class="hint" id="brightnessVal">{{.Pct}}%</span>
-<input id="brightnessRange" class="styled-range" type="range" name="pct" min="0" max="100" step="1" value="{{.Pct}}" oninput="document.getElementById('brightnessVal').textContent=this.value+'%'" onchange="this.form.requestSubmit()" title="Panel brightness 0-100%">
+<input id="brightnessRange" class="styled-range ftl-slider" type="range" name="pct" min="0" max="100" step="1" value="{{.Pct}}" oninput="document.getElementById('brightnessVal').textContent=this.value+'%'" onchange="this.form.requestSubmit()" title="Panel brightness 0-100%">
 </form>
 </div>
 </div>`))
