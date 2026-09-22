@@ -1885,12 +1885,13 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
         <h3 class="settings-group-title">Device</h3>
         <div id="devicename" class="setting-cell">
           <div class="setting-row">
-            <form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML">
+            <form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
               <label for="deviceNameInput">Unit Name</label>
               <input id="deviceNameInput" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
               <button type="submit" class="btn-primary">Save</button>
             </form>
           </div>
+          <div id="devicename-error"></div>
         </div>
       </section>
 
@@ -2586,24 +2587,35 @@ func isValidDeviceName(name string) bool {
 
 func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(r.FormValue("name"))
-	if isValidDeviceName(name) {
-		mutex.Lock()
-		deviceName = name
-		persistConfig()
-		mutex.Unlock()
-		logInfof("Device name changed to %q via remote", name)
+	if !isValidDeviceName(name) {
+		// Same 400 pattern as prefix/WiFi: a silent 200 left the operator
+		// thinking a rejected rename had saved.
+		logWarnf("rejected invalid device name %q via remote", name)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `<span class="err">Letters, numbers, spaces, - and _ only (max 32)</span>`)
+		return
 	}
+	mutex.Lock()
+	deviceName = name
+	persistConfig()
+	mutex.Unlock()
+	logInfof("Device name changed to %q via remote", name)
 
 	mutex.Lock()
 	current := deviceName
 	mutex.Unlock()
 	// Wrap in the outer #devicename div: the form targets it with
 	// outerHTML, and a bare <form> response would destroy the target so
-	// the name is editable exactly once per page load.
-	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="setting-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML">
-<input name="name" value="%s" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-<button type="submit">Save</button>
-</form></div></div>`, template.HTMLEscapeString(current))
+	// the name is editable exactly once per page load. Markup mirrors the
+	// dashboard row exactly (label/id/button), plus the error target and
+	// an OOB clear of any stale validation error on success.
+	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="setting-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
+<label for="deviceNameInput">Unit Name</label>
+<input id="deviceNameInput" name="name" value="%s" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
+<button type="submit" class="btn-primary">Save</button>
+</form></div><div id="devicename-error"></div></div>
+<div id="devicename-error" hx-swap-oob="innerHTML"></div>`, template.HTMLEscapeString(current))
 }
 
 // handleDisplayPNG mirrors the OLED exactly - encoded from the same packed
