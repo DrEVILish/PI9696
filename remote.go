@@ -724,7 +724,7 @@ func tagSelect() selectView {
 }
 
 var transportFragmentTmpl = template.Must(template.New("transport").Parse(`<div id="transportmode" class="setting-cell">
-<div class="setting-row">
+<div class="setting-row ftl-field-row">
 <form hx-post="/api/settings/transport-mode" hx-target="#transportmode" hx-swap="outerHTML">
 <label>Transport Buttons</label>
 <select name="idx" onchange="this.form.requestSubmit()">
@@ -740,7 +740,7 @@ func logLevelSelect() selectView {
 }
 
 var selectFragmentTmpl = template.Must(template.New("setting-select").Parse(`<div id="{{.Id}}" class="setting-cell">
-<div class="setting-row">
+<div class="setting-row ftl-field-row">
 <form hx-post="{{.Post}}" hx-target="#{{.Id}}" hx-swap="outerHTML">
 <label>{{.Label}}</label>
 <select name="idx" onchange="this.form.requestSubmit()">
@@ -817,7 +817,7 @@ func tagOptionsView() optionsView {
 // readout while dragging and submits on release, so the panel responds only
 // when the operator finishes moving it.
 var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<div id="brightness" class="setting-cell">
-<div class="setting-row">
+<div class="setting-row ftl-field-row">
 <form hx-post="/api/settings/brightness" hx-target="#brightness" hx-swap="outerHTML">
 <label for="brightnessRange">Brightness</label>
 <span class="hint" id="brightnessVal">{{.Pct}}%</span>
@@ -829,7 +829,7 @@ var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<di
 // autoDimFragmentTmpl is the Display -> Auto Dim setting: an on/off switch
 // for the dim-then-off idle behavior. Mirrors the WiFi switch markup.
 var autoDimFragmentTmpl = template.Must(template.New("autodim").Parse(`<div id="autodim" class="setting-cell">
-<div class="setting-row setting-row--switch">
+<div class="setting-row setting-row--switch ftl-field-row">
 <form hx-post="/api/settings/dim" hx-target="#autodim" hx-swap="outerHTML">
 <label for="autoDimToggle">Auto Dim</label>
 <label class="sci-switch" for="autoDimToggle">
@@ -895,7 +895,7 @@ func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
 // demoFragmentTmpl is the Demo -> Demo Mode setting: an on/off switch for
 // the simulated-audio demonstration mode. Mirrors the Auto Dim switch.
 var demoFragmentTmpl = template.Must(template.New("demo").Parse(`<div id="demo" class="setting-cell">
-<div class="setting-row setting-row--switch">
+<div class="setting-row setting-row--switch ftl-field-row">
 <form hx-post="/api/settings/demo" hx-target="#demo" hx-swap="outerHTML">
 <label for="demoToggle">Demo Mode</label>
 <label class="sci-switch" for="demoToggle">
@@ -931,7 +931,7 @@ func handleAPISettingsDemoMode(w http.ResponseWriter, r *http.Request) {
 // monitorFragmentTmpl is the Audio -> Monitoring setting: an on/off switch
 // for the input monitor. Mirrors the Demo Mode switch.
 var monitorFragmentTmpl = template.Must(template.New("monitor").Parse(`<div id="monitor" class="setting-cell">
-<div class="setting-row setting-row--switch">
+<div class="setting-row setting-row--switch ftl-field-row">
 <form hx-post="/api/settings/monitor" hx-target="#monitor" hx-swap="outerHTML">
 <label for="monitorToggle">Monitoring</label>
 <label class="sci-switch" for="monitorToggle">
@@ -985,7 +985,7 @@ func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
 }
 
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
-<div class="setting-row">
+<div class="setting-row ftl-field-row">
 <form hx-post="/api/settings/channels" hx-target="#channelcount" hx-swap="outerHTML">
 <label for="channelsInput">Channels</label>
 <input id="channelsInput" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
@@ -1006,12 +1006,12 @@ type prefixView struct {
 // text field + OLED presets). It posts the literal prefix, validated to a
 // filename-safe charset server-side.
 var filePrefixFragmentTmpl = template.Must(template.New("fileprefix").Parse(`<div id="fileprefix" class="setting-cell">
-<div class="setting-row">
+<div class="setting-row ftl-field-row">
 <form hx-post="/api/settings/prefix" hx-target="#fileprefix" hx-swap="outerHTML" hx-status:400="target:#prefix-error">
 <label for="filePrefixInput">Prefix</label>
 <input id="filePrefixInput" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
 <span class="hint">file_YYYYMMDD…</span>
-<button type="submit" class="btn-primary">Save</button>
+<button type="submit" class="btn-primary ftl-btn">Save</button>
 </form>
 <div id="prefix-error"></div>
 </div>
@@ -1711,11 +1711,11 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
     <span class="icon-btn conn off" id="connLamp" title="Server disconnected">
       <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.05 3.05a7 7 0 0 0 0 9.9.5.5 0 0 1-.707.707 8 8 0 0 1 0-11.314.5.5 0 0 1 .707.707m2.122 2.122a4 4 0 0 0 0 5.656.5.5 0 1 1-.708.708 5 5 0 0 1 0-7.072.5.5 0 0 1 .708.708m5.656-.708a.5.5 0 0 1 .708 0 5 5 0 0 1 0 7.072.5.5 0 1 1-.708-.708 4 4 0 0 0 0-5.656.5.5 0 0 1 0-.708m2.122-2.12a.5.5 0 0 1 .707 0 8 8 0 0 1 0 11.313.5.5 0 0 1-.707-.707 7 7 0 0 0 0-9.9.5.5 0 0 1 0-.707zM6 8a2 2 0 1 1 2.5 1.937V15.5a.5.5 0 0 1-1 0V9.937A2 2 0 0 1 6 8"/></svg>
     </span>
-    <button class="icon-btn" id="settingsBtn" type="button" title="Settings">
+    <button class="icon-btn ftl-btn ftl-btn-icon" id="settingsBtn" type="button" title="Settings">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
     </button>
     <form action="/logout" method="POST" style="display:inline;margin:0">
-      <button class="icon-btn" title="Log out" aria-label="Log out">
+      <button class="icon-btn ftl-btn ftl-btn-icon" title="Log out" aria-label="Log out">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 17l5-5-5-5M21 12H9M12 19H5a2 2 0 01-2-2V7a2 2 0 012-2h7"/></svg>
       </button>
     </form>
@@ -1727,7 +1727,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
 <main class="ftl-app-main">
 <div class="grid">
 
-  <div class="panel left">
+  <div class="panel left ftl-panel">
     <h2>System</h2>
     <div class="sys-graphs">
       <h3>CPU %</h3>
@@ -1742,7 +1742,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
     </div>
   </div>
 
-  <div class="panel center">
+  <div class="panel center ftl-panel">
     <h2>Transport Status</h2>
     <div class="transport-deck">
       <svg class="r2r" viewBox="0 0 820 265" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="transportTitle transportDesc">
@@ -1845,7 +1845,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
     <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#status" hx-swap="innerHTML" hidden></div>
   </div>
 
-  <div class="panel right">
+  <div class="panel right ftl-panel">
     <h2>Status</h2>
     <div id="config" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
   </div>
@@ -1884,11 +1884,11 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
       <section class="settings-group">
         <h3 class="settings-group-title">Device</h3>
         <div id="devicename" class="setting-cell">
-          <div class="setting-row">
+          <div class="setting-row ftl-field-row">
             <form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
               <label for="deviceNameInput">Unit Name</label>
               <input id="deviceNameInput" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-              <button type="submit" class="btn-primary">Save</button>
+              <button type="submit" class="btn-primary ftl-btn">Save</button>
             </form>
           </div>
           <div id="devicename-error"></div>
@@ -1938,11 +1938,11 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
 
       <section class="settings-group">
         <h3 class="settings-group-title">Config</h3>
-        <div class="setting-row setting-row--pair">
-          <button hx-post="/api/config/export" hx-target="#config-msg" class="btn-primary">Export to USB</button>
-          <button hx-post="/api/config/import" hx-target="#config-msg" class="btn-primary">Import from USB</button>
+        <div class="setting-row setting-row--pair ftl-field-row">
+          <button hx-post="/api/config/export" hx-target="#config-msg" class="btn-primary ftl-btn">Export to USB</button>
+          <button hx-post="/api/config/import" hx-target="#config-msg" class="btn-primary ftl-btn">Import from USB</button>
         </div>
-        <div class="setting-row" id="config-msg"></div>
+        <div class="setting-row ftl-field-row" id="config-msg"></div>
       </section>
 
       <section class="settings-group">
@@ -1950,7 +1950,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
         <div id="wifi-settings">
           {{.WifiQRFragment}}
           <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML" hx-status:400="target:#wifi-error">
-            <div class="setting-row setting-row--pair">
+            <div class="setting-row setting-row--pair ftl-field-row">
               <span class="field">
                 <label for="wifiSsid">SSID</label>
                 <input id="wifiSsid" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
@@ -1960,7 +1960,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
                 <input id="wifiPass" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
               </span>
             </div>
-            <div class="setting-row setting-row--switch">
+            <div class="setting-row setting-row--switch ftl-field-row">
               <label for="wifiEnabled">Access Point</label>
               <label class="sci-switch" for="wifiEnabled">
                 <input id="wifiEnabled" name="enabled" type="checkbox" {{if .WifiEnabled}}checked{{end}}>
@@ -1968,7 +1968,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
                 <span class="switch-readout" data-on="ONLINE" data-off="OFFLINE"></span>
               </label>
             </div>
-            <button type="submit" class="btn-primary">Save WiFi</button>
+            <button type="submit" class="btn-primary ftl-btn">Save WiFi</button>
           </form>
           <div id="wifi-error"></div>
         </div>
@@ -2010,7 +2010,7 @@ var transportState = { playing: false, paused: false };
 function playGlyph()  { return '<svg viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg>'; }
 function pauseGlyph() { return '<svg viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3.4" height="11"/><rect x="9.1" y="2.5" width="3.4" height="11"/></svg>'; }
 function transportBtn(cls, post, title, label) {
-  return '<button class="' + cls + '" hx-post="' + post + '" title="' + title + '">' + label + '</button>';
+  return '<button class="ftl-btn ' + cls + '" hx-post="' + post + '" title="' + title + '">' + label + '</button>';
 }
 function renderTransportRow() {
   var row = document.getElementById('transportRow');
@@ -2019,14 +2019,14 @@ function renderTransportRow() {
   var html = '';
   if (ICON_MODE) {
     html += transportBtn('record', '/api/input/button/record', 'Record', '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>');
-    html += '<button class="stop" data-stop title="Stop"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10"/></svg></button>';
+    html += '<button class="ftl-btn stop" data-stop title="Stop"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10"/></svg></button>';
     html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? pauseGlyph() : playGlyph());
   } else {
     html += transportBtn('record', '/api/input/button/record', 'Record', 'REC');
-    html += '<button class="stop" data-stop title="Stop">STOP</button>';
+    html += '<button class="ftl-btn stop" data-stop title="Stop">STOP</button>';
     html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? 'II' : '>');
   }
-  row.className = 'transport-row' + (ICON_MODE ? '' : ' text');
+  row.className = 'transport-row ftl-transport' + (ICON_MODE ? '' : ' text') + (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : ''));
   row.innerHTML = html;
   // These controls are recreated after htmx's initial DOM scan whenever the
   // play/pause state or button style changes, so explicitly process the new
@@ -2610,10 +2610,10 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	// the name is editable exactly once per page load. Markup mirrors the
 	// dashboard row exactly (label/id/button), plus the error target and
 	// an OOB clear of any stale validation error on success.
-	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="setting-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
+	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="setting-row ftl-field-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
 <label for="deviceNameInput">Unit Name</label>
 <input id="deviceNameInput" name="name" value="%s" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-<button type="submit" class="btn-primary">Save</button>
+<button type="submit" class="btn-primary ftl-btn">Save</button>
 </form></div><div id="devicename-error"></div></div>
 <div id="devicename-error" hx-swap-oob="innerHTML"></div>`, template.HTMLEscapeString(current))
 }
