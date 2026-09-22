@@ -157,7 +157,7 @@ func loadPersistedConfig() {
 	if c.PeakHoldIdx >= 0 && c.PeakHoldIdx < len(peakHoldOptions) {
 		peakHoldIdx = c.PeakHoldIdx
 	}
-	if c.Theme != "" {
+	if c.Theme != "" && isKnownTheme(c.Theme) {
 		themeSlug = c.Theme
 	}
 	if c.TransportMode == "icon" || c.TransportMode == "text" {
@@ -338,7 +338,7 @@ func importConfigFrom(dir string) error {
 	if c.PeakHoldIdx >= 0 && c.PeakHoldIdx < len(peakHoldOptions) {
 		peakHoldIdx = c.PeakHoldIdx
 	}
-	if c.Theme != "" {
+	if c.Theme != "" && isKnownTheme(c.Theme) {
 		themeSlug = c.Theme
 	}
 	if c.TransportMode == "icon" || c.TransportMode == "text" {
