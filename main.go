@@ -2985,10 +2985,12 @@ func loadFilesToCopy() {
 	sort.Strings(allFiles)
 }
 
+// startCopyOperation snapshots the selection and copies it on a worker.
+// Caller must hold mutex (the sole caller is handleCopyFilesClick via
+// onEncoderClick, which does): taking it here would self-deadlock the
+// non-reentrant app mutex and freeze render/input/HTTP on ▶ Start Copy.
 func startCopyOperation() {
-	mutex.Lock()
 	if !usbMounted || isCopying {
-		mutex.Unlock()
 		return
 	}
 
@@ -2996,16 +2998,15 @@ func startCopyOperation() {
 	isCopying = true
 	copyProgress = 0
 	copyStarted = time.Now()
-	// Snapshot the selection under lock: the goroutine below reads this
-	// without holding mutex, and filesToCopy is mutated under mutex
-	// elsewhere (concurrent map read+write panics).
+	// Snapshot the selection while held: the goroutine below reads this
+	// without the mutex, and filesToCopy is mutated under mutex elsewhere
+	// (concurrent map read+write panics).
 	selectedFiles := []string{}
 	for file, selected := range filesToCopy {
 		if selected {
 			selectedFiles = append(selectedFiles, file)
 		}
 	}
-	mutex.Unlock()
 
 	go func() {
 		if len(selectedFiles) == 0 {
