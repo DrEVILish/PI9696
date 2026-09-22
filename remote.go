@@ -2393,10 +2393,17 @@ function initTeleCharts(ncores) {
   teleDisk = new uPlot(teleOpts([{label: 'Free GB', stroke: pal[1], width: 1.5}], 0, null, 56), [[0, 1], [0, 0]], diskEl);
   teleSize(teleCPU, cpuEl, 90); teleSize(teleRAM, ramEl, 90);
   teleSize(teleTemp, tempEl, 56); teleSize(teleDisk, diskEl, 56);
-  window.addEventListener('resize', function() {
-    teleSize(teleCPU, cpuEl, 90); teleSize(teleRAM, ramEl, 90);
-    teleSize(teleTemp, tempEl, 56); teleSize(teleDisk, diskEl, 56);
-  });
+  // Armed once: every re-init (core-count change, theme switch) would
+  // otherwise stack another resize listener and run setSize N times.
+  if (!window.teleResizeArmed) {
+    window.teleResizeArmed = true;
+    window.addEventListener('resize', function() {
+      teleSize(teleCPU, document.getElementById('cpuChart'), 90);
+      teleSize(teleRAM, document.getElementById('ramChart'), 90);
+      teleSize(teleTemp, document.getElementById('tempChart'), 56);
+      teleSize(teleDisk, document.getElementById('diskChart'), 56);
+    });
+  }
   return true;
 }
 // Hidden tabs skip redraws (item: don't burn cycles on an unseen panel);
