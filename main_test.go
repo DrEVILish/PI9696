@@ -987,9 +987,19 @@ func TestRemoteSessionCookieIsNotTokenAndRevokes(t *testing.T) {
 	}
 
 	// Logout revokes server-side: the same cookie is now rejected.
-	logoutReq := httptest.NewRequest("GET", "/logout", nil)
+	// State change lives on POST (logout-CSRF); a plain GET must not
+	// revoke and redirects to the dashboard instead.
+	logoutReq := httptest.NewRequest("POST", "/logout", nil)
 	logoutReq.AddCookie(sessionCookie)
 	mux.ServeHTTP(httptest.NewRecorder(), logoutReq)
+
+	getReq := httptest.NewRequest("GET", "/logout", nil)
+	getReq.AddCookie(sessionCookie)
+	getRec := httptest.NewRecorder()
+	mux.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusSeeOther {
+		t.Fatalf("expected GET /logout to redirect without revoking, got %d", getRec.Code)
+	}
 
 	req = httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(sessionCookie)
