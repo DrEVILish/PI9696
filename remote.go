@@ -1654,7 +1654,9 @@ main.ftl-app-main{display:contents}
 @media (max-width: 800px) {
   body{padding:0 0.4em 200px}
   header.deck{flex-wrap:wrap}
-  .header-actions{top:0.6em;right:0.6em}
+  /* In-flow on narrow screens: the absolute corner position overlays the
+     centered logo once the deck wraps. */
+  .header-actions{position:static;margin-left:auto}
   .deck-logo{flex:1 0 100%;text-align:center;display:block}
   .deck-logo .logo-svg{width:clamp(80px,20vw,200px)}
   .oled-frame{flex:0 0 auto}
