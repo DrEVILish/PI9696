@@ -3041,7 +3041,14 @@ func startCopyOperation() {
 			src := filepath.Join(RecordPath, file)
 			dst := filepath.Join(USBMountPoint, file)
 
-			err := copyFile(src, dst)
+			err := copyFile(src, dst, func() bool {
+				mutex.Lock()
+				defer mutex.Unlock()
+				return !isCopying
+			})
+			if err == errCopyCancelled {
+				break
+			}
 			if err != nil {
 				logErrorf("Failed to copy %s: %v", file, err)
 			}
@@ -3062,7 +3069,11 @@ func startCopyOperation() {
 // 192kHz/32-bit is ~98MB/s), which would exhaust RAM with os.ReadFile.
 // Writes to dst.tmp + Sync + Rename so a failed/cancelled copy never leaves
 // a truncated file masquerading as a good backup; partial removed on error.
-func copyFile(src, dst string) error {
+// Copies in 1MB chunks so a hold-to-cancel lands mid-file instead of after
+// a whole multi-GB take.
+var errCopyCancelled = fmt.Errorf("copy cancelled")
+
+func copyFile(src, dst string, cancelled func() bool) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -3080,10 +3091,29 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		os.Remove(tmp)
-		return err
+	buf := make([]byte, 1<<20)
+	for {
+		if cancelled() {
+			out.Close()
+			os.Remove(tmp)
+			return errCopyCancelled
+		}
+		n, rerr := in.Read(buf)
+		if n > 0 {
+			if _, werr := out.Write(buf[:n]); werr != nil {
+				out.Close()
+				os.Remove(tmp)
+				return werr
+			}
+		}
+		if rerr != nil {
+			if rerr == io.EOF {
+				break
+			}
+			out.Close()
+			os.Remove(tmp)
+			return rerr
+		}
 	}
 	if err := out.Sync(); err != nil {
 		out.Close()
