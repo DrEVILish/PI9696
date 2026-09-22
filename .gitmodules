@@ -1,7 +1,7 @@
 [submodule "third_party/ftl-themes"]
 	path = third_party/ftl-themes
 	url = https://github.com/DrEVILish/ftl-themes
-	# Pinned to the themes PR branch ON PURPOSE: dist/ + themes.json only
-	# exist there until DrEVILish/ftl-themes#2 merges. Flip to main the
-	# moment it lands, then `git submodule update --remote`.
-	branch = claude/theme-engine-v3
+	# Tracks main (ftl-themes#2 merged, so dist/ lives there now). Pinned to
+	# a tested commit; advance deliberately with
+	# `git submodule update --remote` + full suite, never blindly.
+	branch = main
