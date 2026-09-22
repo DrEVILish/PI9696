@@ -1305,13 +1305,13 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
    and live signal data, not theming. */
 :root{--glow:var(--ftl-accent,#00d9ff);--panel:var(--ftl-surface,#0a1526);--border:var(--ftl-border,#0f3a5c);--text:var(--ftl-text,#cfeeff);--dim:var(--ftl-muted,#5b8aa8);--rec:var(--ftl-danger,#ff3355);--idle:var(--ftl-success,#2bffb0);--orange:var(--ftl-warning,#ff8c1a);--meter-h:120px}
 *{box-sizing:border-box}
-body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,#0a1a2e,#020509 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
+body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--ftl-surface,#0a1a2e),var(--ftl-bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
 h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 0.8em}
 a{color:var(--glow)}
-input{font-family:inherit;background:#08192b;color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
-button{font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:#08192b;color:var(--glow);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
+input{font-family:inherit;background:var(--ftl-input-bg,#08192b);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
+button{font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--ftl-surface-2,#08192b);color:var(--glow);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
 button:hover{border-color:var(--glow);box-shadow:0 0 8px var(--glow)}
-button:active{background:#0f2a44}
+button:active{background:var(--ftl-surface-2,#0f2a44)}
 button:disabled{opacity:0.35;cursor:default;box-shadow:none}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--glow);outline-offset:2px}
 .ok{color:var(--idle)}
@@ -1324,7 +1324,7 @@ th{color:var(--dim);text-transform:uppercase;font-size:0.72em;letter-spacing:0.0
 
 /* Panels get HUD corner brackets - the recurring "sci-fi readout" motif
    tying the three columns together. */
-.panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1em 1.2em;box-shadow:0 0 20px rgba(0,180,255,0.08),inset 0 0 30px rgba(0,180,255,0.03)}
+.panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1em 1.2em;box-shadow:var(--ftl-panel-shadow,0 0 20px rgba(0,180,255,0.08),inset 0 0 30px rgba(0,180,255,0.03))}
 .panel::before,.panel::after{content:'';position:absolute;width:14px;height:14px;border:2px solid var(--glow);opacity:0.55}
 .panel::before{top:-1px;left:-1px;border-right:none;border-bottom:none}
 .panel::after{bottom:-1px;right:-1px;border-left:none;border-top:none}
@@ -1343,7 +1343,7 @@ th{color:var(--dim);text-transform:uppercase;font-size:0.72em;letter-spacing:0.0
    small size at one fixed breakpoint. */
 header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row);align-items:center;justify-content:center;gap:clamp(0.3em,1.2vw,1.6em);flex-wrap:nowrap;padding:clamp(0.6em,1.2vw,1.2em) clamp(0.5em,2.5vw,5.5em);border-bottom:1px solid var(--border);margin-bottom:1.5em}
 .deck-logo .logo-svg{width:clamp(0px,11vw,255px)}
-.oled-frame{background:#000;border:2px solid var(--border);border-radius:6px;padding:clamp(3px,0.6vw,8px);display:inline-block;box-shadow:0 0 25px rgba(0,180,255,0.15)}
+.oled-frame{background:#000;border:2px solid var(--border);border-radius:6px;padding:clamp(3px,0.6vw,8px);display:inline-block;box-shadow:var(--ftl-panel-shadow,0 0 25px rgba(0,180,255,0.15))}
 .oled-frame img{width:clamp(170px,32vw,440px);height:auto;aspect-ratio:4/1;image-rendering:pixelated;display:block}
 .encoder-row{display:flex;align-items:center;gap:clamp(0.2em,0.5vw,0.5em)}
 .encoder-row button{font-size:clamp(0.7em,1.5vw,1.3em);width:clamp(1.3em,2.6vw,2.3em);padding:0.2em 0}
@@ -1374,7 +1374,7 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 /* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
    - the base button{} rule above only targets <button>, so colors/border
    are repeated here rather than relied on from that selector. */
-.icon-btn{width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:#08192b;color:var(--glow);border:1px solid var(--border);cursor:pointer;text-decoration:none}
+.icon-btn{width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:var(--ftl-surface-2,#08192b);color:var(--glow);border:1px solid var(--border);cursor:pointer;text-decoration:none}
 .icon-btn svg{width:clamp(14px,1.8vw,18px);height:clamp(14px,1.8vw,18px);stroke:var(--glow)}
 .icon-btn:hover{border-color:var(--orange)}
 .icon-btn:hover svg{stroke:var(--orange)}
@@ -1387,12 +1387,12 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 .icon-btn.conn:hover{border-color:var(--border)}
 .icon-btn.conn svg{stroke:none}
 .icon-btn.conn.on{color:var(--glow)}
-.icon-btn.conn.on svg{fill:var(--glow);filter:drop-shadow(0 0 3px rgba(0,217,255,0.8))}
+.icon-btn.conn.on svg{fill:var(--glow);filter:drop-shadow(var(--ftl-lamp-glow,0 0 3px rgba(0,217,255,0.8)))}
 .icon-btn.conn.off{color:var(--rec)}
 .icon-btn.conn.off svg{fill:var(--rec)}
 /* Download ALL: a small labeled action in the Recordings heading - text,
    not just an icon, so its function reads at a glance. */
-.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:#08192b;border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal}
+.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:var(--ftl-surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal}
 .dl-all:hover{border-color:var(--glow)}
 
 .grid{display:grid;grid-template-columns:var(--pi-columns,1fr 1.6fr 1fr);gap:var(--pi-gap,1.2em)}
@@ -1416,11 +1416,11 @@ main.ftl-app-main{display:contents}
 .recordings-section h2{margin:1.2em 0 0.6em;font-size:1.1em;letter-spacing:0.05em}
 .recordings-table{width:100%;border-collapse:collapse;font-size:0.85em}
 .recordings-table th,.recordings-table td{padding:0.6em 0.8em;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
-.recordings-table th{color:var(--glow);font-weight:600;font-size:0.7em;letter-spacing:0.1em;text-transform:uppercase;background:#08162a;position:sticky;top:0;z-index:10}
-.recordings-table tr:hover td{background:#08162a}
+.recordings-table th{color:var(--glow);font-weight:600;font-size:0.7em;letter-spacing:0.1em;text-transform:uppercase;background:var(--ftl-surface-2,#08162a);position:sticky;top:0;z-index:10}
+.recordings-table tr:hover td{background:var(--ftl-surface-2,#08162a)}
 .recordings-table td:last-child{text-align:right}
 .recordings-table .dl-link{color:var(--glow);text-decoration:none;border:1px solid var(--border);border-radius:4px;padding:0.2em 0.6em;font-size:0.85em;white-space:nowrap}
-.recordings-table .dl-link:hover{border-color:var(--glow);background:rgba(0,217,255,0.1)}
+.recordings-table .dl-link:hover{border-color:var(--glow);background:var(--ftl-go-bg-hover,rgba(0,217,255,0.1))}
 .recordings-table .empty{color:var(--dim);font-style:italic;padding:2em;text-align:center}
 
 /* Scrollable table wrapper for narrow viewports */
@@ -1436,9 +1436,9 @@ main.ftl-app-main{display:contents}
 }
 
 /* Modals: the settings sheet and the stop-recording confirmation. */
-.modal-backdrop{display:none;position:fixed;inset:0;background:rgba(2,6,10,0.75);z-index:200;align-items:center;justify-content:center}
+.modal-backdrop{display:none;position:fixed;inset:0;background:var(--ftl-overlay-bg,rgba(2,6,10,0.75));z-index:200;align-items:center;justify-content:center}
 .modal-backdrop.open{display:flex}
-.modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:0 0 30px rgba(0,180,255,0.2);min-width:20em}
+.modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:var(--ftl-panel-shadow,0 0 30px rgba(0,180,255,0.2));min-width:20em}
 .modal h2{border:none;margin:0}
 .modal-close{background:none;border:none;color:var(--dim);font-size:1.4em;line-height:1;cursor:pointer;padding:0.2em;border-radius:6px}
 .modal-close:hover{color:var(--glow)}
@@ -1462,17 +1462,17 @@ main.ftl-app-main{display:contents}
    even instead of stacking every group with an identical extra top pad. */
 .modal-body>.settings-group:first-child{padding-top:0}
 .settings-group-title{grid-column:1/-1;margin:0 0 0.2em;font-size:0.7em;letter-spacing:0.2em;text-transform:uppercase;color:var(--glow);border-bottom:1px solid var(--border);padding-bottom:0.4em}
-.setting-row{display:flex;align-items:center;gap:0.8em;background:#08162a;border:1px solid var(--border);border-radius:8px;padding:0.55em 0.8em}
+.setting-row{display:flex;align-items:center;gap:0.8em;background:var(--ftl-surface-2,#08162a);border:1px solid var(--border);border-radius:8px;padding:0.55em 0.8em}
 .setting-row:hover{border-color:#1b5380}
 .setting-row form{display:flex;align-items:center;gap:0.8em;flex:1;width:100%}
 .setting-row label{flex:1;color:var(--dim);font-size:0.82em;letter-spacing:0.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.setting-row select{font-family:inherit;background:#020509;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.42em 0.7em;min-width:9em;cursor:pointer}
-.setting-row input[type="text"],.setting-row input[type="password"],.setting-row input[type="number"]{flex:1;min-width:0;background:#020509;color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.45em 0.7em}
+.setting-row select{font-family:inherit;background:var(--ftl-input-bg,#020509);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.42em 0.7em;min-width:9em;cursor:pointer}
+.setting-row input[type="text"],.setting-row input[type="password"],.setting-row input[type="number"]{flex:1;min-width:0;background:var(--ftl-input-bg,#020509);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.45em 0.7em}
 .setting-row input[type="number"]{flex:none;width:6em;font-family:inherit}
 .setting-row .hint{flex:none;font-size:0.78em;color:var(--dim);letter-spacing:0.05em}
 .setting-row--switch input[type="checkbox"]{width:1.3em;height:1.3em;accent-color:var(--glow);cursor:pointer}
 .btn-primary{background:transparent;color:var(--glow);border:1px solid var(--glow);border-radius:6px;font-size:0.82em;letter-spacing:0.06em;padding:0.45em 1em;cursor:pointer}
-.btn-primary:hover{background:rgba(0,217,255,0.12);box-shadow:0 0 10px rgba(0,217,255,0.4)}
+.btn-primary:hover{background:var(--ftl-go-bg-hover,rgba(0,217,255,0.12));box-shadow:var(--ftl-go-shadow-hover,0 0 10px rgba(0,217,255,0.4))}
 /* Paired SSID/Password row: two labelled fields sit side by side within one
    setting card. */
 .setting-row--pair{gap:0.8em 1.2em;flex-wrap:wrap}
@@ -1484,16 +1484,16 @@ main.ftl-app-main{display:contents}
    plus an ONLINE/OFFLINE status readout that swaps as the switch flips. */
 .sci-switch{position:relative;display:inline-flex;align-items:center;gap:0.7em;flex:none;cursor:pointer}
 .sci-switch input{position:absolute;opacity:0;width:0;height:0}
-.sci-switch-track{position:relative;display:block;width:4.4em;height:1.9em;padding:2px;background:#02050a;border:1px solid var(--border);border-radius:3px;box-shadow:inset 0 0 12px rgba(0,180,255,0.08);transition:border-color 0.15s,box-shadow 0.15s}
-.sci-thumb{display:block;width:1.45em;height:1.45em;background:#0d2b4a;border:1px solid var(--border);border-radius:2px;transform:translateX(0);transition:transform 0.18s ease,background 0.18s,border-color 0.18s;position:relative}
+.sci-switch-track{position:relative;display:block;width:4.4em;height:1.9em;padding:2px;background:var(--ftl-bg,#02050a);border:1px solid var(--border);border-radius:3px;box-shadow:inset 0 0 12px rgba(0,180,255,0.08);transition:border-color 0.15s,box-shadow 0.15s}
+.sci-thumb{display:block;width:1.45em;height:1.45em;background:var(--ftl-lamp-off,#0d2b4a);border:1px solid var(--border);border-radius:2px;transform:translateX(0);transition:transform 0.18s ease,background 0.18s,border-color 0.18s;position:relative}
 .sci-thumb::before{content:'';position:absolute;inset:3px;background:#071426;border-radius:1px}
-.sci-thumb::after{content:'';position:absolute;left:50%;top:50%;width:4px;height:4px;border-radius:50%;background:#fff;opacity:0.35;transform:translate(-50%,-50%);box-shadow:0 0 5px #fff;transition:opacity 0.18s,background 0.18s,box-shadow 0.18s}
+.sci-thumb::after{content:'';position:absolute;left:50%;top:50%;width:4px;height:4px;border-radius:50%;background:var(--ftl-text,#fff);opacity:0.35;transform:translate(-50%,-50%);box-shadow:0 0 5px var(--ftl-text,#fff);transition:opacity 0.18s,background 0.18s,box-shadow 0.18s}
 .sci-switch input:checked + .sci-switch-track{border-color:var(--glow);box-shadow:inset 0 0 12px rgba(0,217,255,0.22),0 0 10px rgba(0,217,255,0.25)}
 .sci-switch input:checked + .sci-switch-track .sci-thumb{transform:translateX(2.45em);background:#0e3a5c;border-color:var(--glow)}
 .sci-switch input:checked + .sci-switch-track .sci-thumb::before{background:#062036}
 .sci-switch input:checked + .sci-switch-track .sci-thumb::after{background:var(--glow);box-shadow:0 0 6px var(--glow);opacity:1}
 .sci-switch input:focus-visible + .sci-switch-track{outline:1px solid var(--glow);outline-offset:2px}
-.switch-readout{font-size:0.82em;letter-spacing:0.08em;position:relative;min-width:5em;text-align:center;color:#2c4a66}
+.switch-readout{font-size:0.82em;letter-spacing:0.08em;position:relative;min-width:5em;text-align:center;color:var(--ftl-muted,#2c4a66)}
 .switch-readout::after{content:attr(data-off)}
 .sci-switch input:checked ~ .switch-readout{color:var(--glow);text-shadow:0 0 6px rgba(0,217,255,0.6)}
 .sci-switch input:checked ~ .switch-readout::after{content:attr(data-on)}
@@ -1503,9 +1503,9 @@ main.ftl-app-main{display:contents}
    + slider (the readout is updated inline by the fragment's oninput). */
 .styled-range{-webkit-appearance:none;appearance:none;flex:1 1 auto;min-width:0;height:1.6em;background:transparent;cursor:pointer}
 .styled-range::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,#0e3a5c,var(--glow))}
-.styled-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-5px;border-radius:3px;background:#02050a;border:1px solid var(--glow);box-shadow:0 0 8px rgba(0,217,255,0.5)}
+.styled-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-5px;border-radius:3px;background:var(--ftl-bg,#02050a);border:1px solid var(--glow);box-shadow:var(--ftl-lamp-glow,0 0 8px rgba(0,217,255,0.5))}
 .styled-range::-moz-range-track{height:4px;border-radius:2px;background:linear-gradient(90deg,#0e3a5c,var(--glow))}
-.styled-range::-moz-range-thumb{width:14px;height:14px;border-radius:3px;background:#02050a;border:1px solid var(--glow);box-shadow:0 0 8px rgba(0,217,255,0.5)}
+.styled-range::-moz-range-thumb{width:14px;height:14px;border-radius:3px;background:var(--ftl-bg,#02050a);border:1px solid var(--glow);box-shadow:var(--ftl-lamp-glow,0 0 8px rgba(0,217,255,0.5))}
 .styled-range:focus-visible{outline:1px solid var(--glow);outline-offset:2px}
 
 /* The rack-mount reel-to-reel transport lives in the normal document flow

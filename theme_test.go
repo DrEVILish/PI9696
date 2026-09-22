@@ -58,6 +58,15 @@ func TestDefaultThemeRendersBuiltInLook(t *testing.T) {
 		"--idle:var(--ftl-success,#2bffb0)",
 		"--orange:var(--ftl-warning,#ff8c1a)",
 		"--meter-h:120px",
+		"background:var(--ftl-surface-2,#08192b)",
+		"background:var(--ftl-input-bg,#08192b)",
+		"background:var(--ftl-input-bg,#020509)",
+		"background:var(--ftl-surface-2,#08162a)",
+		"background:var(--ftl-bg,#02050a)",
+		"background:var(--ftl-lamp-off,#0d2b4a)",
+		"color:var(--ftl-muted,#2c4a66)",
+		"box-shadow:var(--ftl-panel-shadow,0 0 20px rgba(0,180,255,0.08)",
+		"background:var(--ftl-go-bg-hover,rgba(0,217,255,0.1))",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("bridge lost %q", want)
