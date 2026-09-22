@@ -3720,7 +3720,7 @@ func renderRecordingScreen() {
 	// quietly run out of room. On the blink phase the recording readout is
 	// cleared and replaced by a "LOW DISK" tag (see below), so operators can
 	// see the warning without losing the take.
-	if lowDisk() && time.Now().UnixMilli()/500%2 == 1 {
+	if cachedLowDisk() && time.Now().UnixMilli()/500%2 == 1 {
 		hwManager.ClearDisplay()
 	}
 
@@ -3732,7 +3732,7 @@ func renderRecordingScreen() {
 	// shown elsewhere.
 	hwManager.DrawRecordingStatus(elapsedStr, remainingStr, formatMeter())
 
-	if lowDisk() && time.Now().UnixMilli()/500%2 == 1 {
+	if cachedLowDisk() && time.Now().UnixMilli()/500%2 == 1 {
 		// Overlay a flashing "LOW DISK" tag on the blink phase so the warning
 		// is legible rather than the whole screen just turning off.
 		hwManager.SwitchToContext("selected")
@@ -4648,6 +4648,20 @@ func lowDisk() bool {
 	}
 	r := estimateRemainingTime()
 	return r > 0 && r < diskWarnMinutes*time.Minute
+}
+
+// cachedLowDisk memoizes lowDisk at 1Hz for the 100ms render tick: two
+// Statfs per frame at 20 frames/s stalled the whole UI on slow media.
+// Event-driven callers (record-start guard) keep calling lowDisk directly.
+var cachedLowDiskAt time.Time
+var cachedLowDiskVal bool
+
+func cachedLowDisk() bool {
+	if now := time.Now(); now.Sub(cachedLowDiskAt) >= time.Second {
+		cachedLowDiskAt = now
+		cachedLowDiskVal = lowDisk()
+	}
+	return cachedLowDiskVal
 }
 
 // midTakeDiskStopThreshold is the remaining-time below which an in-progress
