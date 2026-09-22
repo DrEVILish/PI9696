@@ -3104,7 +3104,13 @@ func deleteAllRecordings() {
 }
 
 func formatUSB() {
-	if !usbMounted {
+	// Snapshot under lock: detectUSB mutates usbMounted concurrently, and
+	// a stick pulled between lookup and mkfs must never format the wrong
+	// device (see the re-verify before each destructive step below).
+	mutex.Lock()
+	mounted := usbMounted
+	mutex.Unlock()
+	if !mounted {
 		logErrorf("Cannot format USB: not mounted")
 		return
 	}
@@ -3120,6 +3126,12 @@ func formatUSB() {
 	// exfatprogs isn't installed. If NOPASSWD sudo is configured (done at
 	// install time), these run unattended; otherwise the password prompt
 	// would block - hence this running on systemOpWorker, not the UI mutex.
+	// Re-verify the same device is still mounted here: a pull between the
+	// lookup above and now must abort, not mkfs a stale path.
+	if cur, err := usbDevicePath(); err != nil || cur != device {
+		logErrorf("format USB: device changed mid-format (was %s), aborting", device)
+		return
+	}
 	if out, err := exec.Command("sudo", "umount", USBMountPoint).CombinedOutput(); err != nil {
 		logErrorf("format USB: umount failed: %v: %s", err, out)
 		return
