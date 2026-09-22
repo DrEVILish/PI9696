@@ -417,6 +417,7 @@ button:hover{border-color:#00d9ff;box-shadow:0 0 8px #00d9ff}
 <input maxlength="1" autocomplete="off" value="{{index .Boxes 7}}">
 </div>
 <input type="hidden" name="token" id="tokenValue">
+<noscript><p><input name="token" maxlength="9" autocomplete="off" placeholder="XXXXXXXX" style="text-transform:uppercase"></p></noscript>
 <button type="submit">Enter</button>
 <p class="hint">8-character code shown on the OLED (Settings &rarr; Remote Access)</p>
 </form>
