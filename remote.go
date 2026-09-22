@@ -350,6 +350,20 @@ type loginPageData struct {
 	// --ftl-* tokens (e.g. --ftl-font) the stylesheet reads. Unthemed
 	// renders exactly as before (no marker beyond "none", no href).
 	Theme, ThemeCSS string
+	// Boxes pre-fills the 8 token inputs so a failed attempt (or a QR
+	// prefill) isn't wiped by the error re-render.
+	Boxes [8]string
+}
+
+// boxesFromToken splits a normalized token into per-box characters.
+func boxesFromToken(t string) (b [8]string) {
+	for i, c := range t {
+		if i >= 8 {
+			break
+		}
+		b[i] = string(c)
+	}
+	return b
 }
 
 // loginPageTheme returns the dashboard's active theme for the login page.
@@ -392,15 +406,15 @@ button:hover{border-color:#00d9ff;box-shadow:0 0 8px #00d9ff}
 <form method="POST" action="/login" id="loginForm">
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 <div class="token-row" id="tokenRow">
-<input maxlength="1" autofocus autocomplete="off">
-<input maxlength="1" autocomplete="off">
-<input maxlength="1" autocomplete="off">
-<input maxlength="1" autocomplete="off">
+<input maxlength="1" autofocus autocomplete="off" value="{{index .Boxes 0}}">
+<input maxlength="1" autocomplete="off" value="{{index .Boxes 1}}">
+<input maxlength="1" autocomplete="off" value="{{index .Boxes 2}}">
+<input maxlength="1" autocomplete="off" value="{{index .Boxes 3}}">
 <span class="dash">-</span>
-<input maxlength="1" autocomplete="off">
-<input maxlength="1" autocomplete="off">
-<input maxlength="1" autocomplete="off">
-<input maxlength="1" autocomplete="off">
+<input maxlength="1" autocomplete="off" value="{{index .Boxes 4}}">
+<input maxlength="1" autocomplete="off" value="{{index .Boxes 5}}">
+<input maxlength="1" autocomplete="off" value="{{index .Boxes 6}}">
+<input maxlength="1" autocomplete="off" value="{{index .Boxes 7}}">
 </div>
 <input type="hidden" name="token" id="tokenValue">
 <button type="submit">Enter</button>
@@ -468,7 +482,7 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		loginLimit.recordFailure(ip)
 		w.WriteHeader(http.StatusUnauthorized)
 		theme, css := loginPageTheme()
-		loginPageTmpl.Execute(w, loginPageData{Error: "Invalid token", DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css})
+		loginPageTmpl.Execute(w, loginPageData{Error: "Invalid token", DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css, Boxes: boxesFromToken(submitted)})
 		return
 	}
 
