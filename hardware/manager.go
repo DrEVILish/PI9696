@@ -63,6 +63,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 	// Initialize buttons
 	buttons, err := NewButtonManager()
 	if err != nil {
+		hm.Encoder.Close()
 		hm.FiraCode.Close()
 		return nil, fmt.Errorf("failed to initialize buttons: %v", err)
 	}
@@ -71,6 +72,8 @@ func NewHardwareManager() (*HardwareManager, error) {
 	// Initialize button lamps (REC/PLAY backlights; STOP has no lamp).
 	lamps, err := NewLampManager()
 	if err != nil {
+		hm.Encoder.Close()
+		hm.Buttons.Close()
 		hm.FiraCode.Close()
 		return nil, fmt.Errorf("failed to initialize lamps: %v", err)
 	}
@@ -81,6 +84,12 @@ func NewHardwareManager() (*HardwareManager, error) {
 }
 
 func (hm *HardwareManager) Close() error {
+	if hm.Encoder != nil {
+		hm.Encoder.Close()
+	}
+	if hm.Buttons != nil {
+		hm.Buttons.Close()
+	}
 	if hm.Lamps != nil {
 		hm.Lamps.Close()
 	}

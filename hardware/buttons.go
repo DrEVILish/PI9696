@@ -27,12 +27,14 @@ type Button struct {
 
 type ButtonManager struct {
 	buttons []*Button
+	quit    chan struct{}
 	mutex   sync.Mutex
 }
 
 func NewButtonManager() (*ButtonManager, error) {
 	bm := &ButtonManager{
 		buttons: make([]*Button, 3),
+		quit:    make(chan struct{}),
 	}
 
 	if simMode() {
@@ -93,10 +95,26 @@ func (bm *ButtonManager) monitor() {
 	ticker := time.NewTicker(5 * time.Millisecond)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		for _, button := range bm.buttons {
-			bm.readButton(button)
+	for {
+		select {
+		case <-bm.quit:
+			return
+		case <-ticker.C:
+			for _, button := range bm.buttons {
+				bm.readButton(button)
+			}
 		}
+	}
+}
+
+// Close stops the monitor goroutine.
+func (bm *ButtonManager) Close() {
+	bm.mutex.Lock()
+	defer bm.mutex.Unlock()
+	select {
+	case <-bm.quit:
+	default:
+		close(bm.quit)
 	}
 }
 
