@@ -1697,9 +1697,9 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
   <div class="deck-logo">{{.Logo}}</div>
   <div class="oled-frame"><img id="oled" src="/api/display.png" alt="OLED display" onerror="if(!this.dataset.r){this.dataset.r=1;location.reload()}"></div>
   <div class="encoder-row">
-    <button hx-post="/api/input/encoder/left">&#9664;</button>
-    <button class="click" hx-post="/api/input/encoder/click">&#9679;</button>
-    <button hx-post="/api/input/encoder/right">&#9654;</button>
+    <button hx-post="/api/input/encoder/left" aria-label="Encoder left" title="Encoder left">&#9664;</button>
+    <button class="click" hx-post="/api/input/encoder/click" aria-label="Encoder click" title="Encoder click">&#9679;</button>
+    <button hx-post="/api/input/encoder/right" aria-label="Encoder right" title="Encoder right">&#9654;</button>
   </div>
   <div class="transport-row" id="transportRow"></div>
   <div class="header-actions">
