@@ -2356,9 +2356,12 @@ function teleCSS(name, fallback) {
 var telePalette = null; // built lazily at chart init, after styles resolve
 function telePaletteInit() {
   if (!telePalette) telePalette = [
-    teleCSS('--glow', '#00d9ff'), teleCSS('--idle', '#2bffb0'),
-    teleCSS('--orange', '#ff8c1a'), teleCSS('--rec', '#ff3355'),
-    teleCSS('--dim', '#5b8aa8'), teleCSS('--text', '#cfeeff')
+    teleCSS('--ftl-chart-series-1', teleCSS('--glow', '#00d9ff')),
+    teleCSS('--ftl-chart-series-2', teleCSS('--idle', '#2bffb0')),
+    teleCSS('--ftl-chart-series-3', teleCSS('--orange', '#ff8c1a')),
+    teleCSS('--ftl-chart-series-4', teleCSS('--rec', '#ff3355')),
+    teleCSS('--ftl-chart-series-5', teleCSS('--dim', '#5b8aa8')),
+    teleCSS('--ftl-chart-series-6', teleCSS('--text', '#cfeeff'))
   ];
   return telePalette;
 }
