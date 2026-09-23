@@ -28,6 +28,7 @@ go build -o pi9696 . && sudo ./pi9696
 | Display | SSD1322 256×64 OLED (SPI), FiraCode TTF |
 | Controls | EC11 rotary encoder + Record/Stop/Play buttons |
 | Remote | HTTP on port 8080 (token + session auth, no HTTPS) |
+| Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport toggle, default off, no auth) |
 | Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log |
 | File size | ~8.3 MB/min at 48 kHz stereo 24-bit |
 
