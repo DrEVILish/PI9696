@@ -176,6 +176,7 @@ func loadPersistedConfig() {
 		menuTimeoutIdx = c.MenuTimeoutIdx
 	}
 	demoMode = c.DemoMode
+	hyperdeckEnabled = c.HyperdeckEnabled
 
 	wifiEnabled = c.WifiEnabled
 	wifiSSID = c.WifiSSID
@@ -204,6 +205,7 @@ func persistConfig() {
 		AutoDimDisabled:   !autoDimEnabled,
 		MenuTimeoutIdx:    menuTimeoutIdx,
 		DemoMode:          demoMode,
+		HyperdeckEnabled:  hyperdeckEnabled,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
 		WifiPassword:      wifiPassword,
@@ -270,6 +272,7 @@ func exportConfigTo(dir string) error {
 		AutoDimDisabled:   !autoDimEnabled,
 		MenuTimeoutIdx:    menuTimeoutIdx,
 		DemoMode:          demoMode,
+		HyperdeckEnabled:  hyperdeckEnabled,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
 		// WifiPassword deliberately omitted - it's a credential.
@@ -889,6 +892,11 @@ type PersistedConfig struct {
 	// safe default.
 	DemoMode bool `json:"demoMode"`
 
+	// HyperdeckEnabled is the Blackmagic HyperDeck control port toggle
+	// (TCP 9993, unauthenticated by protocol design - hence default off).
+	// Plain bool: absent in old configs decodes to false (off).
+	HyperdeckEnabled bool `json:"hyperdeckEnabled,omitempty"`
+
 	WifiEnabled  bool   `json:"wifiEnabled"`
 	WifiSSID     string `json:"wifiSSID"`
 	WifiPassword string `json:"wifiPassword"`
@@ -967,6 +975,16 @@ func main() {
 		logInfof("TEST-ONLY remote control server: http://%s:%s (token: %s)", bindHost, remoteControlPort, formatToken(remoteToken))
 	} else {
 		go remoteControlLoop()
+	}
+
+	// The HyperDeck control port only listens while its settings toggle is
+	// on (unauthenticated by protocol design, so default off). The toggle
+	// handler starts/stops it live; this covers the persisted-on-at-boot
+	// case.
+	if hyperdeckEnabled {
+		mutex.Lock()
+		setHyperdeckEnabledLocked(true)
+		mutex.Unlock()
 	}
 
 	// Block until asked to stop, then clean up in order: finalize any

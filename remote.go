@@ -664,6 +664,7 @@ type dashboardData struct {
 	TagFragment          template.HTML
 	PrefixFragment       template.HTML
 	TransportFragment    template.HTML
+	HyperdeckFragment    template.HTML
 	LogLevelFragment     template.HTML
 	BrightnessFragment   template.HTML
 	AutoDimFragment      template.HTML
@@ -890,6 +891,44 @@ func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
 	settingChanged()
 	mutex.Unlock()
 	autoDimFragmentTmpl.Execute(w, autoDimViewData())
+}
+
+// hyperdeckFragmentTmpl is the Transport -> HyperDeck Control setting: an
+// on/off switch for the Blackmagic HyperDeck protocol port (TCP 9993).
+// Mirrors the Demo Mode switch; the hint states the no-auth caveat so the
+// toggle reads as an informed choice, not a footnote.
+var hyperdeckFragmentTmpl = template.Must(template.New("hyperdeck").Parse(`<div id="hyperdeck" class="setting-cell">
+<div class="setting-row setting-row--switch ftl-field-row">
+<form hx-post="/api/settings/hyperdeck" hx-target="#hyperdeck" hx-swap="outerHTML">
+<label for="hyperdeckToggle">HyperDeck Control</label>
+<label class="sci-switch" for="hyperdeckToggle">
+<input id="hyperdeckToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
+<span class="sci-switch-track"><span class="sci-thumb"></span></span>
+<span class="switch-readout" data-on="ON" data-off="OFF"></span>
+</label>
+</form>
+</div>
+<div class="setting-row ftl-field-row"><span class="hint">TCP 9993, Blackmagic protocol, no auth while on</span></div>
+</div>`))
+
+type hyperdeckView struct {
+	Enabled bool
+}
+
+func hyperdeckViewData() hyperdeckView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return hyperdeckView{Enabled: hyperdeckEnabled}
+}
+
+func handleAPISettingsHyperdeck(w http.ResponseWriter, r *http.Request) {
+	enabled := r.FormValue("enabled") != ""
+	mutex.Lock()
+	setHyperdeckEnabledLocked(enabled)
+	settingChanged()
+	noteActivity()
+	mutex.Unlock()
+	hyperdeckFragmentTmpl.Execute(w, hyperdeckViewData())
 }
 
 // demoFragmentTmpl is the Demo -> Demo Mode setting: an on/off switch for
@@ -1917,6 +1956,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
       <section class="settings-group">
         <h3 class="settings-group-title">Transport</h3>
         {{.TransportFragment}}
+        {{.HyperdeckFragment}}
       </section>
 
       <section class="settings-group">
@@ -2517,7 +2557,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		activeThemeCSS = "/static/themes/" + pv + ".css"
 	}
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf bytes.Buffer
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf bytes.Buffer
 	selectFragmentTmpl.Execute(&vuBuf, vuRangeSelect())
 	selectFragmentTmpl.Execute(&holdBuf, peakHoldSelect())
 	selectFragmentTmpl.Execute(&srBuf, sampleRateSelect())
@@ -2525,6 +2565,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	selectFragmentTmpl.Execute(&tagBuf, tagSelect())
 	filePrefixFragmentTmpl.Execute(&prefixBuf, filePrefixView())
 	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
+	hyperdeckFragmentTmpl.Execute(&hyperdeckBuf, hyperdeckViewData())
 	selectFragmentTmpl.Execute(&logLevelBuf, logLevelSelect())
 	selectFragmentTmpl.Execute(&themeBuf, themeSelect())
 	brightnessFragmentTmpl.Execute(&brightnessBuf, brightnessViewData())
@@ -2554,6 +2595,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		TagFragment:          template.HTML(tagBuf.String()),
 		PrefixFragment:       template.HTML(prefixBuf.String()),
 		TransportFragment:    template.HTML(transportBuf.String()),
+		HyperdeckFragment:    template.HTML(hyperdeckBuf.String()),
 		LogLevelFragment:     template.HTML(logLevelBuf.String()),
 		ThemeFragment:        template.HTML(themeBuf.String()),
 		BrightnessFragment:   template.HTML(brightnessBuf.String()),
@@ -3435,6 +3477,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/brightness", requireAuth(handleAPISettingsBrightness))
 	mux.HandleFunc("POST /api/settings/dim", requireAuth(handleAPISettingsAutoDim))
 	mux.HandleFunc("POST /api/settings/demo", requireAuth(handleAPISettingsDemoMode))
+	mux.HandleFunc("POST /api/settings/hyperdeck", requireAuth(handleAPISettingsHyperdeck))
 	mux.HandleFunc("POST /api/settings/monitor", requireAuth(handleAPISettingsMonitor))
 	mux.HandleFunc("POST /api/settings/sample-rate", requireAuth(handleAPISettingsSampleRate))
 	mux.HandleFunc("POST /api/settings/channels", requireAuth(handleAPISettingsChannels))
