@@ -317,8 +317,13 @@ func TestUnknownPersistedThemeFallsBackToNone(t *testing.T) {
 	if !strings.Contains(body, `<html data-theme="none">`) {
 		t.Error("removed persisted theme should render data-theme=none")
 	}
-	if strings.Contains(body, `/static/themes/`) {
+	if strings.Contains(body, `/static/themes/`+`"`)|| strings.Contains(body, `.css`) {
 		t.Error("removed persisted theme must not link any bundle")
+	}
+	// Icons always come from the library: unthemed resolves to the generic
+	// sprite (the same set a no-override theme would use).
+	if !strings.Contains(body, `/static/themes/icons/generic.svg`) {
+		t.Error("unthemed dashboard should reference the generic icon sprite")
 	}
 }
 
