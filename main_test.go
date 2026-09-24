@@ -2934,3 +2934,25 @@ func TestMeterReaderFlushesMidStreamBatch(t *testing.T) {
 		t.Errorf("ch4 peak = %v, want -40", meterChannelPeak[3])
 	}
 }
+
+func TestRecordingFilesKeyStableAndHit(t *testing.T) {
+	k1, ok1 := recordingFilesKey()
+	k2, ok2 := recordingFilesKey()
+	if !ok1 || !ok2 {
+		t.Skip("rec path unreadable here")
+	}
+	if k1 != k2 {
+		t.Fatalf("key unstable: %q vs %q", k1, k2)
+	}
+	// Prime the cache, then verify a hit returns equal contents.
+	a := recordingFiles()
+	b := recordingFiles()
+	if len(a) != len(b) {
+		t.Fatalf("len %d vs %d", len(a), len(b))
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			t.Fatalf("[%d] %q vs %q", i, a[i], b[i])
+		}
+	}
+}
