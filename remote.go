@@ -1482,7 +1482,7 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
    re-colours through these same names - no rule needed editing.
    --meter-h and the JS-set --vu-* stay app-owned: they are geometry
    and live signal data, not theming. */
-:root{--glow:var(--ftl-accent,#00d9ff);--panel:var(--ftl-surface,#0a1526);--border:var(--ftl-border,#0f3a5c);--text:var(--ftl-text,#cfeeff);--dim:var(--ftl-muted,#5b8aa8);--rec:var(--ftl-danger,#ff3355);--idle:var(--ftl-success,#2bffb0);--orange:var(--ftl-warning,#ff8c1a);--meter-h:120px}
+:root{--glow:var(--ftl-accent,#00d9ff);--panel:var(--ftl-surface,#0a1526);--border:var(--ftl-border,#0f3a5c);--text:var(--ftl-text,#cfeeff);--dim:var(--ftl-muted,#5b8aa8);--rec:var(--ftl-danger,#ff3355);--idle:var(--ftl-success,#2bffb0);--orange:var(--ftl-warning,#ff8c1a);--meter-h:120px;--ftl-meter-low:var(--ftl-success,#0aff9d);--ftl-meter-mid:var(--ftl-warning,#ffe400);--ftl-meter-high:var(--ftl-danger,#ff2a2a)}
 *{box-sizing:border-box}
 body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--ftl-surface,#0a1a2e),var(--ftl-bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
 h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 0.8em}
@@ -1760,24 +1760,12 @@ main.ftl-app-main{display:contents}
 .db-scale span::after{content:'';position:absolute;right:0;top:50%;width:100%;height:1px;background:rgba(0,217,255,0.25);transform:translateY(50%)}
 .ch-meters{display:flex;justify-content:center;gap:0.6em;overflow-x:auto;padding-bottom:2px}
 .ch-meter{display:flex;flex-direction:column;align-items:center;gap:0.25em;flex:none}
-/* No real border on the track: the fill's height% and the scale labels' % are
-   then resolved against the same full --meter-h box, so the top of the fill
-   touches exactly the same row as the matching dB tick text beside it. A
-   ring is drawn via box-shadow instead so the darker background still reads
-   as a channel well. */
-.vu-track{position:relative;width:14px;height:var(--meter-h);background:#020509;box-shadow:inset 0 0 0 1px var(--border);border-radius:2px}
-/* The meter bands honor the design colors at absolute dBFS: green below
-   -18dBFS, yellow -18..-6dBFS, red above -6dBFS. The stops are percentages
-   of the track, computed in JS from the configured floor via the same
-   vuPct() curve used for the ticks and fills (--vu-g / --vu-r below), so a
-   floor change repositions the bands instead of leaving them tuned to one
-   range. The gradient is sized to the full --meter-h track (not the fill's
-   own height) and pinned to the bottom, so the fill only reveals the band up
-   to its current level - a low bar reads green, a mid bar yellow, a hot bar
-   red - instead of the whole green->red ramp compressing into every bar
-   regardless of level. */
-.vu-fill{position:absolute;bottom:0;left:1px;right:1px;height:0%;background:linear-gradient(to top,#0aff9d 0%,#0aff9d var(--vu-g,58%),#ffe400 var(--vu-g,58%),#ffe400 var(--vu-r,90%),#ff2a2a var(--vu-r,90%),#ff2a2a 100%);background-size:100% var(--meter-h);background-position:0 100%;background-repeat:no-repeat;box-shadow:0 0 8px rgba(0,255,180,0.35)}
-.vu-peak{position:absolute;left:1px;right:1px;height:2px;background:#fff;box-shadow:0 0 6px #fff}
+/* Each strip is the shared .ftl-meter.ftl-meter-v; the app keeps only the
+   strip's geometry (14px wide, exactly --meter-h tall so the dB scale's
+   ticks line up row-for-row with the fill) and the darker well background.
+   Band colors come from the :root bridge (--ftl-meter-low/mid/high);
+   thresholds and levels are JS-set tokens (see buildDbScale/applyMeter). */
+.vu-track{width:14px;height:var(--meter-h);background:#020509;border-color:var(--border);border-radius:2px}
 .ch-label{font-size:0.6em;color:var(--dim);letter-spacing:0.04em}
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
@@ -2287,9 +2275,12 @@ function rebuildDbScale(floor) {
   });
   // Position the green->yellow and yellow->red meter bands at the design's
   // absolute thresholds (-18 / -6 dBFS) mapped through the current floor.
+  // The shared .ftl-meter reads these as --ftl-meter-warn-at/-peak-at; the
+  // span is the track height so the stops land as percentages of the bar.
   var root = document.documentElement;
-  root.style.setProperty('--vu-g', vuPct(-18) + '%');
-  root.style.setProperty('--vu-r', vuPct(-6) + '%');
+  root.style.setProperty('--ftl-meter-warn-at', vuPct(-18) + '%');
+  root.style.setProperty('--ftl-meter-peak-at', vuPct(-6) + '%');
+  root.style.setProperty('--ftl-meter-span', 'var(--meter-h)');
 }
 
 // ---- 7-segment time display (inline SVG segments, italic via skewX) ----
@@ -2415,7 +2406,7 @@ function ensureChannels(n) {
   for (var i = 1; i <= n; i++) {
     var el = document.createElement('div');
     el.className = 'ch-meter';
-    el.innerHTML = '<div class="vu-track"><div class="vu-peak" data-i="' + i + '"></div><div class="vu-fill" data-i="' + i + '"></div></div><div class="ch-label">' + i + '</div>';
+    el.innerHTML = '<div class="ftl-meter ftl-meter-v vu-track"><div class="ftl-meter-peak" data-i="' + i + '"></div><div class="ftl-meter-fill" data-i="' + i + '"></div></div><div class="ch-label">' + i + '</div>';
     chMeters.appendChild(el);
   }
   chCount = n;
@@ -2467,8 +2458,8 @@ function applyMeter(m) {
     var i = idx + 1;
     var fill = chMeters.querySelector('.vu-fill[data-i="' + i + '"]');
     var peak = chMeters.querySelector('.vu-peak[data-i="' + i + '"]');
-    if (fill) fill.style.height = vuPct(c.rmsDB) + '%';
-    if (peak) peak.style.bottom = vuPct(c.peakDB) + '%';
+    if (fill) fill.style.setProperty('--ftl-meter-level', vuPct(c.rmsDB) + '%');
+    if (peak) peak.style.setProperty('--ftl-meter-peak', vuPct(c.peakDB) + '%');
   });
 
   // Meter footer badge: stereo/dual-mono indicator
