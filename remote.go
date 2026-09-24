@@ -3360,7 +3360,26 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 // the list uses for per-file download), so per-day subfolders are preserved
 // and same-named files across days don't collide.
 func handleDownloadAll(w http.ResponseWriter, r *http.Request) {
-	files := recordingFiles()
+	// Snapshot the in-progress take under lock, then filter before any
+	// headers go out: the bundle must never include the half-written WAV
+	// (torn read, mid-write duration), and pre-statting keeps the manifest's
+	// file count honest instead of skipping unreadables mid-stream.
+	mutex.Lock()
+	active := ""
+	if isRecording {
+		active = recordingFile
+	}
+	mutex.Unlock()
+	var files []string
+	for _, f := range recordingFiles() {
+		if f == active {
+			continue
+		}
+		if info, err := os.Stat(f); err != nil || info.IsDir() {
+			continue
+		}
+		files = append(files, f)
+	}
 	if len(files) == 0 {
 		// A bare 404 reads as "broken" - the common case is simply an empty
 		// /rec (fresh unit, or a dev box). Say so, with a way back.
