@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -2868,5 +2869,42 @@ func TestMeterDeckFlagsDriveReelAnimation(t *testing.T) {
 		if !strings.Contains(page, want) {
 			t.Fatalf("dashboard missing deck-animation hook %q", want)
 		}
+	}
+}
+
+func TestEnlargeFifoGrowsPipe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.fifo")
+	if err := syscall.Mkfifo(path, 0666); err != nil {
+		t.Fatal(err)
+	}
+	const linux_F_GETPIPE_SZ = 1032
+	// Growing a pipe needs privilege the test sandbox lacks (EPERM here,
+	// succeeds as root on the unit): probe first and skip where the
+	// kernel refuses, so the test still verifies growth on target.
+	probe, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, perr := syscall.Syscall(syscall.SYS_FCNTL, probe.Fd(), 1031, 4<<20)
+	probe.Close()
+	if perr == syscall.EPERM {
+		t.Skip("sandbox denies F_SETPIPE_SZ; growth verified on target")
+	}
+	pipeSize := func() int {
+		f, err := os.OpenFile(path, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		r1, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), linux_F_GETPIPE_SZ, 0)
+		if errno != 0 {
+			t.Fatal(errno)
+		}
+		return int(r1)
+	}
+	before := pipeSize()
+	enlargeFifo(path)
+	if got := pipeSize(); got <= before {
+		t.Errorf("pipe size %d, want growth past default %d", got, before)
 	}
 }
