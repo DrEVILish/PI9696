@@ -3878,7 +3878,9 @@ func newRemoteMux() *http.ServeMux {
 	// matched here rather than in the pattern.
 	mux.HandleFunc("GET /static/themes/{file}", func(w http.ResponseWriter, r *http.Request) {
 		slug, ok := strings.CutSuffix(r.PathValue("file"), ".css")
-		if !ok || !isKnownTheme(slug) {
+		// ftl-core.css is the always-linked reset+components file, not a
+		// theme bundle; it serves alongside the themes it lacks.
+		if !ok || (slug != "ftl-core" && !isKnownTheme(slug)) {
 			http.NotFound(w, r)
 			return
 		}
