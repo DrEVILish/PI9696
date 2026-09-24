@@ -317,7 +317,9 @@ func TestUnknownPersistedThemeFallsBackToNone(t *testing.T) {
 	if !strings.Contains(body, `<html data-theme="none">`) {
 		t.Error("removed persisted theme should render data-theme=none")
 	}
-	if strings.Contains(body, `/static/themes/`+`"`)|| strings.Contains(body, `.css`) {
+	// A bundle href only ever appears on the themecss link; unthemed the
+	// link exists but carries no href (icons still use the generic sprite).
+	if strings.Contains(body, `id="themecss" rel="stylesheet" href`) {
 		t.Error("removed persisted theme must not link any bundle")
 	}
 	// Icons always come from the library: unthemed resolves to the generic
