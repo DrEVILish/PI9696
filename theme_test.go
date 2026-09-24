@@ -77,6 +77,10 @@ func TestThemeBundleServedAndUnknownRejected(t *testing.T) {
 	}{
 		{"/static/themes/lcars.css", http.StatusOK},
 		{"/static/themes/matrix.css", http.StatusOK},
+		{"/static/themes/ftl-core.css", http.StatusOK},
+		{"/static/themes/icons/generic.svg", http.StatusOK},
+		{"/static/themes/icons/windows95.svg", http.StatusOK},
+		{"/static/themes/icons/nope.svg", http.StatusNotFound},
 		{"/static/themes/nope.css", http.StatusNotFound},
 		{"/static/themes/none.css", http.StatusNotFound},
 		{"/static/assets/fonts/Antonio-Bold.woff2", http.StatusOK},
