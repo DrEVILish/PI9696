@@ -3158,3 +3158,46 @@ func TestRotateTokenRevokesAll(t *testing.T) {
 		t.Fatalf("new token login returned %d, want 303", rec.Code)
 	}
 }
+
+// Cross-origin mutations are rejected even with a valid session; same-origin
+// and headerless (curl) callers pass.
+func TestCrossOriginMutationRejected(t *testing.T) {
+	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
+	remoteToken = "TESTTOKEN5"
+	loginLimit = newLoginLimiter()
+	sessions = newSessionStore()
+	t.Cleanup(func() { remoteToken, loginLimit, sessions = origToken, origLimiter, origSessions })
+
+	mux := newRemoteMux()
+	cookie := testSessionCookie(t)
+	post := func(origin, referer string) int {
+		req := httptest.NewRequest("POST", "/api/settings/demo", strings.NewReader("enabled=on"))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.AddCookie(cookie)
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		if referer != "" {
+			req.Header.Set("Referer", referer)
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	// httptest requests carry r.Host = example.com; match it for same-origin.
+	if code := post("http://example.com", ""); code == http.StatusForbidden {
+		t.Fatalf("same-origin POST rejected: %d", code)
+	}
+	if code := post("", ""); code == http.StatusForbidden {
+		t.Fatalf("headerless POST rejected: %d", code)
+	}
+	if code := post("http://evil.example", ""); code != http.StatusForbidden {
+		t.Fatalf("foreign Origin POST returned %d, want 403", code)
+	}
+	if code := post("", "http://evil.example/page"); code != http.StatusForbidden {
+		t.Fatalf("foreign Referer POST returned %d, want 403", code)
+	}
+	mutex.Lock()
+	setDemoModeLocked(false)
+	mutex.Unlock()
+}
