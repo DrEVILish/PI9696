@@ -2381,6 +2381,11 @@ func startRecording() {
 	// without it) - every recording would have been silent.
 	args := []string{
 		"-nostdin",
+		// The FIFO writer (Inferno) never pauses; the default 8-packet
+		// input queue overruns at high channel counts whenever the filter
+		// chain stalls, and an overrun on a recording input is a gap in
+		// the take. 512 packets of headroom costs ~2MB worst case.
+		"-thread_queue_size", "512",
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRate),
 		"-ac", fmt.Sprintf("%d", channelCount),
 		"-i", audioFifoPath(),
@@ -2631,6 +2636,7 @@ func startMonitor() {
 	}
 
 	cmd := exec.Command("ffmpeg", "-nostdin",
+		"-thread_queue_size", "512",
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRates[sampleRateIdx]),
 		"-ac", fmt.Sprintf("%d", channelCount),
 		"-i", audioFifoPath(),
