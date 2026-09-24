@@ -480,6 +480,11 @@ type MenuItem struct {
 // Close releases resources used by the FiraCode manager
 func (fcm *FiraCodeManager) Close() error {
 	for _, face := range fcm.fontFaces {
+		// display.font is seeded into the cache above: display.Close()
+		// below owns it, closing it twice faults some face impls.
+		if fcm.display != nil && face == fcm.display.font {
+			continue
+		}
 		face.Close()
 	}
 	if fcm.display != nil {
