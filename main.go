@@ -4854,13 +4854,30 @@ func storageUnwritable() bool {
 // screen / WebUI report - both must reflect the volume a new take will
 // actually land on. If the recording path can't be stat'd (unmounted/unwritable)
 // it returns 0, which lowDisk()/shouldAutoStopTake treat as low via
-// storageUnwritable.
+// storageUnwritable. Results are cached for 1s: the idle/recording screens
+// call it twice per render at 10Hz, and free space never needs fresher
+// than the mid-take disk check's own 1s throttle (see
+// checkMidTakeDiskLocked). Own mutex - callers hold the app mutex or not
+// depending on path.
+var (
+	freeSpaceMu    sync.Mutex
+	freeSpaceAt    time.Time
+	freeSpaceBytes uint64
+)
+
 func getFreeSpace() uint64 {
+	freeSpaceMu.Lock()
+	defer freeSpaceMu.Unlock()
+	if time.Since(freeSpaceAt) < time.Second {
+		return freeSpaceBytes
+	}
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(RecordPath, &stat); err != nil {
 		return 0
 	}
-	return stat.Bavail * uint64(stat.Bsize)
+	freeSpaceBytes = stat.Bavail * uint64(stat.Bsize)
+	freeSpaceAt = time.Now()
+	return freeSpaceBytes
 }
 
 // ---- telemetry helpers ----
