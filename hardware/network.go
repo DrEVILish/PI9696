@@ -79,7 +79,9 @@ func (nd *NetworkDetector) isLinkUp(iface *net.Interface) bool {
 			carrier := strings.TrimSpace(string(data))
 			return carrier == "1"
 		}
-		return true // Assume up if we can't read carrier status
+		// Unreadable carrier must not read as link-up: flags can claim
+		// Up+Running while the cable is out, which masked faults.
+		return false
 	}
 	return false
 }
@@ -164,6 +166,7 @@ func (nd *NetworkDetector) getGateway() string {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
+	fallback := ""
 	for scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Fields(line)
@@ -174,13 +177,23 @@ func (nd *NetworkDetector) getGateway() string {
 			gatewayHex := fields[2]
 			if len(gatewayHex) == 8 {
 				gateway := hexToIP(gatewayHex)
-				if gateway != "" {
+				if gateway == "" {
+					continue
+				}
+				// Prefer the default route via our own interface: without
+				// the interface match, Network Info could show wlan0's
+				// gateway next to eth0's IP. Keep the first other-interface
+				// route only as a fallback.
+				if fields[0] == nd.interfaceName {
 					return gateway
+				}
+				if fallback == "" {
+					fallback = gateway
 				}
 			}
 		}
 	}
-	return ""
+	return fallback
 }
 
 // hexToIP converts the little-endian hex gateway field from /proc/net/route
