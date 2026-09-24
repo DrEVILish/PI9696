@@ -2878,7 +2878,6 @@ func TestEnlargeFifoGrowsPipe(t *testing.T) {
 	if err := syscall.Mkfifo(path, 0666); err != nil {
 		t.Fatal(err)
 	}
-	const linux_F_GETPIPE_SZ = 1032
 	// Growing a pipe needs privilege the test sandbox lacks (EPERM here,
 	// succeeds as root on the unit): probe first and skip where the
 	// kernel refuses, so the test still verifies growth on target.
@@ -2886,7 +2885,7 @@ func TestEnlargeFifoGrowsPipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, perr := syscall.Syscall(syscall.SYS_FCNTL, probe.Fd(), 1031, 4<<20)
+	_, _, perr := syscall.Syscall(syscall.SYS_FCNTL, probe.Fd(), linuxFSetPipeSz, 4<<20)
 	probe.Close()
 	if perr == syscall.EPERM {
 		t.Skip("sandbox denies F_SETPIPE_SZ; growth verified on target")
@@ -2897,7 +2896,7 @@ func TestEnlargeFifoGrowsPipe(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer f.Close()
-		r1, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), linux_F_GETPIPE_SZ, 0)
+		r1, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), linuxFGetPipeSz, 0)
 		if errno != 0 {
 			t.Fatal(errno)
 		}
