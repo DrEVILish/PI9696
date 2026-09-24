@@ -220,6 +220,15 @@ func (s *sessionStore) revoke(id string) {
 	delete(s.sessions, id)
 }
 
+// revokeAll drops every session: used by token rotation so sessions minted
+// under a compromised token don't survive it (logout alone revokes only the
+// presented cookie).
+func (s *sessionStore) revokeAll() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sessions = make(map[string]time.Time)
+}
+
 var sessions = newSessionStore()
 
 // sessionLifetime is how long a login session lasts server-side.
@@ -513,6 +522,23 @@ func handleLogout(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: remoteSessionCookie, Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
+}
+
+// handleAPIRotateToken mints a fresh access token and revokes every session
+// (including the caller's): sessions from a compromised token must not
+// survive rotation. Redirects to /login with the new token in the fragment,
+// so the operator's boxes pre-fill and they're one click from logging back
+// in - while the token itself never touches a query string or the server log.
+func handleAPIRotateToken(w http.ResponseWriter, r *http.Request) {
+	mutex.Lock()
+	remoteToken = generateRemoteToken()
+	sessions.revokeAll()
+	noteActivity()
+	newToken := remoteToken
+	mutex.Unlock()
+	logInfof("access token rotated, all sessions revoked")
+	http.SetCookie(w, &http.Cookie{Name: remoteSessionCookie, Path: "/", MaxAge: -1})
+	http.Redirect(w, r, "/login#t="+newToken, http.StatusSeeOther)
 }
 
 // --- Themes ---------------------------------------------------------------
@@ -1780,6 +1806,11 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
     <form action="/logout" method="POST" style="display:inline;margin:0">
       <button class="icon-btn ftl-btn ftl-btn-icon" title="Log out" aria-label="Log out">
       <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 17l5-5-5-5M21 12H9M12 19H5a2 2 0 01-2-2V7a2 2 0 012-2h7"/></svg>
+      </button>
+    </form>
+    <form action="/api/settings/rotate-token" method="POST" style="display:inline;margin:0" onsubmit="return confirm('Rotate the access token? Every session (including this one) is logged out.')">
+      <button class="icon-btn ftl-btn ftl-btn-icon" title="Rotate access token" aria-label="Rotate access token">
+      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-2.64-6.36M21 3v6h-6"/></svg>
       </button>
     </form>
   </div>
@@ -3532,6 +3563,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/brightness", requireAuth(handleAPISettingsBrightness))
 	mux.HandleFunc("POST /api/settings/dim", requireAuth(handleAPISettingsAutoDim))
 	mux.HandleFunc("POST /api/settings/demo", requireAuth(handleAPISettingsDemoMode))
+	mux.HandleFunc("POST /api/settings/rotate-token", requireAuth(handleAPIRotateToken))
 	mux.HandleFunc("POST /api/settings/hyperdeck", requireAuth(handleAPISettingsHyperdeck))
 	mux.HandleFunc("POST /api/settings/monitor", requireAuth(handleAPISettingsMonitor))
 	mux.HandleFunc("POST /api/settings/sample-rate", requireAuth(handleAPISettingsSampleRate))
