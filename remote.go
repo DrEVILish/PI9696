@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -3341,6 +3342,10 @@ type recordingRow struct {
 // duration needs the file's actual content (see recordingDuration).
 var recFilenameRe = regexp.MustCompile(`^([A-Za-z0-9 -]+)_(\d{8})_(\d{6})_ch(\d+)_(\d+)kHz(-\d+)?\.(\w+)$`)
 
+// recordingDuration derives a take's length. The WAV data-chunk header is
+// parsed when sane (ffmpeg writes LIST/INFO chunks before data, so the old
+// fixed 44-byte header guess under-counted); a bogus size (0 = killed
+// mid-take, or larger than the file) falls back to the file-size estimate.
 func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	info, err := os.Stat(path)
 	if err != nil {
@@ -3348,8 +3353,33 @@ func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	}
 
 	const bytesPerSample = 3 // pcm_s24le
-	const headerBytes = 44
-	dataBytes := info.Size() - headerBytes
+	dataBytes := int64(0)
+	if f, err := os.Open(path); err == nil {
+		var hdr [12]byte
+		if _, err := io.ReadFull(f, hdr[:]); err == nil && string(hdr[0:4]) == "RIFF" && string(hdr[8:12]) == "WAVE" {
+			for {
+				var ch [8]byte
+				if _, err := io.ReadFull(f, ch[:]); err != nil {
+					break
+				}
+				size := int64(binary.LittleEndian.Uint32(ch[4:8]))
+				if string(ch[0:4]) == "data" {
+					dataBytes = size
+					break
+				}
+				if size%2 == 1 {
+					size++ // chunks are word-aligned
+				}
+				if _, err := f.Seek(size, io.SeekCurrent); err != nil {
+					break
+				}
+			}
+		}
+		f.Close()
+	}
+	if dataBytes <= 0 || dataBytes > info.Size()-12 {
+		dataBytes = info.Size() - 44
+	}
 	if dataBytes <= 0 || channels <= 0 || sampleRate <= 0 {
 		return 0
 	}

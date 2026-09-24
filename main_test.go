@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"image/png"
@@ -2224,6 +2225,36 @@ func TestRecordingDurationUsesHzNotKHz(t *testing.T) {
 	// used to be shipped - so the fix is pinned to the correct unit.
 	if big := recordingDuration(p, 2, 48); big < 15*time.Minute {
 		t.Fatalf("kHz value should give a 1000x-inflated duration for the test to be meaningful, got %v", big)
+	}
+
+	// A WAV with metadata chunks before data: duration must come from the
+	// data-chunk header, not file size (a fixed 44-byte guess under-counts).
+	p2 := filepath.Join(dir, "recording_20240131_143023_ch2_48kHz.wav")
+	f2, err := os.Create(p2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listData := []byte("INFOISFT8ffmpeg") // arbitrary metadata payload
+	listSize := len(listData)
+	dataBytes2 := 48000 * 2 * 3 // one second
+	riffSize := 4 + 8 + listSize + 8 + dataBytes2
+	buf := append([]byte("RIFF"), 0, 0, 0, 0)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(riffSize))
+	buf = append(buf, "WAVE"...)
+	buf = append(buf, "LIST"...)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(listSize))
+	buf = append(buf, listData...)
+	buf = append(buf, "data"...)
+	buf = binary.LittleEndian.AppendUint32(buf, uint32(dataBytes2))
+	buf = append(buf, make([]byte, dataBytes2)...)
+	if _, err := f2.Write(buf); err != nil {
+		t.Fatal(err)
+	}
+	f2.Close()
+
+	got2 := recordingDuration(p2, 2, 48000)
+	if got2 < 950*time.Millisecond || got2 > 1050*time.Millisecond {
+		t.Fatalf("expected ~1s with LIST chunk present, got %v", got2)
 	}
 }
 
