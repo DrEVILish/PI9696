@@ -2956,3 +2956,38 @@ func TestRecordingFilesKeyStableAndHit(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderSkipsUnchangedFramePush(t *testing.T) {
+	initTestHardware(t)
+	origSeq, origHash, origPushed := displaySeq, displayLastHash, displayPushed
+	origState, origMode := currentState, menuMode
+	origSysNotice, origDiskWarn := sysNoticeUntil, diskWarnUntil
+	t.Cleanup(func() {
+		displaySeq, displayLastHash, displayPushed = origSeq, origHash, origPushed
+		currentState, menuMode = origState, origMode
+		sysNoticeUntil, diskWarnUntil = origSysNotice, origDiskWarn
+	})
+	// Static confirm dialog with blinkers frozen: no seconds counters,
+	// meters or 500ms notice flashes, so two renders hash identically
+	// (only the status-bar clock could differ, at minute granularity).
+	currentState, menuMode = StateConfirm, ShutdownConfirm
+	sysNoticeUntil, diskWarnUntil = time.Time{}, time.Time{}
+	displayPushed = false
+
+	// Isolate the sim framebuffer dump: the dev service (SIM mode) shares
+	// the default /tmp path and rewrites it on its own 100ms tick, which
+	// would fake a push here.
+	frame := filepath.Join(t.TempDir(), "frame.png")
+	t.Setenv("PI9696_SIM_OUT", frame)
+	render()
+	if _, err := os.Stat(frame); err != nil {
+		t.Fatalf("first render must push a frame: %v", err)
+	}
+	st1, _ := os.Stat(frame)
+	time.Sleep(20 * time.Millisecond) // mtime granularity: a rewrite must show
+	render()
+	st2, _ := os.Stat(frame)
+	if !st2.ModTime().Equal(st1.ModTime()) {
+		t.Error("identical frame re-pushed to display; skip the SPI write when the hash matches")
+	}
+}

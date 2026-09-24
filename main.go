@@ -803,6 +803,7 @@ var (
 	cpuPct                 []float64 // latest per-core usage % (cpuUsageLoop)
 	displaySeq             uint64    // bumped when the panel framebuffer changes (see render); the WebUI mirror reloads on change, not on poll
 	displayLastHash        uint64
+	displayPushed          bool      // first render always pushes (see render); afterwards only changed frames
 	vuRangeIdx             = 3      // index into vuRangeOptions; -90dBFS default
 	peakHoldIdx            = 4      // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
 	transportMode          = "icon" // web dashboard transport buttons: "icon" or "text" labels - persisted, see PersistedConfig
@@ -3507,7 +3508,16 @@ func render() {
 		renderConfirmDialog()
 	}
 
-	hwManager.UpdateDisplay()
+	// Skip the SPI push when the framebuffer is unchanged: Update() always
+	// writes addr commands plus the full 8KB frame, and static screens
+	// (idle, paused) re-render identical pixels at 10Hz. The hash compare
+	// reuses the WebUI mirror's signal (see noteDisplayFrame); the
+	// first-push flag covers a theoretical first-frame hash collision so
+	// boot can never leave a dark panel.
+	if !displayPushed || hwManager.FrameHash() != displayLastHash {
+		hwManager.UpdateDisplay()
+		displayPushed = true
+	}
 	noteDisplayFrame()
 }
 
