@@ -2897,7 +2897,7 @@ func startPlayback() {
 	currentState = StatePlaying
 	done := make(chan struct{})
 	playbackDone = done
-	armDemoPlaybackEnd(cmd, playbackDuration, done)
+	armDemoPlaybackEnd(cmd, playbackDuration)
 
 	// cmd.Wait must only ever be called once, and this goroutine is its sole
 	// owner - whether playback finishes naturally (EOF) or is interrupted by
@@ -2938,31 +2938,44 @@ func playbackCmdFor(file string, pos time.Duration) *exec.Cmd {
 
 // armDemoPlaybackEnd ends a simulated take when its duration elapses: a real
 // ffmpeg exits at EOF on its own, but the sleep stand-in never does. No-op
-// for real playback and for unknown (zero) durations. The done channel (closed
-// by the reaping goroutine) retires stale timers across seeks/stops.
-func armDemoPlaybackEnd(cmd *exec.Cmd, total time.Duration, done <-chan struct{}) {
+// for real playback and for unknown (zero) durations. Arming stops any
+// previous timer, which retires stale timers across seeks/stops. Pausing
+// stops the timer and resume re-arms with the remainder, so the countdown
+// tracks play position instead of wall clock (a long-paused demo track used
+// to be SIGTERMed early). Caller must hold the app mutex.
+var demoEndTimer *time.Timer
+var demoEndCmd *exec.Cmd
+var demoEndRemaining time.Duration
+
+func stopDemoEndTimerLocked() {
+	if demoEndTimer != nil {
+		demoEndTimer.Stop()
+		demoEndTimer = nil
+	}
+}
+
+func armDemoPlaybackEnd(cmd *exec.Cmd, total time.Duration) {
+	stopDemoEndTimerLocked()
+	demoEndCmd = nil
 	if !demoMode || total <= 0 {
 		return
 	}
-	go func() {
-		timer := time.NewTimer(total)
-		defer timer.Stop()
-		select {
-		case <-done:
+	demoEndCmd = cmd
+	demoEndTimer = time.AfterFunc(total, func() {
+		mutex.Lock()
+		cur, endCmd := playbackCmd, demoEndCmd
+		stillDemo := demoMode
+		demoEndTimer = nil
+		mutex.Unlock()
+		if !stillDemo || cur != cmd || cur != endCmd || cmd.Process == nil {
 			return
-		case <-timer.C:
-			mutex.Lock()
-			cur := playbackCmd
-			mutex.Unlock()
-			if cur == cmd && cmd.Process != nil {
-				// SIGCONT first: a paused stand-in is SIGSTOP'd and would
-				// defer the TERM forever (same trap stopPlayback handles).
-				if err := cmd.Process.Signal(syscall.SIGCONT); err == nil {
-					_ = cmd.Process.Signal(syscall.SIGTERM)
-				}
-			}
 		}
-	}()
+		// SIGCONT first: a paused stand-in is SIGSTOP'd and would
+		// defer the TERM forever (same trap stopPlayback handles).
+		if err := cmd.Process.Signal(syscall.SIGCONT); err == nil {
+			_ = cmd.Process.Signal(syscall.SIGTERM)
+		}
+	})
 }
 
 // process stops: no output, no position advance) and flips the UI into the
@@ -2978,6 +2991,15 @@ func pausePlayback() {
 		return
 	}
 	currentState = StatePaused
+	// Freeze the demo end-of-track countdown with the playhead; resume
+	// re-arms with the remainder.
+	if demoMode {
+		stopDemoEndTimerLocked()
+		demoEndRemaining = playbackDuration - playbackPausedElapsed
+		if demoEndRemaining < 0 {
+			demoEndRemaining = 0
+		}
+	}
 	logInfof("Playback paused")
 }
 
@@ -2996,6 +3018,10 @@ func resumePlayback() {
 	playbackStart = playbackStart.Add(time.Since(playbackStart) - playbackPausedElapsed)
 	playbackPausedElapsed = 0
 	currentState = StatePlaying
+	// Restart the demo end-of-track countdown from where the pause froze it.
+	if demoMode {
+		armDemoPlaybackEnd(playbackCmd, demoEndRemaining)
+	}
 	logInfof("Playback resumed")
 }
 
@@ -3030,6 +3056,8 @@ func stopPlayback() {
 	// Cancel a seek handoff in flight: restartPlaybackAt checks this after
 	// its wait and bails instead of resurrecting playback from under Stop.
 	seekingPlayback = false
+	// A stopped track needs no end-of-track countdown.
+	stopDemoEndTimerLocked()
 	if playbackCmd != nil && playbackCmd.Process != nil {
 		playbackCmd.Process.Signal(syscall.SIGTERM)
 		// A paused track is frozen with SIGSTOP (see pausePlayback), and a
@@ -3200,7 +3228,7 @@ func restartPlaybackAt(pos time.Duration) {
 
 	done := make(chan struct{})
 	playbackDone = done
-	armDemoPlaybackEnd(cmd, playbackDuration-pos, done)
+	armDemoPlaybackEnd(cmd, playbackDuration-pos)
 	go func() {
 		cmd.Wait()
 		mutex.Lock()
