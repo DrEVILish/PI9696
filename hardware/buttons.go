@@ -165,29 +165,3 @@ func (bm *ButtonManager) SetCallback(buttonType ButtonType, callback func(Button
 		bm.buttons[buttonType].mutex.Unlock()
 	}
 }
-
-func (bm *ButtonManager) IsPressed(buttonType ButtonType) bool {
-	bm.mutex.Lock()
-	defer bm.mutex.Unlock()
-
-	if int(buttonType) < len(bm.buttons) && bm.buttons[buttonType] != nil {
-		bm.buttons[buttonType].mutex.Lock()
-		pressed := bm.buttons[buttonType].pressed
-		bm.buttons[buttonType].mutex.Unlock()
-		return pressed
-	}
-	return false
-}
-
-func (bt ButtonType) String() string {
-	switch bt {
-	case RecordButton:
-		return "Record"
-	case StopButton:
-		return "Stop"
-	case PlayButton:
-		return "Play"
-	default:
-		return "Unknown"
-	}
-}
