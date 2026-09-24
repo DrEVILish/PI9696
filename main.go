@@ -2538,20 +2538,56 @@ func meterReader(stdout io.Reader) {
 	// astats lines for 128ch takes exceed the 64KB default: one long line
 	// would silently kill meters for the whole take.
 	scanner.Buffer(make([]byte, 1<<20), 1<<20)
+	// astats emits thousands of lines/sec at high channel counts; taking
+	// the app mutex per line serializes render and every handler behind
+	// the meter parser. Parse lock-free into a small batch and flush under
+	// one lock - meters refresh at 10Hz downstream, so coarser shared
+	// writes are invisible. The trailing flush covers short inputs.
+	const batchSize = 32
+	type update struct {
+		channel int // 1-based, or 0 for an Overall value
+		isRMS   bool
+		v       float64
+	}
+	var pending [batchSize]update
+	n := 0
+	flush := func() {
+		if n == 0 {
+			return
+		}
+		mutex.Lock()
+		for _, u := range pending[:n] {
+			if u.channel == 0 {
+				if u.isRMS {
+					meterRMSDB = u.v
+				} else {
+					meterPeakDB = u.v
+				}
+				continue
+			}
+			dest := meterChannelPeak
+			if u.isRMS {
+				dest = meterChannelRMS
+			}
+			if u.channel >= 1 && u.channel <= len(dest) {
+				dest[u.channel-1] = u.v
+			}
+		}
+		mutex.Unlock()
+		n = 0
+	}
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
 		case strings.HasPrefix(line, "lavfi.astats.Overall.Peak_level="):
 			if v, err := strconv.ParseFloat(strings.TrimPrefix(line, "lavfi.astats.Overall.Peak_level="), 64); err == nil {
-				mutex.Lock()
-				meterPeakDB = sanitizeMeterDB(v)
-				mutex.Unlock()
+				pending[n] = update{v: sanitizeMeterDB(v)}
+				n++
 			}
 		case strings.HasPrefix(line, "lavfi.astats.Overall.RMS_level="):
 			if v, err := strconv.ParseFloat(strings.TrimPrefix(line, "lavfi.astats.Overall.RMS_level="), 64); err == nil {
-				mutex.Lock()
-				meterRMSDB = sanitizeMeterDB(v)
-				mutex.Unlock()
+				pending[n] = update{isRMS: true, v: sanitizeMeterDB(v)}
+				n++
 			}
 		default:
 			if m := meterChannelLineRe.FindStringSubmatch(line); m != nil {
@@ -2560,18 +2596,15 @@ func meterReader(stdout io.Reader) {
 				if err != nil {
 					continue
 				}
-				mutex.Lock()
-				dest := meterChannelPeak
-				if m[2] == "RMS" {
-					dest = meterChannelRMS
-				}
-				if idx >= 1 && idx <= len(dest) {
-					dest[idx-1] = sanitizeMeterDB(v)
-				}
-				mutex.Unlock()
+				pending[n] = update{channel: idx, isRMS: m[2] == "RMS", v: sanitizeMeterDB(v)}
+				n++
 			}
 		}
+		if n == batchSize {
+			flush()
+		}
 	}
+	flush()
 	if err := scanner.Err(); err != nil {
 		logWarnf("meter reader ended: %v", err)
 	}
