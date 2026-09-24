@@ -170,6 +170,10 @@ func TestHyperdeckProtocolSmoke(t *testing.T) {
 	if first, _ := hyperdeckCmd(t, sc, c, "slot info: slot id: 2"); !strings.HasPrefix(first, "102") {
 		t.Errorf("bad slot = %q, want 102", first)
 	}
+	// Invalid take names are rejected before touching the transport.
+	if first, _ := hyperdeckCmd(t, sc, c, "record: name: bad/name"); !strings.HasPrefix(first, "102") {
+		t.Errorf("bad name = %q, want 102", first)
+	}
 	if first, _ := hyperdeckCmd(t, sc, c, "stop"); first != "200 ok" {
 		t.Errorf("idle stop = %q", first)
 	}

@@ -217,8 +217,25 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 			"name: " + name,
 		})
 	case "record":
+		name, named := params["name"]
+		if named && !isValidFilePrefix(name) {
+			h.fail(102, "invalid value")
+			return true
+		}
 		mutex.Lock()
+		// A named record applies the name to this take only: the filename
+		// is baked synchronously inside startRecording, so the previous
+		// prefix is restored before returning and later takes (and the
+		// persisted setting) are unaffected.
+		var prev string
+		if named {
+			prev = filePrefix
+			filePrefix = name
+		}
 		ok := startRecordingGuarded()
+		if named {
+			filePrefix = prev
+		}
 		full := lowDisk()
 		mutex.Unlock()
 		if ok {
