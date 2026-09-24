@@ -79,17 +79,20 @@ func NewEncoder() (*Encoder, error) {
 }
 
 func (e *Encoder) monitor() {
-	ticker := time.NewTicker(1 * time.Millisecond)
-	defer ticker.Stop()
-
+	// Edge-wait instead of a 1ms poll: rotation wakes the loop immediately
+	// (better than poll latency) and idle costs ~50 wakeups/s instead of
+	// 1000. The 20ms timeout also services the click/hold path, whose 3s
+	// hold timing is unaffected by ±20ms. Decode paths unchanged.
+	var spins int
 	for {
 		select {
 		case <-e.quit:
 			return
-		case <-ticker.C:
-			e.readEncoder()
-			e.readButton()
+		default:
 		}
+		edgeTick(e.pinA, 20*time.Millisecond, &spins)
+		e.readEncoder()
+		e.readButton()
 	}
 }
 
