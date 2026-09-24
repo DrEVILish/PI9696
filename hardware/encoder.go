@@ -206,6 +206,14 @@ func (e *Encoder) readButton() {
 				go e.callbacks.onClick()
 			}
 		}
+	} else {
+		// The line returned to its resting level before the window elapsed
+		// (a bounce, not a settled edge): drop any pending edge so the next
+		// real one debounces from scratch instead of latching instantly on
+		// a stale timestamp - which used to convert a hold into a click or
+		// vice versa.
+		e.pressPending = false
+		e.releasePending = false
 	}
 }
 
