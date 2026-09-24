@@ -3052,3 +3052,53 @@ func TestSeekWithUnstartableFFmpegGoesIdle(t *testing.T) {
 		t.Fatalf("failed seek left state=%v cmd=%v, want Idle/nil", state, cmd != nil)
 	}
 }
+
+// Toggling demo mode mid-take/mid-playback is refused: disabling pulls the
+// demo FIFO out from under the recording ffmpeg (silent truncated take).
+func TestDemoToggleRefusedDuringTransport(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	os.MkdirAll(RecordPath, 0755)
+	recFile := filepath.Join(RecordPath, "recording_20260101_000000_ch2_48kHz.wav")
+	if err := os.WriteFile(recFile, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(recFile) })
+
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = false
+	demoMode = false
+	mutex.Unlock()
+
+	onButtonPress(hardware.PlayButton)
+	mutex.Lock()
+	playing := currentState == StatePlaying
+	mutex.Unlock()
+	if !playing {
+		t.Fatal("setup: expected playback to start")
+	}
+
+	mutex.Lock()
+	ok := setDemoModeLocked(true)
+	stillOff := !demoMode
+	mutex.Unlock()
+	if ok || !stillOff {
+		t.Fatalf("demo toggle during playback applied=%v demo=%v, want refused", ok, !stillOff)
+	}
+
+	onButtonPress(hardware.StopButton)
+	waitForPlaybackIdle(t)
+
+	mutex.Lock()
+	ok = setDemoModeLocked(true)
+	on := demoMode
+	mutex.Unlock()
+	if !ok || !on {
+		t.Fatalf("demo toggle at idle applied=%v demo=%v, want applied", ok, on)
+	}
+	mutex.Lock()
+	setDemoModeLocked(false)
+	mutex.Unlock()
+}

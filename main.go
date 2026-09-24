@@ -2055,12 +2055,20 @@ func stopDemoGeneratorLocked() {
 }
 
 // setDemoModeLocked flips demo mode from the OLED/WebUI toggles: syncs the
-// generator and persists. Callers hold the app mutex.
-func setDemoModeLocked(on bool) {
+// generator and persists. Callers hold the app mutex. Refused (false) while a
+// take or playback is running: disabling mid-take pulls the demo FIFO out
+// from under the recording ffmpeg, which sees EOF and silently finalizes a
+// truncated take.
+func setDemoModeLocked(on bool) bool {
+	if on != demoMode && (isRecording || playbackCmd != nil) {
+		logWarnf("demo: refusing toggle during active transport (BUSY - STOP FIRST)")
+		return false
+	}
 	demoMode = on
 	syncDemoGeneratorLocked()
 	settingChanged()
 	logInfof("demo: mode %v", map[bool]string{true: "ON (simulated audio)", false: "off"}[on])
+	return true
 }
 
 // demoGenLoop synthesizes s32le PCM into the demo FIFO: per-channel sine
