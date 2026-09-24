@@ -3392,7 +3392,9 @@ func writeRecordingZip(dst io.Writer, base string, files []string) error {
 			continue
 		}
 
-		hdr := &zip.FileHeader{Name: entry, Method: zip.Deflate}
+		// PCM WAV is incompressible noise to Deflate: Store skips the
+		// CPU burn and streams multi-GB takes at disk speed instead.
+		hdr := &zip.FileHeader{Name: entry, Method: zip.Store}
 		hdr.SetModTime(info.ModTime())
 		wc, err := zw.CreateHeader(hdr)
 		if err != nil {
