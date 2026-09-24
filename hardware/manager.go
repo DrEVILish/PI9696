@@ -154,6 +154,15 @@ func (hm *HardwareManager) FrameHash() uint64 {
 	return 0
 }
 
+// CanvasHash passes through to the supersampled-canvas checksum (see
+// TTFDisplay.CanvasHash); 0 when uninitialized.
+func (hm *HardwareManager) CanvasHash() uint64 {
+	if hm != nil && hm.FiraCode != nil {
+		return hm.FiraCode.CanvasHash()
+	}
+	return 0
+}
+
 func (hm *HardwareManager) DrawPlaybackStatus(elapsed, total string, progress float64, filename string, paused bool) error {
 	return hm.FiraCode.DrawPlaybackStatus(elapsed, total, progress, filename, paused)
 }

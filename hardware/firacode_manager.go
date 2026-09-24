@@ -502,3 +502,12 @@ func (fcm *FiraCodeManager) FrameHash() uint64 {
 	}
 	return 0
 }
+
+// CanvasHash passes through to the canvas checksum (see TTFDisplay);
+// 0 when uninitialized.
+func (fcm *FiraCodeManager) CanvasHash() uint64 {
+	if fcm.display != nil {
+		return fcm.display.CanvasHash()
+	}
+	return 0
+}
