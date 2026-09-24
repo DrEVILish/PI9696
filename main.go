@@ -4073,7 +4073,7 @@ func renderIdleInfoPage() {
 	}
 	ip := anyInterfaceIP()
 	if ip != "" {
-		bmp := qrBitmap("http://" + ip + ":" + remoteControlPort + "/?t=" + remoteToken)
+		bmp := qrBitmap("http://" + ip + ":" + remoteControlPort + "/#t=" + remoteToken)
 		drawQRBitmapFit(bmp)
 	} else {
 		hwManager.DrawCenteredText("Token: "+formatToken(remoteToken), "selected", y+4)

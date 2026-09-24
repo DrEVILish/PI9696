@@ -87,7 +87,7 @@ func formatToken(t string) string {
 // normalizeToken strips whatever separator a user typed between the two
 // groups, so "K7M2 QX9F", "K7M2-QX9F", and "K7M2QX9F" all compare equal.
 // Uppercased first: the alphabet is uppercase-only, so a lowercase direct
-// POST (curl, QR ?t= URL) must not 401.
+// POST (curl, QR #t= URL typed by hand) must not 401.
 func normalizeToken(s string) string {
 	return strings.NewReplacer(" ", "", "-", "").Replace(strings.ToUpper(s))
 }
@@ -254,13 +254,11 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 				http.Error(w, "session expired", http.StatusUnauthorized)
 				return
 			}
-			// Preserve the query (the OLED access-QR encodes /?t=<token>) so a
-			// scanned code still pre-fills the login boxes after the 303.
-			target := "/login"
-			if r.URL.RawQuery != "" {
-				target += "?" + r.URL.RawQuery
-			}
-			http.Redirect(w, r, target, http.StatusSeeOther)
+			// Redirect bare, without the query: the access-QR prefill token
+			// travels in the fragment (/#t=...), which browsers preserve
+			// across this 303 and never send to the server - keeping it
+			// out of history, proxy logs, and the login POST.
+			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
 		next(w, r)
@@ -441,11 +439,14 @@ boxes.forEach(function(box, i) {
     boxes[Math.min(i + chars.length, boxes.length - 1)].focus();
   });
 });
-// The OLED's access-QR encodes a URL with "?t=<token>"; pre-fill the boxes
-// so scanning the code lands the operator one click from Enter.
+// The OLED's access-QR encodes a URL with "#t=<token>"; pre-fill the boxes
+// so scanning the code lands the operator one click from Enter. The fragment
+// is never sent to the server, so unlike the old ?t= query it stays out of
+// browser history and proxy logs.
 (function() {
-  var t = new URLSearchParams(window.location.search).get('t');
-  if (t && t.length === 8 && /^[A-Za-z0-9]+$/.test(t)) {
+  var m = /[#&?]t=([A-Za-z0-9]{8})/.exec(window.location.hash);
+  var t = m && m[1];
+  if (t) {
     t = t.toUpperCase();
     for (var j = 0; j < t.length; j++) boxes[j].value = t[j];
     boxes[boxes.length - 1].focus();
