@@ -508,7 +508,12 @@ document.getElementById('loginForm').addEventListener('submit', function() {
 func handleLoginGet(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	name := deviceName
-	lastLoginPage = time.Now()
+	// Only start the show-token window if it isn't already running: a
+	// crawler/attacker GETting /login in a loop must not extend it (the
+	// token would stay parked on the panel indefinitely).
+	if !loginTokenFreshLocked() {
+		lastLoginPage = time.Now()
+	}
 	mutex.Unlock()
 	theme, css := loginPageTheme()
 	loginPageTmpl.Execute(w, loginPageData{DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css})
