@@ -1818,8 +1818,32 @@ func stopInfernoAndWait() {
 	}
 }
 
-func infernoWorker() {
-	for req := range infernoReqCh {
+// preemptMonitorForRestart synchronously disowns the input monitor ahead of
+// an Inferno restart. doStopInferno removes the FIFO while the old monitor
+// ffmpeg still holds the unlinked fd, and doStartInferno's startMonitor then
+// early-returns on monitoring==true - so without this the orphan exits later,
+// its reaper clears monitoring, and nobody ever starts a fresh monitor: VU
+// pages stay permanently silent. Same disown pattern startRecording uses.
+func preemptMonitorForRestart() {
+	mutex.Lock()
+	cmd := monitorCmd
+	active := monitoring
+	mutex.Unlock()
+	if !active {
+		return
+	}
+	if cmd != nil && cmd.Process != nil {
+		cmd.Process.Signal(syscall.SIGTERM)
+	}
+	mutex.Lock()
+	if monitorCmd == cmd {
+		monitorCmd = nil
+		monitoring = false
+	}
+	mutex.Unlock()
+}
+
+func infernoWorker() {	for req := range infernoReqCh {
 		switch req.cmd {
 		case infernoCmdStop:
 			// Exempt from the recording guard below: this only ever comes
@@ -1847,6 +1871,7 @@ func infernoWorker() {
 			}
 
 			if req.cmd == infernoCmdRestart {
+				preemptMonitorForRestart()
 				doStopInferno()
 				time.Sleep(1 * time.Second) // give the old process a moment to fully release the audio device
 				if !hwManager.IsNetworkAvailable() {
@@ -1868,12 +1893,13 @@ func infernoWorker() {
 				mismatch := infernoState == InfernoRunning &&
 					(sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount)
 				mutex.Unlock()
-				if recording || !mismatch {
-					break
-				}
-				doStopInferno()
-				time.Sleep(1 * time.Second)
-				doStartInferno()
+			if recording || !mismatch {
+				break
+			}
+			preemptMonitorForRestart()
+			doStopInferno()
+			time.Sleep(1 * time.Second)
+			doStartInferno()
 			}
 		}
 
