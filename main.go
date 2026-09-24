@@ -3314,6 +3314,13 @@ func formatUSB() {
 		logErrorf("format USB: umount failed: %v: %s", err, out)
 		return
 	}
+	// Re-verify AFTER umount: a pull/reinsert in that window can hand the
+	// /dev name to a different stick, and mkfs on the stale path would wipe
+	// it. Abort unless the same device is still mounted here.
+	if cur, err := usbDevicePath(); err != nil || cur != device {
+		logErrorf("format USB: device changed during umount (was %s), aborting", device)
+		return
+	}
 	formatted := "exFAT"
 	if out, err := exec.Command("sudo", "mkfs.exfat", device).CombinedOutput(); err != nil {
 		logWarnf("format USB: mkfs.exfat failed (%v: %s) - falling back to FAT32", err, out)
