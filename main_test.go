@@ -817,9 +817,22 @@ func TestLoginPageMarksTokenFresh(t *testing.T) {
 	}
 	mutex.Lock()
 	fresh := loginTokenFreshLocked()
+	firstBump := lastLoginPage
 	mutex.Unlock()
 	if !fresh {
 		t.Fatalf("serving the login page must mark the OLED token fresh")
+	}
+
+	// A repeat GET must not extend the window: a crawler hammering /login
+	// would otherwise keep the token parked on the OLED indefinitely.
+	req2 := httptest.NewRequest("GET", "/login", nil)
+	rec2 := httptest.NewRecorder()
+	handleLoginGet(rec2, req2)
+	mutex.Lock()
+	unchanged := lastLoginPage.Equal(firstBump)
+	mutex.Unlock()
+	if !unchanged {
+		t.Fatalf("a repeat login GET must not extend the token window")
 	}
 
 	mutex.Lock()
