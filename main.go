@@ -2881,8 +2881,20 @@ func latestRecording() string {
 }
 
 // startPlayback plays the most recent recording through the default ALSA
-// device via ffmpeg, which understands the WAV container directly.
+// device via ffmpeg, which understands the WAV container directly. Refuses
+// unless idle and neither recording nor already playing: exclusion previously
+// rested entirely on each caller, and one direct caller would overlap record
+// and ALSA playback (meter modes, monitoringOutput, and FIFO teardown all
+// assume exclusivity).
 func startPlayback() {
+	if currentState != StateIdle && currentState != StateIdleBrowse {
+		logWarnf("startPlayback refused: not idle (state %d)", currentState)
+		return
+	}
+	if isRecording || playbackCmd != nil {
+		logWarnf("startPlayback refused: transport busy")
+		return
+	}
 	file := latestRecording()
 	if file == "" {
 		logWarnf("No recordings to play")

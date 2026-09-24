@@ -3201,3 +3201,34 @@ func TestCrossOriginMutationRejected(t *testing.T) {
 	setDemoModeLocked(false)
 	mutex.Unlock()
 }
+
+// startPlayback enforces mutual exclusion itself: a direct call while
+// recording or already playing must not overlap transports.
+func TestStartPlaybackRefusesBusyTransport(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	os.MkdirAll(RecordPath, 0755)
+	recFile := filepath.Join(RecordPath, "recording_20260101_000000_ch2_48kHz.wav")
+	if err := os.WriteFile(recFile, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(recFile) })
+
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = true // pretend a take is running (no ffmpeg needed: guard runs first)
+	playbackCmd = nil
+	mutex.Unlock()
+
+	startPlayback()
+
+	mutex.Lock()
+	cmd := playbackCmd
+	state := currentState
+	isRecording = false
+	mutex.Unlock()
+	if cmd != nil || state != StateIdle {
+		t.Fatalf("startPlayback during recording started cmd=%v state=%v", cmd != nil, state)
+	}
+}
