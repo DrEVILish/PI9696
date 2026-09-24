@@ -1967,6 +1967,12 @@ func syncDemoGeneratorLocked() {
 	}
 }
 
+// Linux fcntl pipe-size commands (no syscall package names for these).
+const (
+	linuxFSetPipeSz = 1031
+	linuxFGetPipeSz = 1032
+)
+
 // enlargeFifo bumps a freshly created FIFO's kernel buffer past the 64KB
 // default: at 128ch/48kHz s32le the stream runs ~24MB/s, so 64KB holds
 // ~2.6ms of audio and any reader stall back-pressures the writer into a
@@ -1979,8 +1985,7 @@ func enlargeFifo(path string) {
 		return
 	}
 	defer f.Close()
-	const linux_F_SETPIPE_SZ = 1031
-	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), linux_F_SETPIPE_SZ, 4<<20); errno != 0 {
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), linuxFSetPipeSz, 4<<20); errno != 0 {
 		logDebugf("fifo %s kept default pipe size: %v", path, errno)
 	}
 }
@@ -2721,13 +2726,23 @@ func recordingFiles() []string {
 	// can't see. Own mutex - callers vary on holding the app lock.
 	// Every hit returns a fresh copy: latestRecording sorts in place.
 	if key, ok := recordingFilesKey(); ok {
+		// Fast path under lock; the scan itself runs unlocked so
+		// concurrent misses don't serialize on disk I/O.
 		recFilesMu.Lock()
-		defer recFilesMu.Unlock()
 		if key == recFilesKey {
-			return append([]string(nil), recFilesCached...)
+			out := append([]string(nil), recFilesCached...)
+			recFilesMu.Unlock()
+			return out
 		}
+		recFilesMu.Unlock()
 		files := recordingFilesScan()
-		recFilesKey, recFilesCached = key, files
+		// Store only if nothing changed mid-scan: the scan isn't atomic
+		// with the key, so re-verify before caching.
+		if key2, ok := recordingFilesKey(); ok && key2 == key {
+			recFilesMu.Lock()
+			recFilesKey, recFilesCached = key, files
+			recFilesMu.Unlock()
+		}
 		return append([]string(nil), files...)
 	}
 	return recordingFilesScan()
