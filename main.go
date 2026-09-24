@@ -3072,8 +3072,10 @@ func maybeResumeInputMonitorLocked() {
 // owns cmd.Wait() and does the actual state cleanup once ffmpeg exits, so a
 // second Wait() here would race it.
 func stopPlayback() {
-	monitoringOutput = false
-	playbackPausedElapsed = 0
+	// monitoringOutput/playbackPausedElapsed are deliberately NOT cleared
+	// here: the reaping goroutine owns the state flip and clears them, so
+	// clearing synchronously would flash Paused + 00:00:00 in the
+	// SIGTERM-to-Wait window.
 	// Cancel a seek handoff in flight: restartPlaybackAt checks this after
 	// its wait and bails instead of resurrecting playback from under Stop.
 	seekingPlayback = false
