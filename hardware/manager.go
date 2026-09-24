@@ -116,12 +116,6 @@ func (hm *HardwareManager) UpdateDisplay() error {
 
 // Context-aware text drawing methods
 
-func (hm *HardwareManager) DrawStatusBar(formatInfo, usbInfo string) error {
-	// Get network status
-	networkConnected, networkInfo := hm.Network.GetNetworkStatus()
-	return hm.FiraCode.DrawStatusBarWithNetwork(formatInfo, usbInfo, networkConnected, networkInfo)
-}
-
 // DrawStatusBarWithInferno draws the status bar including Inferno server status
 func (hm *HardwareManager) DrawStatusBarWithInferno(formatInfo, usbInfo string, infernoRunning bool) error {
 	// Get network status
@@ -131,10 +125,6 @@ func (hm *HardwareManager) DrawStatusBarWithInferno(formatInfo, usbInfo string, 
 
 func (hm *HardwareManager) DrawCenteredText(text, context string, y int) error {
 	return hm.FiraCode.DrawCenteredText(text, context, y)
-}
-
-func (hm *HardwareManager) DrawMenuItems(items []MenuItem, selectedIndex int) error {
-	return hm.FiraCode.DrawMenuItems(items, selectedIndex)
 }
 
 func (hm *HardwareManager) DrawRecordingStatus(elapsed, remaining, filename string) error {
@@ -183,12 +173,6 @@ func (hm *HardwareManager) DrawText(x, y int, text string) {
 	}
 }
 
-func (hm *HardwareManager) SetPixel(x, y int, brightness byte) {
-	if hm.FiraCode != nil && hm.FiraCode.display != nil {
-		hm.FiraCode.display.SetPixel(x, y, brightness)
-	}
-}
-
 // SetBrightness forwards a 0-100% panel brightness to the physical display;
 // also used by auto-dim (dim level, then 0 for off) and by wake-on-input to
 // restore the user's level. No-op in sim mode (writeCommand is).
@@ -228,13 +212,6 @@ func (hm *HardwareManager) SetButtonCallback(buttonType ButtonType, callback fun
 	}
 }
 
-func (hm *HardwareManager) IsButtonPressed(buttonType ButtonType) bool {
-	if hm.Buttons != nil {
-		return hm.Buttons.IsPressed(buttonType)
-	}
-	return false
-}
-
 // Font management methods
 
 func (hm *HardwareManager) SwitchToContext(context string) error {
@@ -245,13 +222,6 @@ func (hm *HardwareManager) SwitchToContext(context string) error {
 }
 
 // Network utility methods
-
-func (hm *HardwareManager) GetNetworkStatus() (bool, string) {
-	if hm.Network != nil {
-		return hm.Network.GetNetworkStatus()
-	}
-	return false, "No Network"
-}
 
 func (hm *HardwareManager) GetDetailedNetworkInfo() []string {
 	if hm.Network != nil {

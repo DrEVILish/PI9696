@@ -511,16 +511,6 @@ func setWifiEnabled(on bool) {
 
 // updateWifiCredentials updates the AP SSID/password (e.g. set via the web
 // dashboard) and re-applies the AP. Must be called under mutex.
-func updateWifiCredentials(ssid, pass string) {
-	if ssid != "" {
-		wifiSSID = ssid
-	}
-	if len(pass) >= 8 {
-		wifiPassword = pass
-	}
-	persistConfig()
-	go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
-}
 
 // wifiQRContent builds the WiFi QR payload (WIFI: scheme) so a phone camera
 // can join the AP directly. See renderWifiQRScreen.
@@ -5302,15 +5292,6 @@ func readCPUTemp() (float64, bool) {
 		return -1, false
 	}
 	return float64(v) / 1000, true
-}
-
-func recordTimeAvailable() string {
-	bytesPerSec := recordingBytesPerSecond()
-	if bytesPerSec <= 0 {
-		return "\u2014"
-	}
-	remaining := float64(getFreeSpace()) / float64(bytesPerSec)
-	return formatDuration(time.Duration(remaining) * time.Second)
 }
 
 type telemetryData struct {

@@ -228,18 +228,6 @@ func (e *Encoder) handleRotation(direction int) {
 	}
 }
 
-func (e *Encoder) GetPosition() int {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-	return e.position
-}
-
-func (e *Encoder) ResetPosition() {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-	e.position = 0
-}
-
 func (e *Encoder) SetRotateCallback(callback func(direction int)) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
@@ -256,10 +244,4 @@ func (e *Encoder) SetHoldCallback(callback func()) {
 	e.mutex.Lock()
 	defer e.mutex.Unlock()
 	e.callbacks.onHold = callback
-}
-
-func (e *Encoder) IsButtonPressed() bool {
-	e.mutex.Lock()
-	defer e.mutex.Unlock()
-	return e.buttonDown
 }

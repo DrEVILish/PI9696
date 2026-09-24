@@ -343,15 +343,6 @@ func (d *TTFDisplay) DrawTextCentered(text string, y int) {
 	d.DrawText(x, y, text)
 }
 
-func (d *TTFDisplay) DrawTextRight(text string, y int, rightMargin int) {
-	bounds := d.getTextBounds(text)
-	x := DisplayWidth - bounds.Max.X - rightMargin
-	if x < 0 {
-		x = 0
-	}
-	d.DrawText(x, y, text)
-}
-
 // getTextBounds measures text using the active (renderScale-sized) face and
 // scales the result back down to logical (256x64) units, so every caller -
 // DrawText, DrawTextCentered, DrawTextRight, and everything in
@@ -643,16 +634,4 @@ func (d *TTFDisplay) Close() error {
 		return d.spiPort.Close()
 	}
 	return nil
-}
-
-// Helper function to create display with default font if TTF loading fails
-func NewDisplayWithFallback(fontPath string, fontSize float64) (*TTFDisplay, error) {
-	// Try to load TTF font first
-	display, err := NewTTFDisplay(fontPath, fontSize)
-	if err != nil {
-		slog.Warn(fmt.Sprintf("failed to load TTF font, falling back to bitmap font: %v", err))
-		// Could fallback to original bitmap font implementation here
-		return nil, err
-	}
-	return display, nil
 }

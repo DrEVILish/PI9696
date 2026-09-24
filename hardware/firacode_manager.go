@@ -217,16 +217,6 @@ func (fcm *FiraCodeManager) switchFont(fontPath string, fontSize float64) error 
 
 // Display utility methods for different UI contexts
 
-// DrawStatusBar renders the top status bar with appropriate FiraCode styling
-func (fcm *FiraCodeManager) DrawStatusBar(formatInfo, usbInfo string) error {
-	return fcm.DrawStatusBarWithNetwork(formatInfo, usbInfo, false, "")
-}
-
-// DrawStatusBarWithNetwork renders the status bar with network and USB status
-func (fcm *FiraCodeManager) DrawStatusBarWithNetwork(formatInfo, usbInfo string, networkConnected bool, networkInfo string) error {
-	return fcm.DrawStatusBarWithInferno(formatInfo, usbInfo, networkConnected, networkInfo, false)
-}
-
 // DrawStatusBarWithInferno renders the status bar with network, USB, and Inferno status
 func (fcm *FiraCodeManager) DrawStatusBarWithInferno(formatInfo, usbInfo string, networkConnected bool, networkInfo string, infernoRunning bool) error {
 	if err := fcm.SwitchToContext("statusbar"); err != nil {
@@ -249,53 +239,6 @@ func (fcm *FiraCodeManager) DrawCenteredText(text, context string, y int) error 
 	}
 
 	fcm.display.DrawTextCentered(text, y)
-	return nil
-}
-
-// DrawMenuItems renders menu items with proper font weights
-func (fcm *FiraCodeManager) DrawMenuItems(items []MenuItem, selectedIndex int) error {
-	if err := fcm.SwitchToContext("menu"); err != nil {
-		return err
-	}
-
-	y := 24 // Start below status bar
-	fontHeight := fcm.display.GetFontHeight()
-
-	for i, item := range items {
-		// Switch to emphasis font for selected items
-		if i == selectedIndex {
-			if err := fcm.SwitchToContext("selected"); err != nil {
-				return err
-			}
-		} else {
-			if err := fcm.SwitchToContext("menu"); err != nil {
-				return err
-			}
-		}
-
-		prefix := "  "
-		if i == selectedIndex {
-			prefix = "> "
-		}
-
-		// Draw label
-		labelText := prefix + item.Label
-		fcm.display.DrawText(8, y, labelText)
-
-		// Draw right-aligned value if present
-		if item.Value != "" {
-			valueWidth := fcm.display.GetTextWidth(item.Value)
-			fcm.display.DrawText(256-valueWidth-16, y, item.Value)
-		}
-
-		y += fontHeight + 2
-
-		// Don't draw beyond display bounds
-		if y >= 64-fontHeight {
-			break
-		}
-	}
-
 	return nil
 }
 
