@@ -397,6 +397,9 @@ type loginPageData struct {
 	// renders exactly as before (no marker beyond "none", no href).
 	// CoreVersion cache-busts the always-linked ftl-core.css.
 	Theme, ThemeCSS, CoreVersion string
+	// HTMLTag is the prebuilt <html> open tag carrying data-theme and the
+	// library display options (motion/contrast/density).
+	HTMLTag template.HTML
 	// Boxes pre-fills the 8 token inputs so a failed attempt (or a QR
 	// prefill) isn't wiped by the error re-render.
 	Boxes [8]string
@@ -420,7 +423,7 @@ func loginPageTheme() (string, string) {
 }
 
 var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
-<html data-theme="{{.Theme}}"><head><title>{{.DeviceName}} Remote</title>
+{{.HTMLTag}}<head><title>{{.DeviceName}} Remote</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -523,6 +526,7 @@ func writeLoginPage(w http.ResponseWriter, d loginPageData) {
 	d.Logo = template.HTML(pi9696LogoSVG)
 	d.Theme, d.ThemeCSS = loginPageTheme()
 	d.CoreVersion = themeBuildVersion()
+	d.HTMLTag = displayHTMLTag(currentTheme())
 	loginPageTmpl.Execute(w, d)
 }
 
@@ -607,6 +611,41 @@ const themeNone = "none"
 // as it did. Persisted in the unit's config like every other setting, so the
 // choice follows the device rather than one browser. Guarded by mutex.
 var themeSlug = themeNone
+
+// Library display options (CONTRACT.md "User display options"): browser
+// switches an app may offer beside the theme, applied as documentElement
+// attributes/style. Guarded by the app mutex; persisted like every setting.
+var (
+	displayMotion    = "full"      // or "reduced" -> <html data-motion="reduced">
+	displayContrast  = "standard"  // or "high"    -> <html data-contrast="high">
+	displayDensityIdx = 0          // 0 Normal, 1 Compact (0.85), 2 Comfortable (1.15)
+)
+
+var displayDensityValues = [3]string{"1", "0.85", "1.15"}
+
+// displayHTMLTag renders the whole <html> open tag: data-theme plus the
+// library display options (attributes only when non-default, density as an
+// inline custom property - the contract's documented override path, which
+// beats any theme). Built server-side because html/template refuses
+// dynamic content between a tag's attributes.
+func displayHTMLTag(theme string) template.HTML {
+	mutex.Lock()
+	motion, contrast, density := displayMotion, displayContrast, displayDensityValues[displayDensityIdx]
+	mutex.Unlock()
+	var b strings.Builder
+	b.WriteString(`<html data-theme="` + html.EscapeString(theme) + `"`)
+	if motion == "reduced" {
+		b.WriteString(` data-motion="reduced"`)
+	}
+	if contrast == "high" {
+		b.WriteString(` data-contrast="high"`)
+	}
+	if density != "1" {
+		b.WriteString(` style="--ftl-density:` + density + `"`)
+	}
+	b.WriteString(">")
+	return template.HTML(b.String())
+}
 
 // themeManifest mirrors ftl-themes' dist/themes.json entries. Version is
 // the build's content hash (identical across every entry) - used to
@@ -723,6 +762,105 @@ func themeSelect() selectView {
 	return settingSelect("theme", "/api/settings/theme", "Theme", "", themeOptionsView)
 }
 
+// The three library display options (CONTRACT.md "User display options"):
+// density/motion/contrast ride the documentElement, not the theme, so a
+// look stays intact while accessibility needs are met. Select fragments
+// post here; the response re-renders the row and OOB-updates the carrier
+// attributes so no reload is needed (the live sockets survive). Default
+// values REMOVE the carrier, matching an untouched page.
+type displayOption struct {
+	id      string
+	post    string
+	label   string
+	options []string
+	// get returns the current selection index; set applies one.
+	get     func() int
+	set     func(int)
+	// carrier renders the documentElement update for the applied value.
+	carrier func(int) string
+}
+
+var displayOptions = []displayOption{
+	{
+		id: "motion", post: "/api/settings/motion", label: "Motion",
+		options: []string{"Full", "Reduced"},
+		get:     func() int { return boolIdx(displayMotion == "reduced") },
+		set:     func(i int) { displayMotion = map[int]string{0: "full", 1: "reduced"}[i] },
+		carrier: func(i int) string {
+			if i == 1 {
+				return `document.documentElement.setAttribute("data-motion","reduced")`
+			}
+			return `document.documentElement.removeAttribute("data-motion")`
+		},
+	},
+	{
+		id: "contrast", post: "/api/settings/contrast", label: "Contrast",
+		options: []string{"Standard", "High"},
+		get:     func() int { return boolIdx(displayContrast == "high") },
+		set:     func(i int) { displayContrast = map[int]string{0: "standard", 1: "high"}[i] },
+		carrier: func(i int) string {
+			if i == 1 {
+				return `document.documentElement.setAttribute("data-contrast","high")`
+			}
+			return `document.documentElement.removeAttribute("data-contrast")`
+		},
+	},
+	{
+		id: "density", post: "/api/settings/density", label: "Density",
+		options: []string{"Normal", "Compact", "Comfortable"},
+		get:     func() int { return displayDensityIdx },
+		set:     func(i int) { if i < len(displayDensityValues) { displayDensityIdx = i } },
+		carrier: func(i int) string {
+			if d := displayDensityValues[i]; d != "1" {
+				return `document.documentElement.style.setProperty("--ftl-density","` + d + `")`
+			}
+			return `document.documentElement.style.removeProperty("--ftl-density")`
+		},
+	},
+}
+
+func boolIdx(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// displayOptBuf returns the render buffer for a display option's select.
+func displayOptBuf(id string, motion, contrast, density *bytes.Buffer) *bytes.Buffer {
+	switch id {
+	case "motion":
+		return motion
+	case "contrast":
+		return contrast
+	case "density":
+		return density
+	}
+	return nil
+}
+
+func registerDisplayOptionRoutes(mux *http.ServeMux) {
+	for _, opt := range displayOptions {
+		opt := opt
+		mux.HandleFunc("POST "+opt.post, requireAuth(func(w http.ResponseWriter, r *http.Request) {
+			idx, err := strconv.Atoi(r.FormValue("idx"))
+			if err != nil || idx < 0 || idx >= len(opt.options) {
+				http.Error(w, "bad idx", http.StatusBadRequest)
+				return
+			}
+			mutex.Lock()
+			opt.set(idx)
+			settingChanged()
+			mutex.Unlock()
+			noteActivity()
+			selectFragmentTmpl.Execute(w, settingSelect(opt.id, opt.post, opt.label, "", func() optionsView { return optionsView{Options: opt.options, Idx: opt.get()} }))
+			// Carrier update rides out-of-band so the applied value takes
+			// effect immediately (same pattern as the theme swap).
+			fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">%s</script>", opt.carrier(idx))
+		}))
+	}
+}
+
 // handleAPISettingsTheme persists the chosen theme and tells the page to
 // swap its stylesheet. The theme lives in the unit's config beside every
 // other setting, so it follows the device rather than the browser - the
@@ -773,7 +911,11 @@ type dashboardData struct {
 	ThemeCSS             string
 	CoreVersion          string
 	IconSprite           string
+	HTMLTag              template.HTML
 	ThemeFragment        template.HTML
+	MotionFragment       template.HTML
+	ContrastFragment     template.HTML
+	DensityFragment      template.HTML
 	VURangeFragment      template.HTML
 	PeakHoldFragment     template.HTML
 	SampleRateFragment   template.HTML
@@ -1463,7 +1605,7 @@ func handleAPIConfigImport(w http.ResponseWriter, r *http.Request) {
 // Status/config/recordings (read-only info) sit in the three-column body;
 // the reel transport follows it and the level meters stay pinned to the footer.
 var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE html>
-<html data-theme="{{.Theme}}"><head><title>{{.DeviceName}} Remote</title>
+{{.HTMLTag}}<head><title>{{.DeviceName}} Remote</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -2065,6 +2207,9 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
       <section class="settings-group ftl-field-group">
         <h3 class="settings-group-title ftl-field-group-title">Display</h3>
         {{.ThemeFragment}}
+        {{.MotionFragment}}
+        {{.ContrastFragment}}
+        {{.DensityFragment}}
         {{.BrightnessFragment}}
         {{.AutoDimFragment}}
       </section>
@@ -2663,7 +2808,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		activeThemeCSS = themeCSSHref(pv)
 	}
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf bytes.Buffer
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf, motionBuf, contrastBuf, densityBuf bytes.Buffer
 	selectFragmentTmpl.Execute(&vuBuf, vuRangeSelect())
 	selectFragmentTmpl.Execute(&holdBuf, peakHoldSelect())
 	selectFragmentTmpl.Execute(&srBuf, sampleRateSelect())
@@ -2674,6 +2819,12 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	hyperdeckFragmentTmpl.Execute(&hyperdeckBuf, hyperdeckViewData())
 	selectFragmentTmpl.Execute(&logLevelBuf, logLevelSelect())
 	selectFragmentTmpl.Execute(&themeBuf, themeSelect())
+	for _, opt := range displayOptions {
+		buf := displayOptBuf(opt.id, &motionBuf, &contrastBuf, &densityBuf)
+		if buf != nil {
+			selectFragmentTmpl.Execute(buf, settingSelect(opt.id, opt.post, opt.label, "", func() optionsView { return optionsView{Options: opt.options, Idx: opt.get()} }))
+		}
+	}
 	brightnessFragmentTmpl.Execute(&brightnessBuf, brightnessViewData())
 	autoDimFragmentTmpl.Execute(&autoDimBuf, autoDimViewData())
 	demoFragmentTmpl.Execute(&demoBuf, demoViewData())
@@ -2696,6 +2847,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		ThemeCSS:             activeThemeCSS,
 		CoreVersion:          themeBuildVersion(),
 		IconSprite:           iconSpriteHref(activeTheme),
+		HTMLTag:              displayHTMLTag(activeTheme),
 		VURangeFragment:      template.HTML(vuBuf.String()),
 		PeakHoldFragment:     template.HTML(holdBuf.String()),
 		SampleRateFragment:   template.HTML(srBuf.String()),
@@ -2706,6 +2858,9 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		HyperdeckFragment:    template.HTML(hyperdeckBuf.String()),
 		LogLevelFragment:     template.HTML(logLevelBuf.String()),
 		ThemeFragment:        template.HTML(themeBuf.String()),
+		MotionFragment:       template.HTML(motionBuf.String()),
+		ContrastFragment:     template.HTML(contrastBuf.String()),
+		DensityFragment:      template.HTML(densityBuf.String()),
 		BrightnessFragment:   template.HTML(brightnessBuf.String()),
 		AutoDimFragment:      template.HTML(autoDimBuf.String()),
 		MonitorFragment:      template.HTML(monitorBuf.String()),
@@ -3665,6 +3820,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/peak-hold", requireAuth(handleAPISettingsPeakHold))
 	mux.HandleFunc("POST /api/settings/log-level", requireAuth(handleAPISettingsLogLevel))
 	mux.HandleFunc("POST /api/settings/theme", requireAuth(handleAPISettingsTheme))
+	registerDisplayOptionRoutes(mux)
 	mux.HandleFunc("POST /api/settings/brightness", requireAuth(handleAPISettingsBrightness))
 	mux.HandleFunc("POST /api/settings/dim", requireAuth(handleAPISettingsAutoDim))
 	mux.HandleFunc("POST /api/settings/demo", requireAuth(handleAPISettingsDemoMode))
