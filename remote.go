@@ -18,6 +18,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -270,8 +271,43 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
+		// Mutations and WS handshakes additionally need a same-origin
+		// request: the cookie is SameSite=Strict, but old/non-conforming
+		// clients and x/net/websocket's default-accept handshake don't
+		// honor that, and a foreign page driving an authenticated browser
+		// is exactly the CSRF shape.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions ||
+			strings.HasPrefix(r.URL.Path, "/ws/") {
+			if !checkSameOrigin(r) {
+				http.Error(w, "cross-origin request rejected", http.StatusForbidden)
+				return
+			}
+		}
 		next(w, r)
 	}
+}
+
+// checkSameOrigin reports whether a request's Origin (or Referer fallback)
+// matches the request's own host. Absent headers (curl, tests, same-origin
+// navigations) pass - this is defense in depth behind SameSite=Strict, not
+// a boundary: it stops conforming browsers (which always send Origin on
+// POST/WS) from driving the device cross-origin.
+func checkSameOrigin(r *http.Request) bool {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		if err != nil {
+			return false
+		}
+		return strings.EqualFold(u.Host, r.Host)
+	}
+	if ref := r.Header.Get("Referer"); ref != "" {
+		u, err := url.Parse(ref)
+		if err != nil {
+			return false
+		}
+		return strings.EqualFold(u.Host, r.Host)
+	}
+	return true
 }
 
 // pi9696LogoSVG is a small inline vector wordmark shared by the login and
