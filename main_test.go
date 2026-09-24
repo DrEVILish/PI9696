@@ -925,10 +925,10 @@ func TestOLEDMonitoringRowToggles(t *testing.T) {
 	}
 }
 
-func TestRemoteAccessQRRedirectKeepsTokenQuery(t *testing.T) {
-	// The OLED access-QR encodes "/?t=<token>"; scanning it must land on the
-	// login page with the query intact so the boxes pre-fill. Without this the
-	// 303 from requireAuth drops ?t= and the code never pre-fills.
+func TestRemoteAccessQRRedirectDropsTokenQuery(t *testing.T) {
+	// The OLED access-QR encodes "/#t=<token>" (fragment, never sent to the
+	// server); the 303 from requireAuth must redirect bare - echoing any
+	// ?t= back would put the bearer token in history and proxy logs.
 	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
 	remoteToken = "TESTTOKEN2"
 	loginLimit = newLoginLimiter()
@@ -937,7 +937,7 @@ func TestRemoteAccessQRRedirectKeepsTokenQuery(t *testing.T) {
 
 	mux := newRemoteMux()
 
-	// Unauthenticated request to the QR URL: redirect must keep ?t=.
+	// Unauthenticated request with a stray ?t=: redirect must drop it.
 	req := httptest.NewRequest("GET", "/?t=TESTTOK", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
@@ -945,8 +945,8 @@ func TestRemoteAccessQRRedirectKeepsTokenQuery(t *testing.T) {
 		t.Fatalf("expected 303 redirect to login, got %d", rec.Code)
 	}
 	loc := rec.Header().Get("Location")
-	if loc != "/login?t=TESTTOK" {
-		t.Fatalf("expected redirect to /login?t=TESTTOK, got %q", loc)
+	if loc != "/login" {
+		t.Fatalf("expected redirect to /login, got %q", loc)
 	}
 }
 
