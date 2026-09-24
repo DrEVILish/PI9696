@@ -3672,6 +3672,7 @@ func remoteControlLoop() {
 					currentServer.Close()
 				}
 				currentServer = nil
+				setRemoteServer(nil)
 				logInfof("Remote control server stopped")
 			}
 
@@ -3683,11 +3684,42 @@ func remoteControlLoop() {
 					wasUp = false // retry on the next tick
 				} else {
 					currentServer = srv
+					setRemoteServer(srv)
 				}
 			}
 		}
 
 		time.Sleep(5 * time.Second)
+	}
+}
+
+// remoteServerMu guards remoteServer, the currently bound control server
+// (if any). Published by remoteControlLoop so gracefulShutdown can stop
+// accepting new requests before it drains transport.
+var remoteServerMu sync.Mutex
+var remoteServer *http.Server
+
+func setRemoteServer(srv *http.Server) {
+	remoteServerMu.Lock()
+	remoteServer = srv
+	remoteServerMu.Unlock()
+}
+
+// closeRemoteServer stops the control server if one is bound: no new
+// connections, in-flight handlers drained briefly, then force-closed.
+func closeRemoteServer() {
+	remoteServerMu.Lock()
+	srv := remoteServer
+	remoteServer = nil
+	remoteServerMu.Unlock()
+	if srv == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	err := srv.Shutdown(ctx)
+	cancel()
+	if err != nil {
+		srv.Close()
 	}
 }
 
