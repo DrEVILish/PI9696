@@ -757,8 +757,9 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		// hx-swap-oob="true" marks this as out-of-band content to execute
 		// in place: a bare <script> after the OOB <link> relied on htmx
 		// executing in-swapped scripts, which multi-node responses don't
-		// guarantee.
-		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null</script>", active)
+		// guarantee. The sprite rewrite keeps every .ftl-icon <use> pointed
+		// at the new theme's icon set (same ids, theme-authored shapes).
+		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);SPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null;document.querySelectorAll('.ftl-icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, iconSpriteHref(active))
 	}
 }
 
@@ -767,6 +768,7 @@ type dashboardData struct {
 	Logo                 template.HTML
 	Theme                string
 	ThemeCSS             string
+	IconSprite           string
 	ThemeFragment        template.HTML
 	VURangeFragment      template.HTML
 	PeakHoldFragment     template.HTML
@@ -1523,19 +1525,16 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 .encoder-row .click{border-radius:50%;width:clamp(1.3em,2.6vw,2.3em);height:clamp(1.3em,2.6vw,2.3em);padding:0}
 /* Transport buttons: equal-sized icon squares, 60% of the OLED frame's
    110px rendered height (see .oled-frame img above). Both dimensions shrink
-   with the viewport so the row always fits. */
-.transport-row{display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
+   with the viewport so the row always fits. Icons come from the theme's
+   ftl-themes sprite: stroke inherits each key's color via currentColor. */
+.transport-row{--ftl-icon-size:clamp(14px,2.2vw,30px);display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
 .transport-row button{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;display:flex;align-items:center;justify-content:center}
-.transport-row button svg{width:clamp(14px,2.2vw,30px);height:clamp(14px,2.2vw,30px)}
-.transport-row .record{border-color:var(--rec)}
-.transport-row .record svg{fill:var(--rec)}
-.transport-row .stop svg{fill:var(--glow)}
-.transport-row .play{border-color:var(--idle)}
-.transport-row .play svg{fill:var(--idle)}
+.transport-row .record{border-color:var(--rec);color:var(--rec)}
+.transport-row .stop{color:var(--glow)}
+.transport-row .play{border-color:var(--idle);color:var(--idle)}
 /* The PLAY transport doubles as PAUSE while a track is running (see
-   renderTransportRow) - two bars instead of the play triangle. */
-.transport-row .play.pause svg{fill:var(--glow);stroke:var(--glow)}
-.transport-row .play.pause{border-color:var(--orange)}
+   renderTransportRow) - the pause glyph in the accent color instead. */
+.transport-row .play.pause{border-color:var(--orange);color:var(--orange)}
 /* Text mode: the same transport keys but labelled instead of icon glyphs.
    Buttons stretch to fit and the label takes the accent colour the icon had. */
 .transport-row.text button{width:auto;min-width:clamp(2em,3.2vw,3.4em);font-size:clamp(0.55em,0.95vw,0.85em);letter-spacing:0.08em;padding:0 0.3em}
@@ -1546,26 +1545,21 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 .header-actions{position:absolute;top:0.8em;right:clamp(0.5em,2vw,1.5em);display:flex;gap:0.5em}
 /* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
    - the base button{} rule above only targets <button>, so colors/border
-   are repeated here rather than relied on from that selector. */
-.icon-btn{width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:var(--ftl-surface-2,#08192b);color:var(--glow);border:1px solid var(--border);cursor:pointer;text-decoration:none}
-.icon-btn svg{width:clamp(14px,1.8vw,18px);height:clamp(14px,1.8vw,18px);stroke:var(--glow)}
-.icon-btn:hover{border-color:var(--orange)}
-.icon-btn:hover svg{stroke:var(--orange)}
-/* Conn lamp: broadcast-pin showing the telemetry socket state - glow blue
+   are repeated here rather than relied on from that selector. Icons are
+   .ftl-icon strokes inheriting currentColor; the lamp colors the span. */
+.icon-btn{--ftl-icon-size:clamp(14px,1.8vw,18px);width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:var(--ftl-surface-2,#08192b);color:var(--glow);border:1px solid var(--border);cursor:pointer;text-decoration:none}
+.icon-btn:hover{border-color:var(--orange);color:var(--orange)}
+/* Conn lamp: broadcast glyph showing the telemetry socket state - glow blue
    while the server pushes, error red while disconnected. A span, not a
    button: no pointer affordance, and no hover recolor (it must never read
-   as a control). The bi-broadcast-pin glyph is a fill path, so it takes
-   color rather than stroke. */
+   as a control). The ftl-icon stroke inherits the span's color. */
 .icon-btn.conn{cursor:default}
-.icon-btn.conn:hover{border-color:var(--border)}
-.icon-btn.conn svg{stroke:none}
-.icon-btn.conn.on{color:var(--glow)}
-.icon-btn.conn.on svg{fill:var(--glow);filter:drop-shadow(var(--ftl-lamp-glow,0 0 3px rgba(0,217,255,0.8)))}
+.icon-btn.conn:hover{border-color:var(--border);color:var(--glow)}
+.icon-btn.conn.on{filter:drop-shadow(var(--ftl-lamp-glow,0 0 3px rgba(0,217,255,0.8)))}
 .icon-btn.conn.off{color:var(--rec)}
-.icon-btn.conn.off svg{fill:var(--rec)}
 /* Download ALL: a small labeled action in the Recordings heading - text,
    not just an icon, so its function reads at a glance. */
-.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:var(--ftl-surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal}
+.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:var(--ftl-surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em;--ftl-icon-size:1em}
 .dl-all:hover{border-color:var(--glow)}
 
 .grid{display:grid;grid-template-columns:var(--pi-columns,1fr 1.6fr 1fr);gap:var(--pi-gap,1.2em)}
@@ -1875,26 +1869,26 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
   <div class="deck-logo">{{.Logo}}</div>
   <div class="oled-frame"><img id="oled" src="/api/display.png" alt="OLED display" onerror="if(!this.dataset.r){this.dataset.r=1;location.reload()}"></div>
   <div class="encoder-row">
-    <button hx-post="/api/input/encoder/left" aria-label="Encoder left" title="Encoder left">&#9664;</button>
+    <button hx-post="/api/input/encoder/left" aria-label="Encoder left" title="Encoder left"><svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-left"/></svg></button>
     <button class="click" hx-post="/api/input/encoder/click" aria-label="Encoder click" title="Encoder click">&#9679;</button>
-    <button hx-post="/api/input/encoder/right" aria-label="Encoder right" title="Encoder right">&#9654;</button>
+    <button hx-post="/api/input/encoder/right" aria-label="Encoder right" title="Encoder right"><svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-right"/></svg></button>
   </div>
   <div class="transport-row" id="transportRow"></div>
   <div class="header-actions">
     <span class="icon-btn conn off" id="connLamp" title="Server disconnected">
-      <svg viewBox="0 0 16 16" fill="currentColor"><path d="M3.05 3.05a7 7 0 0 0 0 9.9.5.5 0 0 1-.707.707 8 8 0 0 1 0-11.314.5.5 0 0 1 .707.707m2.122 2.122a4 4 0 0 0 0 5.656.5.5 0 1 1-.708.708 5 5 0 0 1 0-7.072.5.5 0 0 1 .708.708m5.656-.708a.5.5 0 0 1 .708 0 5 5 0 0 1 0 7.072.5.5 0 1 1-.708-.708 4 4 0 0 0 0-5.656.5.5 0 0 1 0-.708m2.122-2.12a.5.5 0 0 1 .707 0 8 8 0 0 1 0 11.313.5.5 0 0 1-.707-.707 7 7 0 0 0 0-9.9.5.5 0 0 1 0-.707zM6 8a2 2 0 1 1 2.5 1.937V15.5a.5.5 0 0 1-1 0V9.937A2 2 0 0 1 6 8"/></svg>
+      <svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-broadcast"/></svg>
     </span>
     <button class="icon-btn ftl-btn ftl-btn-icon" id="settingsBtn" type="button" title="Settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+      <svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-settings"/></svg>
     </button>
     <form action="/logout" method="POST" style="display:inline;margin:0">
       <button class="icon-btn ftl-btn ftl-btn-icon" title="Log out" aria-label="Log out">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 17l5-5-5-5M21 12H9M12 19H5a2 2 0 01-2-2V7a2 2 0 012-2h7"/></svg>
+      <svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-logout"/></svg>
       </button>
     </form>
     <form action="/api/settings/rotate-token" method="POST" style="display:inline;margin:0" onsubmit="return confirm('Rotate the access token? Every session (including this one) is logged out.')">
       <button class="icon-btn ftl-btn ftl-btn-icon" title="Rotate access token" aria-label="Rotate access token">
-      <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 11-2.64-6.36M21 3v6h-6"/></svg>
+      <svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-refresh"/></svg>
       </button>
     </form>
   </div>
@@ -2031,7 +2025,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
 </div>
 
 <div class="recordings-section">
-  <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)">Download ALL (.zip)</a></h2>
+  <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)"><svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-download"/></svg> Download ALL (.zip)</a></h2>
   <div id="recordings" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
 </div>
 </main>
@@ -2041,7 +2035,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
     <span class="meter-title">Level meters</span>
     <span class="meter-badge" id="meterBadge">--</span>
     <button class="icon-btn meter-caret" id="meterToggle" type="button" title="Collapse/expand meters" aria-label="Collapse or expand level meters" aria-controls="meterBody" aria-expanded="true">
-      <svg id="meterCaretSvg" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+      <svg class="ftl-icon" id="meterCaretSvg" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
     </button>
   </div>
   <div class="meter-body" id="meterBody">
@@ -2186,8 +2180,11 @@ settingsModal.addEventListener('click', function(e) { if (e.target === settingsM
 // server (persisted setting); transportState is kept in sync by applyMeter.
 var ICON_MODE = {{.TransportIcon}};
 var transportState = { playing: false, paused: false };
-function playGlyph()  { return '<svg viewBox="0 0 16 16"><polygon points="4,2 14,8 4,14"/></svg>'; }
-function pauseGlyph() { return '<svg viewBox="0 0 16 16"><rect x="3.5" y="2.5" width="3.4" height="11"/><rect x="9.1" y="2.5" width="3.4" height="11"/></svg>'; }
+// SPRITE is the active theme's icon sprite (server-rendered, rewritten by
+// the theme-swap OOB script); icons inherit currentColor, so the transport
+// row's per-key colors apply to the stroke with no fill overrides.
+var SPRITE = {{.IconSprite}};
+function iconGlyph(name) { return '<svg class="ftl-icon" aria-hidden="true"><use href="' + SPRITE + '#' + name + '"/></svg>'; }
 function transportBtn(cls, post, title, label) {
   return '<button class="ftl-btn ' + cls + '" hx-post="' + post + '" title="' + title + '">' + label + '</button>';
 }
@@ -2197,9 +2194,9 @@ function renderTransportRow() {
   var title = transportState.paused ? 'Resume' : (transportState.playing ? 'Pause' : 'Play');
   var html = '';
   if (ICON_MODE) {
-    html += transportBtn('record', '/api/input/button/record', 'Record', '<svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/></svg>');
-    html += '<button class="ftl-btn stop" data-stop title="Stop"><svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10"/></svg></button>';
-    html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? pauseGlyph() : playGlyph());
+    html += transportBtn('record', '/api/input/button/record', 'Record', iconGlyph('icon-player-record'));
+    html += '<button class="ftl-btn stop" data-stop title="Stop">' + iconGlyph('icon-player-stop') + '</button>';
+    html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, iconGlyph(pause ? 'icon-player-pause' : 'icon-player-play'));
   } else {
     html += transportBtn('record', '/api/input/button/record', 'Record', 'REC');
     html += '<button class="ftl-btn stop" data-stop title="Stop">STOP</button>';
@@ -2724,6 +2721,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Logo:                 template.HTML(pi9696LogoSVG),
 		Theme:                activeTheme,
 		ThemeCSS:             activeThemeCSS,
+		IconSprite:           iconSpriteHref(activeTheme),
 		VURangeFragment:      template.HTML(vuBuf.String()),
 		PeakHoldFragment:     template.HTML(holdBuf.String()),
 		SampleRateFragment:   template.HTML(srBuf.String()),
