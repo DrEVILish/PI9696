@@ -710,7 +710,11 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		// Charts snapshot the palette at creation (see telePaletteInit), so
 		// drop them: the next telemetry push (<=2s) rebuilds them in the new
 		// theme's colors instead of keeping stale ones until a reload.
-		fmt.Fprintf(w, "\n<script>document.documentElement.setAttribute(\"data-theme\",%q);teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null</script>", active)
+		// hx-swap-oob="true" marks this as out-of-band content to execute
+		// in place: a bare <script> after the OOB <link> relied on htmx
+		// executing in-swapped scripts, which multi-node responses don't
+		// guarantee.
+		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null</script>", active)
 	}
 }
 
