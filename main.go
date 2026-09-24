@@ -663,11 +663,15 @@ func sanitizeMDNSHost(name string) string {
 // whenever the device name changes at runtime. No-op in sim/dev mode - there's
 // no avahi-daemon to drive and a dev box shouldn't start publishing on the
 // reviewer's own network.
+// mdnsCmd is the live avahi-publish-service child; guarded by the app
+// mutex, killed by gracefulShutdown so a dead service isn't left
+// advertising <device>.local after the process exits.
+var mdnsCmd *exec.Cmd
+
 func mdnsLoop() {
 	if isSimMode() {
 		return
 	}
-	var cmd *exec.Cmd
 	lastName := ""
 	for {
 		mutex.Lock()
@@ -675,10 +679,11 @@ func mdnsLoop() {
 		mutex.Unlock()
 
 		if name != lastName {
-			if cmd != nil {
-				cmd.Process.Kill()
-				cmd.Wait()
-				cmd = nil
+			mutex.Lock()
+			if mdnsCmd != nil {
+				mdnsCmd.Process.Kill()
+				mdnsCmd.Wait()
+				mdnsCmd = nil
 			}
 			host := sanitizeMDNSHost(name)
 			// avahi-publish-service <name>._workstation._tcp <port> advertises
@@ -688,10 +693,11 @@ func mdnsLoop() {
 			if err := c.Start(); err != nil {
 				logErrorf("mdns: avahi publish failed: %v", err)
 			} else {
-				cmd = c
+				mdnsCmd = c
 				logInfof("mdns: advertising %s.local", host)
 			}
 			lastName = name
+			mutex.Unlock()
 		}
 		time.Sleep(5 * time.Second)
 	}
@@ -1029,6 +1035,15 @@ func gracefulShutdown() {
 	// start transport the drain below just stood down.
 	closeRemoteServer()
 	stopHyperdeckServer()
+	// Drop the mDNS advertisement: otherwise avahi-publish-service is
+	// orphaned by os.Exit and keeps answering for a dead host.
+	mutex.Lock()
+	if mdnsCmd != nil {
+		mdnsCmd.Process.Kill()
+		mdnsCmd.Wait()
+		mdnsCmd = nil
+	}
+	mutex.Unlock()
 
 	mutex.Lock()
 	recording := isRecording
