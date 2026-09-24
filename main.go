@@ -976,7 +976,7 @@ func main() {
 		if _, err := startRemoteServer(bindHost); err != nil {
 			log.Fatalf("PI9696_REMOTE_BIND: failed to bind %s:%s: %v", bindHost, remoteControlPort, err)
 		}
-		logInfof("TEST-ONLY remote control server: http://%s:%s (token: %s)", bindHost, remoteControlPort, formatToken(remoteToken))
+		logInfof("TEST-ONLY remote control server: http://%s:%s (token on OLED: Settings -> Remote Access)", bindHost, remoteControlPort)
 	} else {
 		go remoteControlLoop()
 	}
