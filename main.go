@@ -1002,6 +1002,14 @@ func main() {
 	<-sigCh
 
 	log.Println("Shutting down...")
+	// A second signal during the drain force-exits: gracefulShutdown waits
+	// on subprocess reaps that a wedged ffmpeg could hold past systemd's
+	// patience.
+	go func() {
+		<-sigCh
+		log.Println("Second signal, force-exiting")
+		os.Exit(1)
+	}()
 	gracefulShutdown()
 }
 
@@ -1015,6 +1023,11 @@ func waitDone(done <-chan struct{}, what string) {
 }
 
 func gracefulShutdown() {
+	// Stop accepting new work first: a record/play arriving mid-drain would
+	// start transport the drain below just stood down.
+	closeRemoteServer()
+	stopHyperdeckServer()
+
 	mutex.Lock()
 	recording := isRecording
 	playing := currentState == StatePlaying || currentState == StatePaused
