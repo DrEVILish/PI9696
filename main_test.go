@@ -105,6 +105,31 @@ func demoTestCleanup(t *testing.T) {
 	})
 }
 
+
+// resetTransportCleanup is the standard transport-state cleanup for demo and
+// playback tests: stops the monitor, then forces every transport field back
+// to idle so the next test starts from a known state.
+func resetTransportCleanup(t *testing.T) {
+	t.Helper()
+	t.Cleanup(func() {
+		mutex.Lock()
+		if monitoring {
+			stopMonitor()
+		}
+		currentState = StateIdle
+		monitoring = false
+		monitoringOutput = false
+		autoMonitor = false
+		playbackCmd = nil
+		playbackFile = ""
+		playbackPausedElapsed = 0
+		playbackStart = time.Time{}
+		playbackDone = nil
+		playbackDuration = 0
+		mutex.Unlock()
+	})
+}
+
 func initTestHardware(t *testing.T) {
 	t.Helper()
 	os.Setenv("PI9696_SIM", "1")
@@ -2571,23 +2596,7 @@ func TestInfernoUpGateAndAudioPath(t *testing.T) {
 	initTestHardware(t)
 	demoTestCleanup(t)
 	setDemoModeLocked(true)
-	t.Cleanup(func() {
-		mutex.Lock()
-		if monitoring {
-			stopMonitor()
-		}
-		currentState = StateIdle
-		monitoring = false
-		monitoringOutput = false
-		autoMonitor = false
-		playbackCmd = nil
-		playbackFile = ""
-		playbackPausedElapsed = 0
-		playbackStart = time.Time{}
-		playbackDone = nil
-		playbackDuration = 0
-		mutex.Unlock()
-	})
+	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	startMonitor()
 	mutex.Lock()
@@ -2619,23 +2628,7 @@ func TestDemoGeneratorPCM(t *testing.T) {
 	initTestHardware(t)
 	demoTestCleanup(t)
 	setDemoModeLocked(true)
-	t.Cleanup(func() {
-		mutex.Lock()
-		if monitoring {
-			stopMonitor()
-		}
-		currentState = StateIdle
-		monitoring = false
-		monitoringOutput = false
-		autoMonitor = false
-		playbackCmd = nil
-		playbackFile = ""
-		playbackPausedElapsed = 0
-		playbackStart = time.Time{}
-		playbackDone = nil
-		playbackDuration = 0
-		mutex.Unlock()
-	})
+	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	startMonitor()
 	mutex.Lock()
@@ -2667,23 +2660,7 @@ func TestDemoMonitorLiveLevels(t *testing.T) {
 	initTestHardware(t)
 	demoTestCleanup(t)
 	setDemoModeLocked(true)
-	t.Cleanup(func() {
-		mutex.Lock()
-		if monitoring {
-			stopMonitor()
-		}
-		currentState = StateIdle
-		monitoring = false
-		monitoringOutput = false
-		autoMonitor = false
-		playbackCmd = nil
-		playbackFile = ""
-		playbackPausedElapsed = 0
-		playbackStart = time.Time{}
-		playbackDone = nil
-		playbackDuration = 0
-		mutex.Unlock()
-	})
+	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	mutex.Lock()
 	startRecording()
@@ -2713,23 +2690,7 @@ func TestDemoRecordTake(t *testing.T) {
 	initTestHardware(t)
 	demoTestCleanup(t)
 	setDemoModeLocked(true)
-	t.Cleanup(func() {
-		mutex.Lock()
-		if monitoring {
-			stopMonitor()
-		}
-		currentState = StateIdle
-		monitoring = false
-		monitoringOutput = false
-		autoMonitor = false
-		playbackCmd = nil
-		playbackFile = ""
-		playbackPausedElapsed = 0
-		playbackStart = time.Time{}
-		playbackDone = nil
-		playbackDuration = 0
-		mutex.Unlock()
-	})
+	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	startMonitor()
 	mutex.Lock()

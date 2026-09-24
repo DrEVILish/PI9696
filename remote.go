@@ -508,7 +508,6 @@ document.getElementById('loginForm').addEventListener('submit', function() {
 
 func handleLoginGet(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
-	name := deviceName
 	// Only start the show-token window if it isn't already running: a
 	// crawler/attacker GETting /login in a loop must not extend it (the
 	// token would stay parked on the panel indefinitely).
@@ -516,19 +515,23 @@ func handleLoginGet(w http.ResponseWriter, r *http.Request) {
 		lastLoginPage = time.Now()
 	}
 	mutex.Unlock()
-	theme, css := loginPageTheme()
-	loginPageTmpl.Execute(w, loginPageData{DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css})
+	writeLoginPage(w, loginPageData{})
+}
+
+// writeLoginPage fills in the page-invariant fields (name, logo, theme) and
+// renders; error/box state rides in d.
+func writeLoginPage(w http.ResponseWriter, d loginPageData) {
+	d.DeviceName = deviceName
+	d.Logo = template.HTML(pi9696LogoSVG)
+	d.Theme, d.ThemeCSS = loginPageTheme()
+	loginPageTmpl.Execute(w, d)
 }
 
 func handleLoginPost(w http.ResponseWriter, r *http.Request) {
-	mutex.Lock()
-	name := deviceName
-	mutex.Unlock()
 	ip := clientIP(r)
 	if !loginLimit.allowed(ip) {
 		w.WriteHeader(http.StatusTooManyRequests)
-		theme, css := loginPageTheme()
-		loginPageTmpl.Execute(w, loginPageData{Error: "Too many attempts, wait a minute", DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css})
+		writeLoginPage(w, loginPageData{Error: "Too many attempts, wait a minute"})
 		return
 	}
 
@@ -536,8 +539,7 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	if subtle.ConstantTimeCompare([]byte(submitted), []byte(remoteToken)) != 1 {
 		loginLimit.recordFailure(ip)
 		w.WriteHeader(http.StatusUnauthorized)
-		theme, css := loginPageTheme()
-		loginPageTmpl.Execute(w, loginPageData{Error: "Invalid token", DeviceName: name, Logo: template.HTML(pi9696LogoSVG), Theme: theme, ThemeCSS: css, Boxes: boxesFromToken(submitted)})
+		writeLoginPage(w, loginPageData{Error: "Invalid token", Boxes: boxesFromToken(submitted)})
 		return
 	}
 
