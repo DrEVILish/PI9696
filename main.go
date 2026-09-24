@@ -3566,26 +3566,17 @@ func getUSBSize() string {
 		return ""
 	}
 
+	// Actual capacity, not snapped to a power of two: a 500GB drive's
+	// 465GiB used to display as "512GB", and 480GB as "256GB".
 	totalBytes := uint64(stat.Blocks) * uint64(stat.Bsize)
 
 	if totalBytes < 1024*1024*1024 { // Less than 1GB
-		mb := totalBytes / (1024 * 1024)
-		return fmt.Sprintf("%dmb", roundToPowerOfTwo(int(mb)))
+		return fmt.Sprintf("%dmb", totalBytes/(1024*1024))
 	} else if totalBytes < 1024*1024*1024*1024 { // Less than 1TB
-		gb := totalBytes / (1024 * 1024 * 1024)
-		return fmt.Sprintf("%dGB", roundToPowerOfTwo(int(gb)))
+		return fmt.Sprintf("%dGB", totalBytes/(1024*1024*1024))
 	} else {
-		tb := totalBytes / (1024 * 1024 * 1024 * 1024)
-		return fmt.Sprintf("%dTB", roundToPowerOfTwo(int(tb)))
+		return fmt.Sprintf("%dTB", totalBytes/(1024*1024*1024*1024))
 	}
-}
-
-func roundToPowerOfTwo(value int) int {
-	if value <= 0 {
-		return 1
-	}
-	power := math.Log2(float64(value))
-	return int(math.Pow(2, math.Round(power)))
 }
 
 func updateLoop() {
