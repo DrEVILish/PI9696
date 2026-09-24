@@ -3102,3 +3102,59 @@ func TestDemoToggleRefusedDuringTransport(t *testing.T) {
 	setDemoModeLocked(false)
 	mutex.Unlock()
 }
+
+// Rotating the access token revokes every session and retires the old token:
+// the pre-rotation cookie 401s, the old token no longer logs in, and the
+// Location fragment carries a working new token.
+func TestRotateTokenRevokesAll(t *testing.T) {
+	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
+	remoteToken = "TESTTOKEN4"
+	loginLimit = newLoginLimiter()
+	sessions = newSessionStore()
+	t.Cleanup(func() { remoteToken, loginLimit, sessions = origToken, origLimiter, origSessions })
+
+	mux := newRemoteMux()
+	cookie := testSessionCookie(t)
+
+	req := httptest.NewRequest("POST", "/api/settings/rotate-token", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("rotate returned %d, want 303", rec.Code)
+	}
+	loc := rec.Header().Get("Location")
+	newToken, ok := strings.CutPrefix(loc, "/login#t=")
+	if !ok || len(newToken) != 8 {
+		t.Fatalf("rotate Location %q carries no new token", loc)
+	}
+
+	// Old session is dead.
+	req = httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("old session still valid after rotation: %d", rec.Code)
+	}
+
+	// Old token no longer logs in; new one does.
+	form := "token=" + "TESTTOKEN4"
+	req = httptest.NewRequest("POST", "/login", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "192.0.2.1:12345"
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("old token login returned %d, want 401", rec.Code)
+	}
+	form = "token=" + newToken
+	req = httptest.NewRequest("POST", "/login", strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.RemoteAddr = "192.0.2.1:12345"
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("new token login returned %d, want 303", rec.Code)
+	}
+}
