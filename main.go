@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +21,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"pi9696/hardware"
 
@@ -612,11 +614,24 @@ func drawQRBitmapFit(bmp [][]bool) {
 
 // fitText truncates s so it renders within maxPx in the current font
 // context - keeps SSID/password/network lines clear of the QR code.
+// Trims whole runes: cutting raw bytes could split a multi-byte UTF-8
+// sequence and render garbage.
 func fitText(s string, maxPx int) string {
 	for len(s) > 0 && hwManager.GetTextWidth(s) > maxPx {
-		s = s[:len(s)-1]
+		_, size := utf8.DecodeLastRuneInString(s)
+		s = s[:len(s)-size]
 	}
 	return s
+}
+
+// signalTERM asks a transport process to exit. "Process already finished"
+// is the normal race (the reaping goroutine got there first) and stays
+// quiet; anything else is logged - a silently failed stop leaves the
+// process running with the UI claiming otherwise.
+func signalTERM(p *os.Process, what string) {
+	if err := p.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		logWarnf("%s: SIGTERM failed: %v", what, err)
+	}
 }
 
 // sanitizeHostapd strips characters hostapd (or its parsing) would treat
@@ -1863,7 +1878,7 @@ func preemptMonitorForRestart() {
 		return
 	}
 	if cmd != nil && cmd.Process != nil {
-		cmd.Process.Signal(syscall.SIGTERM)
+		signalTERM(cmd.Process, "monitor")
 	}
 	mutex.Lock()
 	if monitorCmd == cmd {
@@ -2698,7 +2713,7 @@ func meterReader(stdout io.Reader, gen uint64) {
 // second Wait() here would race it (see startRecording's comment).
 func stopRecording() {
 	if ffmpegCmd != nil && ffmpegCmd.Process != nil {
-		ffmpegCmd.Process.Signal(syscall.SIGTERM)
+		signalTERM(ffmpegCmd.Process, "recording")
 	}
 }
 
@@ -2769,7 +2784,7 @@ func startMonitor() {
 // the app mutex on ffmpeg's exit).
 func stopMonitor() {
 	if monitorCmd != nil && monitorCmd.Process != nil {
-		monitorCmd.Process.Signal(syscall.SIGTERM)
+		signalTERM(monitorCmd.Process, "monitor")
 	}
 }
 
@@ -3111,7 +3126,7 @@ func stopPlayback() {
 	// A stopped track needs no end-of-track countdown.
 	stopDemoEndTimerLocked()
 	if playbackCmd != nil && playbackCmd.Process != nil {
-		playbackCmd.Process.Signal(syscall.SIGTERM)
+		signalTERM(playbackCmd.Process, "playback")
 		// A paused track is frozen with SIGSTOP (see pausePlayback), and a
 		// stopped process defers signal delivery until it's continued: the
 		// SIGTERM above would sit pending forever, ffmpeg would never exit,
@@ -3201,7 +3216,7 @@ func restartPlaybackAt(pos time.Duration) {
 	// says "playing".
 	wasPaused := currentState == StatePaused
 	if old != nil && old.Process != nil {
-		old.Process.Signal(syscall.SIGTERM)
+		signalTERM(old.Process, "playback (seek handoff)")
 		// Seek only ever happens while paused, so the outgoing process is
 		// usually SIGSTOP'd - and a stopped process defers SIGTERM until
 		// it's continued (the same trap stopPlayback hit; see its comment).
