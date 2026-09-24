@@ -66,6 +66,21 @@ func demoTestCleanup(t *testing.T) {
 	t.Helper()
 	origDemo, origFifo := demoMode, demoFifoPath
 	t.Cleanup(func() {
+		// setDemoModeLocked refuses the off-toggle while transport is still
+		// winding down (stopRecording/stopPlayback only signal; the owning
+		// reapers flip isRecording/playbackCmd asynchronously). Wait for the
+		// reapers first, or the refused toggle orphans the generator and its
+		// FIFO - and cascades stale demo state into the next test.
+		busyDeadline := time.Now().Add(3 * time.Second)
+		for {
+			mutex.Lock()
+			busy := isRecording || playbackCmd != nil
+			mutex.Unlock()
+			if !busy || time.Now().After(busyDeadline) {
+				break
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
 		mutex.Lock()
 		path := demoFifoPath
 		if demoMode {
@@ -2636,6 +2651,13 @@ func TestDemoMonitorLiveLevels(t *testing.T) {
 	if peak <= meterSilence {
 		t.Fatalf("demo take ended with silence floor – expected variation")
 	}
+	// Stop the take before cleanup: the reaper owns isRecording, and a take
+	// left running would make setDemoModeLocked's BUSY refusal block the
+	// generator stop in demoTestCleanup (and stick isRecording into the
+	// next test's startPlayback).
+	mutex.Lock()
+	stopRecording()
+	mutex.Unlock()
 }
 
 // TestDemoRecordTake verifies that a recorded take captures genuine
