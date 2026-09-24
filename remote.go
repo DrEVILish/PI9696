@@ -395,7 +395,8 @@ type loginPageData struct {
 	// page is the same product, not a stranger: data-theme scopes the
 	// --ftl-* tokens (e.g. --ftl-font) the stylesheet reads. Unthemed
 	// renders exactly as before (no marker beyond "none", no href).
-	Theme, ThemeCSS string
+	// CoreVersion cache-busts the always-linked ftl-core.css.
+	Theme, ThemeCSS, CoreVersion string
 	// Boxes pre-fills the 8 token inputs so a failed attempt (or a QR
 	// prefill) isn't wiped by the error re-render.
 	Boxes [8]string
@@ -423,44 +424,45 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
+<!-- Core is always linked (reset + shared components, no tokens of its own);
+   the active theme bundle on top supplies the --ftl-* tokens. -->
+<link rel="stylesheet" href="/static/themes/ftl-core.css?v={{.CoreVersion}}">
 {{if .ThemeCSS}}<link rel="stylesheet" href="{{.ThemeCSS}}">{{end}}
 <style>
 body{font-family:var(--ftl-font,"Consolas",monospace);background:radial-gradient(ellipse at center,var(--ftl-surface,#0a1a2e),var(--ftl-bg,#020509) 75%);color:var(--ftl-text,#cfeeff);display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
 .logo-svg{width:480px;max-width:85vw;display:block}
-form{background:var(--ftl-surface,#0a1526);padding:2em 3em;border-radius:10px;border:1px solid var(--ftl-border,#0f3a5c);box-shadow:var(--ftl-panel-shadow,0 0 30px rgba(0,180,255,0.15));text-align:center}
+/* Box geometry is the shared .ftl-panel; the centered layout is app-owned. */
+form.ftl-panel{text-align:center;min-width:20em}
 .token-row{display:flex;align-items:center;justify-content:center;gap:0.4em;margin-bottom:1em}
-.token-row input{font-family:inherit;font-size:1.3em;width:1.4em;padding:0.4em 0;background:var(--ftl-input-bg,#08192b);color:var(--ftl-text,#cfeeff);border:1px solid var(--ftl-border,#0f3a5c);border-radius:4px;text-align:center;text-transform:uppercase}
-.token-row input:focus{outline:none;border-color:var(--ftl-accent,#00d9ff);box-shadow:0 0 8px var(--ftl-accent,#00d9ff)}
+.token-row .ftl-input{font-size:1.3em;width:1.4em;padding:0.4em 0;text-align:center;text-transform:uppercase}
 .token-row .dash{color:var(--ftl-muted,#5b8aa8);font-size:1.3em}
-button{font-family:inherit;font-size:1.1em;padding:0.5em 1.2em;background:var(--ftl-surface-2,#08192b);color:var(--ftl-accent,#00d9ff);border:1px solid var(--ftl-border,#0f3a5c);border-radius:4px;cursor:pointer}
-button:hover{border-color:var(--ftl-accent,#00d9ff);box-shadow:0 0 8px var(--ftl-accent,#00d9ff)}
 .err{color:var(--ftl-danger,#ff3355)}
 .hint{color:var(--ftl-muted,#5b8aa8);font-size:0.85em;margin-top:1em}
 
 @media (max-width: 480px) {
-  form{padding:1.5em 1.2em}
+  form.ftl-panel{padding:1.5em 1.2em}
   .token-row{gap:0.25em}
-  .token-row input{width:1.1em;font-size:1.1em}
+  .token-row .ftl-input{width:1.1em;font-size:1.1em}
 }
 </style></head>
 <body>
 {{.Logo}}
-<form method="POST" action="/login" id="loginForm">
+<form method="POST" action="/login" id="loginForm" class="ftl-panel">
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 <div class="token-row" id="tokenRow">
-<input maxlength="1" autofocus autocomplete="off" value="{{index .Boxes 0}}">
-<input maxlength="1" autocomplete="off" value="{{index .Boxes 1}}">
-<input maxlength="1" autocomplete="off" value="{{index .Boxes 2}}">
-<input maxlength="1" autocomplete="off" value="{{index .Boxes 3}}">
+<input class="ftl-input" maxlength="1" autofocus autocomplete="off" value="{{index .Boxes 0}}">
+<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 1}}">
+<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 2}}">
+<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 3}}">
 <span class="dash">-</span>
-<input maxlength="1" autocomplete="off" value="{{index .Boxes 4}}">
-<input maxlength="1" autocomplete="off" value="{{index .Boxes 5}}">
-<input maxlength="1" autocomplete="off" value="{{index .Boxes 6}}">
-<input maxlength="1" autocomplete="off" value="{{index .Boxes 7}}">
+<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 4}}">
+<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 5}}">
+<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 6}}">
+<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 7}}">
 </div>
 <input type="hidden" name="token" id="tokenValue">
 <noscript><p><input name="token" maxlength="9" autocomplete="off" placeholder="XXXXXXXX" style="text-transform:uppercase"></p></noscript>
-<button type="submit">Enter</button>
+<button type="submit" class="ftl-btn ftl-btn-primary">Enter</button>
 <p class="hint">8-character code shown on the OLED (Settings &rarr; Remote Access)</p>
 </form>
 <script>
@@ -520,6 +522,7 @@ func writeLoginPage(w http.ResponseWriter, d loginPageData) {
 	d.DeviceName = deviceName
 	d.Logo = template.HTML(pi9696LogoSVG)
 	d.Theme, d.ThemeCSS = loginPageTheme()
+	d.CoreVersion = themeBuildVersion()
 	loginPageTmpl.Execute(w, d)
 }
 
@@ -768,6 +771,7 @@ type dashboardData struct {
 	Logo                 template.HTML
 	Theme                string
 	ThemeCSS             string
+	CoreVersion          string
 	IconSprite           string
 	ThemeFragment        template.HTML
 	VURangeFragment      template.HTML
@@ -838,10 +842,10 @@ func tagSelect() selectView {
 }
 
 var transportFragmentTmpl = template.Must(template.New("transport").Parse(`<div id="transportmode" class="setting-cell">
-<div class="setting-row ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="/api/settings/transport-mode" hx-target="#transportmode" hx-swap="outerHTML">
-<label>Transport Buttons</label>
-<select name="idx" onchange="this.form.requestSubmit()">
+<label class="ftl-label">Transport Buttons</label>
+<select name="idx" class="ftl-select" onchange="this.form.requestSubmit()">
 <option value="0" {{if eq .Idx 0}}selected{{end}}>Icon</option>
 <option value="1" {{if eq .Idx 1}}selected{{end}}>Text</option>
 </select>
@@ -854,10 +858,10 @@ func logLevelSelect() selectView {
 }
 
 var selectFragmentTmpl = template.Must(template.New("setting-select").Parse(`<div id="{{.Id}}" class="setting-cell">
-<div class="setting-row ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="{{.Post}}" hx-target="#{{.Id}}" hx-swap="outerHTML">
-<label>{{.Label}}</label>
-<select name="idx" onchange="this.form.requestSubmit()">
+<label class="ftl-label">{{.Label}}</label>
+<select name="idx" class="ftl-select" onchange="this.form.requestSubmit()">
 {{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}{{$.Suffix}}</option>{{end}}
 </select>
 </form>
@@ -931,11 +935,11 @@ func tagOptionsView() optionsView {
 // readout while dragging and submits on release, so the panel responds only
 // when the operator finishes moving it.
 var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<div id="brightness" class="setting-cell">
-<div class="setting-row ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="/api/settings/brightness" hx-target="#brightness" hx-swap="outerHTML">
-<label for="brightnessRange">Brightness</label>
-<span class="hint" id="brightnessVal">{{.Pct}}%</span>
-<input id="brightnessRange" class="styled-range ftl-slider" type="range" name="pct" min="0" max="100" step="1" value="{{.Pct}}" oninput="document.getElementById('brightnessVal').textContent=this.value+'%'" onchange="this.form.requestSubmit()" title="Panel brightness 0-100%">
+<label class="ftl-label" for="brightnessRange">Brightness</label>
+<span class="hint ftl-field-hint" id="brightnessVal">{{.Pct}}%</span>
+<input id="brightnessRange" class="ftl-slider" type="range" name="pct" min="0" max="100" step="1" value="{{.Pct}}" oninput="document.getElementById('brightnessVal').textContent=this.value+'%'" onchange="this.form.requestSubmit()" title="Panel brightness 0-100%">
 </form>
 </div>
 </div>`))
@@ -943,12 +947,12 @@ var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<di
 // autoDimFragmentTmpl is the Display -> Auto Dim setting: an on/off switch
 // for the dim-then-off idle behavior. Mirrors the WiFi switch markup.
 var autoDimFragmentTmpl = template.Must(template.New("autodim").Parse(`<div id="autodim" class="setting-cell">
-<div class="setting-row setting-row--switch ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="/api/settings/dim" hx-target="#autodim" hx-swap="outerHTML">
-<label for="autoDimToggle">Auto Dim</label>
-<label class="sci-switch" for="autoDimToggle">
+<label class="ftl-label" for="autoDimToggle">Auto Dim</label>
+<label class="ftl-switch" for="autoDimToggle">
 <input id="autoDimToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="sci-switch-track"><span class="sci-thumb"></span></span>
+<span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
 <span class="switch-readout" data-on="AUTO" data-off="MANUAL"></span>
 </label>
 </form>
@@ -1011,17 +1015,17 @@ func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
 // Mirrors the Demo Mode switch; the hint states the no-auth caveat so the
 // toggle reads as an informed choice, not a footnote.
 var hyperdeckFragmentTmpl = template.Must(template.New("hyperdeck").Parse(`<div id="hyperdeck" class="setting-cell">
-<div class="setting-row setting-row--switch ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="/api/settings/hyperdeck" hx-target="#hyperdeck" hx-swap="outerHTML">
-<label for="hyperdeckToggle">HyperDeck Control</label>
-<label class="sci-switch" for="hyperdeckToggle">
+<label class="ftl-label" for="hyperdeckToggle">HyperDeck Control</label>
+<label class="ftl-switch" for="hyperdeckToggle">
 <input id="hyperdeckToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="sci-switch-track"><span class="sci-thumb"></span></span>
+<span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
 <span class="switch-readout" data-on="ON" data-off="OFF"></span>
 </label>
 </form>
 </div>
-<div class="setting-row ftl-field-row"><span class="hint">TCP 9993, Blackmagic protocol, no auth while on</span></div>
+<div class="ftl-field-row"><span class="hint ftl-field-hint">TCP 9993, Blackmagic protocol, no auth while on</span></div>
 </div>`))
 
 type hyperdeckView struct {
@@ -1047,12 +1051,12 @@ func handleAPISettingsHyperdeck(w http.ResponseWriter, r *http.Request) {
 // demoFragmentTmpl is the Demo -> Demo Mode setting: an on/off switch for
 // the simulated-audio demonstration mode. Mirrors the Auto Dim switch.
 var demoFragmentTmpl = template.Must(template.New("demo").Parse(`<div id="demo" class="setting-cell">
-<div class="setting-row setting-row--switch ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="/api/settings/demo" hx-target="#demo" hx-swap="outerHTML">
-<label for="demoToggle">Demo Mode</label>
-<label class="sci-switch" for="demoToggle">
+<label class="ftl-label" for="demoToggle">Demo Mode</label>
+<label class="ftl-switch" for="demoToggle">
 <input id="demoToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="sci-switch-track"><span class="sci-thumb"></span></span>
+<span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
 <span class="switch-readout" data-on="DEMO" data-off="LIVE"></span>
 </label>
 </form>
@@ -1089,12 +1093,12 @@ func handleAPISettingsDemoMode(w http.ResponseWriter, r *http.Request) {
 // monitorFragmentTmpl is the Audio -> Monitoring setting: an on/off switch
 // for the input monitor. Mirrors the Demo Mode switch.
 var monitorFragmentTmpl = template.Must(template.New("monitor").Parse(`<div id="monitor" class="setting-cell">
-<div class="setting-row setting-row--switch ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="/api/settings/monitor" hx-target="#monitor" hx-swap="outerHTML">
-<label for="monitorToggle">Monitoring</label>
-<label class="sci-switch" for="monitorToggle">
+<label class="ftl-label" for="monitorToggle">Monitoring</label>
+<label class="ftl-switch" for="monitorToggle">
 <input id="monitorToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="sci-switch-track"><span class="sci-thumb"></span></span>
+<span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
 <span class="switch-readout" data-on="ON" data-off="OFF"></span>
 </label>
 </form>
@@ -1143,11 +1147,11 @@ func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
 }
 
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
-<div class="setting-row ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="/api/settings/channels" hx-target="#channelcount" hx-swap="outerHTML">
-<label for="channelsInput">Channels</label>
-<input id="channelsInput" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
-<span class="hint">1–{{.Max}}</span>
+<label class="ftl-label" for="channelsInput">Channels</label>
+<input id="channelsInput" class="ftl-input" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
+<span class="hint ftl-field-hint">1–{{.Max}}</span>
 </form>
 </div>
 </div>`))
@@ -1164,12 +1168,12 @@ type prefixView struct {
 // text field + OLED presets). It posts the literal prefix, validated to a
 // filename-safe charset server-side.
 var filePrefixFragmentTmpl = template.Must(template.New("fileprefix").Parse(`<div id="fileprefix" class="setting-cell">
-<div class="setting-row ftl-field-row">
+<div class="ftl-field-row">
 <form hx-post="/api/settings/prefix" hx-target="#fileprefix" hx-swap="outerHTML" hx-status:400="target:#prefix-error">
-<label for="filePrefixInput">Prefix</label>
-<input id="filePrefixInput" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
-<span class="hint">file_YYYYMMDD…</span>
-<button type="submit" class="btn-primary ftl-btn">Save</button>
+<label class="ftl-label" for="filePrefixInput">Prefix</label>
+<input id="filePrefixInput" class="ftl-input" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
+<span class="hint ftl-field-hint">file_YYYYMMDD…</span>
+<button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
 </form>
 <div id="prefix-error"></div>
 </div>
@@ -1581,14 +1585,10 @@ main.ftl-app-main{display:contents}
 
 .recordings-section{padding:0 1.2em 1.2em}
 .recordings-section h2{margin:1.2em 0 0.6em;font-size:1.1em;letter-spacing:0.05em}
-.recordings-table{width:100%;border-collapse:collapse;font-size:0.85em}
-.recordings-table th,.recordings-table td{padding:0.6em 0.8em;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}
-.recordings-table th{color:var(--glow);font-weight:600;font-size:0.7em;letter-spacing:0.1em;text-transform:uppercase;background:var(--ftl-surface-2,#08162a);position:sticky;top:0;z-index:10}
-.recordings-table tr:hover td{background:var(--ftl-surface-2,#08162a)}
-.recordings-table td:last-child{text-align:right}
-.recordings-table .dl-link{color:var(--glow);text-decoration:none;border:1px solid var(--border);border-radius:4px;padding:0.2em 0.6em;font-size:0.85em;white-space:nowrap}
-.recordings-table .dl-link:hover{border-color:var(--glow);background:var(--ftl-go-bg-hover,rgba(0,217,255,0.1))}
-.recordings-table .empty{color:var(--dim);font-style:italic;padding:2em;text-align:center}
+/* The table is the shared .ftl-table.is-sticky (sticky head + themed rows);
+   only the download cell's right alignment stays app-owned. */
+.recs-dl{text-align:right}
+.recs-note{font-size:0.75em;color:var(--dim);margin:0.6em 0 0}
 
 /* Scrollable table wrapper for narrow viewports */
 .recordings-wrap{overflow-x:auto;max-width:100%}
@@ -1602,25 +1602,22 @@ main.ftl-app-main{display:contents}
   #recordings{overflow-y:auto;max-height:30vh}
 }
 
-/* Modals: the settings sheet and the stop-recording confirmation. */
-.modal-backdrop{display:none;position:fixed;inset:0;background:var(--ftl-overlay-bg,rgba(2,6,10,0.75));z-index:200;align-items:center;justify-content:center}
+/* Modals: the settings sheet and the stop-recording confirmation. The box,
+   overlay and close button are the shared ftl-modal family; this app keeps
+   only the open/close toggle (the overlay is always display:flex) and the
+   two sheets' own sizing. */
+.modal-backdrop{display:none;z-index:200}
 .modal-backdrop.open{display:flex}
-.modal{background:var(--panel);border:1px solid var(--border);border-radius:12px;box-shadow:var(--ftl-panel-shadow,0 0 30px rgba(0,180,255,0.2));min-width:20em}
-.modal h2{border:none;margin:0}
-.modal-close{background:none;border:none;color:var(--dim);font-size:1.4em;line-height:1;cursor:pointer;padding:0.2em;border-radius:6px}
-.modal-close:hover{color:var(--glow)}
-/* Stop-recording confirmation (touch devices - see stopModal in the body).
-   Large hit targets for a fat-finger confirm/cancel. */
-.modal--confirm{padding:1.4em 1.8em;position:relative}
+.modal--confirm{position:relative}
 .stop-prompt{color:var(--dim);margin:1.2em 0}
 .stop-actions{display:flex;gap:0.8em;justify-content:flex-end}
 .stop-actions button{min-width:7em;padding:0.8em 1em}
-.modal--confirm .modal-close{position:absolute;top:0.9em;right:0.9em}
+.modal--confirm .ftl-btn-close{position:absolute;top:0.9em;right:0.9em}
 
 /* Settings modal: a sheet with a fixed header bar and a scrollable body, so
    a long setting list never runs past the viewport edge. Setting families are
    grouped under section titles and laid out on a responsive 2-column grid. */
-.modal--settings{width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column}
+.modal--settings{width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column;padding:0}
 .modal--settings .modal-head{display:flex;align-items:center;justify-content:space-between;gap:1em;padding:1.1em 1.4em;border-bottom:1px solid var(--border)}
 .modal--settings .modal-body{padding:0.9em 1.4em 1.4em;overflow-y:auto}
 .settings-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.7em;padding:1em 0 0.4em}
@@ -1629,51 +1626,33 @@ main.ftl-app-main{display:contents}
    even instead of stacking every group with an identical extra top pad. */
 .modal-body>.settings-group:first-child{padding-top:0}
 .settings-group-title{grid-column:1/-1;margin:0 0 0.2em;font-size:0.7em;letter-spacing:0.2em;text-transform:uppercase;color:var(--glow);border-bottom:1px solid var(--border);padding-bottom:0.4em}
-.setting-row{display:flex;align-items:center;gap:0.8em;background:var(--ftl-surface-2,#08162a);border:1px solid var(--border);border-radius:8px;padding:0.55em 0.8em}
-.setting-row:hover{border-color:#1b5380}
-.setting-row form{display:flex;align-items:center;gap:0.8em;flex:1;width:100%}
-.setting-row label{flex:1;color:var(--dim);font-size:0.82em;letter-spacing:0.03em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.setting-row select{font-family:inherit;background:var(--ftl-input-bg,#020509);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.42em 0.7em;min-width:9em;cursor:pointer}
-.setting-row input[type="text"],.setting-row input[type="password"],.setting-row input[type="number"]{flex:1;min-width:0;background:var(--ftl-input-bg,#020509);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:0.45em 0.7em}
-.setting-row input[type="number"]{flex:none;width:6em;font-family:inherit}
-.setting-row .hint{flex:none;font-size:0.78em;color:var(--dim);letter-spacing:0.05em}
-.setting-row--switch input[type="checkbox"]{width:1.3em;height:1.3em;accent-color:var(--glow);cursor:pointer}
-.btn-primary{background:transparent;color:var(--glow);border:1px solid var(--glow);border-radius:6px;font-size:0.82em;letter-spacing:0.06em;padding:0.45em 1em;cursor:pointer}
-.btn-primary:hover{background:var(--ftl-go-bg-hover,rgba(0,217,255,0.12));box-shadow:var(--ftl-go-shadow-hover,0 0 10px rgba(0,217,255,0.4))}
-/* Paired SSID/Password row: two labelled fields sit side by side within one
-   setting card. */
-.setting-row--pair{gap:0.8em 1.2em;flex-wrap:wrap}
-.setting-row--pair .field{flex:1 1 42%;display:flex;align-items:center;gap:0.6em;min-width:0}
-.setting-row--pair .field label{flex:none;width:auto;max-width:8em}
-.setting-row--pair .field input{flex:1;min-width:0}
-/* SciFi toggle switch for the WiFi access-point: a squared HUD-style rail
-   with a chamfered thumb whose diode lights up when the link goes live,
-   plus an ONLINE/OFFLINE status readout that swaps as the switch flips. */
-.sci-switch{position:relative;display:inline-flex;align-items:center;gap:0.7em;flex:none;cursor:pointer}
-.sci-switch input{position:absolute;opacity:0;width:0;height:0}
-.sci-switch-track{position:relative;display:block;width:4.4em;height:1.9em;padding:2px;background:var(--ftl-bg,#02050a);border:1px solid var(--border);border-radius:3px;box-shadow:inset 0 0 12px rgba(0,180,255,0.08);transition:border-color 0.15s,box-shadow 0.15s}
-.sci-thumb{display:block;width:1.45em;height:1.45em;background:var(--ftl-lamp-off,#0d2b4a);border:1px solid var(--border);border-radius:2px;transform:translateX(0);transition:transform 0.18s ease,background 0.18s,border-color 0.18s;position:relative}
-.sci-thumb::before{content:'';position:absolute;inset:3px;background:#071426;border-radius:1px}
-.sci-thumb::after{content:'';position:absolute;left:50%;top:50%;width:4px;height:4px;border-radius:50%;background:var(--ftl-text,#fff);opacity:0.35;transform:translate(-50%,-50%);box-shadow:0 0 5px var(--ftl-text,#fff);transition:opacity 0.18s,background 0.18s,box-shadow 0.18s}
-.sci-switch input:checked + .sci-switch-track{border-color:var(--glow);box-shadow:inset 0 0 12px rgba(0,217,255,0.22),0 0 10px rgba(0,217,255,0.25)}
-.sci-switch input:checked + .sci-switch-track .sci-thumb{transform:translateX(2.45em);background:#0e3a5c;border-color:var(--glow)}
-.sci-switch input:checked + .sci-switch-track .sci-thumb::before{background:#062036}
-.sci-switch input:checked + .sci-switch-track .sci-thumb::after{background:var(--glow);box-shadow:0 0 6px var(--glow);opacity:1}
-.sci-switch input:focus-visible + .sci-switch-track{outline:1px solid var(--glow);outline-offset:2px}
+/* Rows/labels/hints/selects/inputs are the shared ftl-field-row family; the
+   only app-owned pieces are the pieces the library doesn't know: the form
+   layout inside a row and the paired SSID/password fields. */
+.ftl-field-row form{display:flex;align-items:center;gap:0.8em;flex:1;width:100%}
+.ftl-field-row .ftl-select{min-width:9em}
+.ftl-field-row .ftl-input[type="number"]{flex:none;width:6em}
+.ftl-field-row--pair{gap:0.8em 1.2em;flex-wrap:wrap}
+.ftl-field-row--pair .field{flex:1 1 42%;display:flex;align-items:center;gap:0.6em;min-width:0}
+.ftl-field-row--pair .field label{flex:none;width:auto;max-width:8em}
+.ftl-field-row--pair .field input{flex:1;min-width:0}
+/* The control itself is the shared .ftl-switch. Two small overrides let
+   this app's status readout ride inside the same <label>: the switch
+   reverts to content width and the track regains a relative box, so the
+   readout sits beside the pill instead of under the absolute track. */
+.ftl-switch:has(.switch-readout){width:auto;gap:0.7em}
+.ftl-switch:has(.switch-readout) .ftl-switch-track{position:relative;inset:auto;width:calc(2.6em*var(--ftl-density,1));height:calc(1.4em*var(--ftl-density,1))}
 .switch-readout{font-size:0.82em;letter-spacing:0.08em;position:relative;min-width:5em;text-align:center;color:var(--ftl-muted,#2c4a66)}
 .switch-readout::after{content:attr(data-off)}
-.sci-switch input:checked ~ .switch-readout{color:var(--glow);text-shadow:0 0 6px rgba(0,217,255,0.6)}
-.sci-switch input:checked ~ .switch-readout::after{content:attr(data-on)}
+.ftl-switch input:checked ~ .switch-readout{color:var(--glow);text-shadow:0 0 6px rgba(0,217,255,0.6)}
+.ftl-switch input:checked ~ .switch-readout::after{content:attr(data-on)}
 
 /* Continuous OLED brightness slider: a wide Sci-Fi range control with a
    glowing track and thumb, sized so a single row holds label + live % readout
    + slider (the readout is updated inline by the fragment's oninput). */
-.styled-range{-webkit-appearance:none;appearance:none;flex:1 1 auto;min-width:0;height:1.6em;background:transparent;cursor:pointer}
-.styled-range::-webkit-slider-runnable-track{height:4px;border-radius:2px;background:linear-gradient(90deg,#0e3a5c,var(--glow))}
-.styled-range::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:14px;height:14px;margin-top:-5px;border-radius:3px;background:var(--ftl-bg,#02050a);border:1px solid var(--glow);box-shadow:var(--ftl-lamp-glow,0 0 8px rgba(0,217,255,0.5))}
-.styled-range::-moz-range-track{height:4px;border-radius:2px;background:linear-gradient(90deg,#0e3a5c,var(--glow))}
-.styled-range::-moz-range-thumb{width:14px;height:14px;border-radius:3px;background:var(--ftl-bg,#02050a);border:1px solid var(--glow);box-shadow:var(--ftl-lamp-glow,0 0 8px rgba(0,217,255,0.5))}
-.styled-range:focus-visible{outline:1px solid var(--glow);outline-offset:2px}
+/* The brightness slider is the shared .ftl-slider; only its flex sizing
+   (one row holds label + live % readout + slider) stays app-owned. */
+.ftl-slider{flex:1 1 auto;min-width:0}
 
 /* The rack-mount reel-to-reel transport lives in the normal document flow
    right below the three-column grid and scrolls with the page. The level
@@ -1846,7 +1825,7 @@ body.meters-collapsed{padding-bottom:4em}
   .r2r .reel-g.spinning .reel-spin,
   .r2r .tape.active,
   .meter-body{animation:none;transition:none}
-  .sci-switch-track,.sci-thumb{transition:none}
+  .ftl-switch-track,.ftl-switch-thumb{transition:none}
 }
 
 /* WiFi settings panel */
@@ -1858,6 +1837,9 @@ body.meters-collapsed{padding-bottom:4em}
    selector never matches and the dashboard paints exactly as before. */
 html[data-theme]:not([data-theme="none"]) body{background:transparent}
 </style>
+<!-- Core is always linked (reset + shared components, no tokens of its
+   own); the active theme bundle on top supplies the --ftl-* tokens. -->
+<link rel="stylesheet" href="/static/themes/ftl-core.css?v={{.CoreVersion}}">
 <link id="themecss" rel="stylesheet"{{if .ThemeCSS}} href="{{.ThemeCSS}}"{{end}}></head>
 <body class="ftl-app">
 
@@ -2046,102 +2028,102 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
   </div>
 </footer>
 
-<div class="modal-backdrop" id="settingsModal">
-  <div class="modal modal--settings">
+<div class="modal-backdrop ftl-modal-overlay" id="settingsModal">
+  <div class="ftl-modal ftl-modal-lg modal--settings">
     <div class="modal-head">
       <h2>Unit Settings</h2>
-      <button class="modal-close" id="settingsClose" type="button" aria-label="Close settings">&times;</button>
+      <button class="ftl-btn-close" id="settingsClose" type="button" aria-label="Close settings"></button>
     </div>
     <div class="modal-body">
-      <section class="settings-group">
-        <h3 class="settings-group-title">Device</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Device</h3>
         <div id="devicename" class="setting-cell">
-          <div class="setting-row ftl-field-row">
+          <div class="ftl-field-row">
             <form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
               <label for="deviceNameInput">Unit Name</label>
               <input id="deviceNameInput" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-              <button type="submit" class="btn-primary ftl-btn">Save</button>
+              <button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
             </form>
           </div>
           <div id="devicename-error"></div>
         </div>
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Audio</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Audio</h3>
         {{.SampleRateFragment}}
         {{.ChannelCountFragment}}
         {{.MonitorFragment}}
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Metering</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Metering</h3>
         {{.VURangeFragment}}
         {{.PeakHoldFragment}}
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Metadata</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Metadata</h3>
         {{.PrefixFragment}}
         {{.TagFragment}}
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Transport</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Transport</h3>
         {{.TransportFragment}}
         {{.HyperdeckFragment}}
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Display</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Display</h3>
         {{.ThemeFragment}}
         {{.BrightnessFragment}}
         {{.AutoDimFragment}}
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Demo</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Demo</h3>
         {{.DemoFragment}}
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Logging</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Logging</h3>
         {{.LogLevelFragment}}
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Config</h3>
-        <div class="setting-row setting-row--pair ftl-field-row">
-          <button hx-post="/api/config/export" hx-target="#config-msg" class="btn-primary ftl-btn">Export to USB</button>
-          <button hx-post="/api/config/import" hx-target="#config-msg" class="btn-primary ftl-btn">Import from USB</button>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Config</h3>
+        <div class="ftl-field-row ftl-field-row--pair">
+          <button hx-post="/api/config/export" hx-target="#config-msg" class="ftl-btn ftl-btn-secondary">Export to USB</button>
+          <button hx-post="/api/config/import" hx-target="#config-msg" class="ftl-btn ftl-btn-secondary">Import from USB</button>
         </div>
         <div class="setting-row ftl-field-row" id="config-msg"></div>
       </section>
 
-      <section class="settings-group">
-        <h3 class="settings-group-title">Network</h3>
+      <section class="settings-group ftl-field-group">
+        <h3 class="settings-group-title ftl-field-group-title">Network</h3>
         <div id="wifi-settings">
           {{.WifiQRFragment}}
           <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML" hx-status:400="target:#wifi-error">
-            <div class="setting-row setting-row--pair ftl-field-row">
+            <div class="ftl-field-row ftl-field-row--pair">
               <span class="field">
                 <label for="wifiSsid">SSID</label>
-                <input id="wifiSsid" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
+                <input id="wifiSsid" class="ftl-input" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
               </span>
               <span class="field">
                 <label for="wifiPass">Password</label>
-                <input id="wifiPass" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
+                <input id="wifiPass" class="ftl-input" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
               </span>
             </div>
-            <div class="setting-row setting-row--switch ftl-field-row">
-              <label for="wifiEnabled">Access Point</label>
-              <label class="sci-switch" for="wifiEnabled">
+            <div class="ftl-field-row">
+              <label class="ftl-label" for="wifiEnabled">Access Point</label>
+              <label class="ftl-switch" for="wifiEnabled">
                 <input id="wifiEnabled" name="enabled" type="checkbox" {{if .WifiEnabled}}checked{{end}}>
-                <span class="sci-switch-track"><span class="sci-thumb"></span></span>
+                <span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
                 <span class="switch-readout" data-on="ONLINE" data-off="OFFLINE"></span>
               </label>
             </div>
-            <button type="submit" class="btn-primary ftl-btn">Save WiFi</button>
+            <button type="submit" class="ftl-btn ftl-btn-secondary">Save WiFi</button>
           </form>
           <div id="wifi-error"></div>
         </div>
@@ -2150,9 +2132,9 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
   </div>
 </div>
 
-<div class="modal-backdrop" id="stopModal">
-  <div class="modal modal--confirm">
-    <button class="modal-close" id="stopModalClose" type="button" aria-label="Close">&times;</button>
+<div class="modal-backdrop ftl-modal-overlay" id="stopModal">
+  <div class="ftl-modal modal--confirm">
+    <button class="ftl-btn-close modal-close" id="stopModalClose" type="button" aria-label="Close"></button>
     <h2>Stop Recording?</h2>
     <p class="stop-prompt">The current take is still being written. Stop it now?</p>
     <div class="stop-actions">
@@ -2721,6 +2703,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		Logo:                 template.HTML(pi9696LogoSVG),
 		Theme:                activeTheme,
 		ThemeCSS:             activeThemeCSS,
+		CoreVersion:          themeBuildVersion(),
 		IconSprite:           iconSpriteHref(activeTheme),
 		VURangeFragment:      template.HTML(vuBuf.String()),
 		PeakHoldFragment:     template.HTML(holdBuf.String()),
@@ -2789,10 +2772,10 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	// the name is editable exactly once per page load. Markup mirrors the
 	// dashboard row exactly (label/id/button), plus the error target and
 	// an OOB clear of any stale validation error on success.
-	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="setting-row ftl-field-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
+	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="ftl-field-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
 <label for="deviceNameInput">Unit Name</label>
 <input id="deviceNameInput" name="name" value="%s" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-<button type="submit" class="btn-primary ftl-btn">Save</button>
+<button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
 </form></div><div id="devicename-error"></div></div>
 <div id="devicename-error" hx-swap-oob="innerHTML"></div>`, template.HTMLEscapeString(current))
 }
@@ -3327,10 +3310,10 @@ func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
 
 var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <div class="recordings-wrap">
-<table class="recordings-table">
+<table class="ftl-table is-sticky">
 <thead><tr><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
 <tbody>
-{{if not .Rows}}<tr><td class="empty" colspan="7">None yet.</td></tr>{{else}}
+{{if not .Rows}}<tr><td colspan="7"><div class="ftl-empty-state"><span class="ftl-empty-state-icon">&#8709;</span><span class="ftl-empty-state-title">None yet.</span><span class="ftl-empty-state-hint">Takes appear here as they finalize.</span></div></td></tr>{{else}}
 {{range .Rows}}<tr>
 <td>{{.Name}}</td>
 <td>{{.Channels}}</td>
@@ -3338,7 +3321,7 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <td>{{.StartStr}}</td>
 <td>{{.EndStr}}</td>
 <td>{{.DurationStr}}</td>
-<td><a class="dl-link" href="/download/{{.RelPath}}">download</a></td>
+<td class="recs-dl"><a class="ftl-btn ftl-btn-sm ftl-btn-secondary" href="/download/{{.RelPath}}"><svg class="ftl-icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-download"/></svg> download</a></td>
 </tr>{{end}}
 {{end}}
 </tbody>
@@ -3351,6 +3334,7 @@ type recordingsView struct {
 	Rows   []recordingRow
 	Total  int
 	Capped bool
+	Sprite string
 }
 
 type recordingRow struct {
@@ -3484,7 +3468,7 @@ func renderRecordingsHTML() (string, error) {
 
 func renderRecordingsHTMLLimit(limit int) (string, error) {
 	files := recordingFiles()
-	view := recordingsView{Total: len(files)}
+	view := recordingsView{Total: len(files), Sprite: iconSpriteHref(currentTheme())}
 	if limit > 0 && len(files) > limit {
 		files = files[len(files)-limit:]
 		view.Capped = true

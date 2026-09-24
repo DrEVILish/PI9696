@@ -60,13 +60,7 @@ func TestDefaultThemeRendersBuiltInLook(t *testing.T) {
 		"--meter-h:120px",
 		"background:var(--ftl-surface-2,#08192b)",
 		"background:var(--ftl-input-bg,#08192b)",
-		"background:var(--ftl-input-bg,#020509)",
-		"background:var(--ftl-surface-2,#08162a)",
-		"background:var(--ftl-bg,#02050a)",
-		"background:var(--ftl-lamp-off,#0d2b4a)",
-		"color:var(--ftl-muted,#2c4a66)",
 		"box-shadow:var(--ftl-panel-shadow,0 0 20px rgba(0,180,255,0.08)",
-		"background:var(--ftl-go-bg-hover,rgba(0,217,255,0.1))",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("bridge lost %q", want)
@@ -203,7 +197,7 @@ func TestLoginPageCarriesActiveTheme(t *testing.T) {
 	if !strings.Contains(body, `<html data-theme="none">`) {
 		t.Error("login page should carry data-theme=none when unthemed")
 	}
-	if strings.Contains(body, `/static/themes/`) {
+	if strings.Contains(body, `rel="stylesheet" href="/static/themes/matrix`) {
 		t.Error("login page must not link a theme stylesheet when unthemed")
 	}
 
@@ -341,8 +335,8 @@ func TestDualClassMarkupPresent(t *testing.T) {
 	// the theme bundle whenever one is active. If a hook is dropped from
 	// the markup, that surface silently stops theming.
 	for _, want := range []string{
-		`class="setting-row ftl-field-row"`,
-		`class="btn-primary ftl-btn"`,
+		`class="ftl-field-row"`,
+		`class="ftl-switch"`,
 		`class="panel left ftl-panel"`,
 		`class="icon-btn ftl-btn ftl-btn-icon"`,
 		`'transport-row ftl-transport'`,
