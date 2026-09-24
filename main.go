@@ -2711,6 +2711,61 @@ func recordingSubdir(t time.Time) string {
 // the layout is an implementation detail they never see - files are matched by
 // their leaf name everywhere downstream.
 func recordingFiles() []string {
+	// Listings are rescanned constantly (browse renders, downloads,
+	// clips count) while the set changes rarely (take finalize, delete).
+	// Key the cache on directory mtimes: creating/deleting/renaming a
+	// take touches its day-dir's mtime, so a key hit is exact - no TTL
+	// staleness, no invalidation hooks. Takes are never overwritten in
+	// place (unique timestamped names), which is the one change mtimes
+	// can't see. Own mutex - callers vary on holding the app lock.
+	// Every hit returns a fresh copy: latestRecording sorts in place.
+	if key, ok := recordingFilesKey(); ok {
+		recFilesMu.Lock()
+		defer recFilesMu.Unlock()
+		if key == recFilesKey {
+			return append([]string(nil), recFilesCached...)
+		}
+		files := recordingFilesScan()
+		recFilesKey, recFilesCached = key, files
+		return append([]string(nil), files...)
+	}
+	return recordingFilesScan()
+}
+
+// recordingFilesKey fingerprints the take set from directory mtimes only:
+// one Stat per day-dir, no per-file stats. False only when /rec itself is
+// unreadable, in which case the caller falls back to a live scan.
+func recordingFilesKey() (string, bool) {
+	top, err := os.Stat(RecordPath)
+	if err != nil {
+		return "", false
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "%d;", top.ModTime().UnixNano())
+	entries, err := os.ReadDir(RecordPath)
+	if err != nil {
+		return "", false
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(RecordPath, e.Name()))
+		if err != nil {
+			return "", false
+		}
+		fmt.Fprintf(&b, "%s:%d;", e.Name(), st.ModTime().UnixNano())
+	}
+	return b.String(), true
+}
+
+var (
+	recFilesMu     sync.Mutex
+	recFilesKey    string
+	recFilesCached []string
+)
+
+func recordingFilesScan() []string {
 	seen := map[string]bool{}
 	var files []string
 	patterns := []string{
