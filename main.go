@@ -475,7 +475,7 @@ func applyWifiConfig(ssid, pass string, enabled bool) {
 
 	apConf := "/etc/hostapd/pi9696.conf"
 	conf := "interface=wlan0\ndriver=nl80211\nssid=" + sanitizeHostapd(ssid) +
-		"\nwpa=2\nwpa_passphrase=" + pass +
+		"\nwpa=2\nwpa_passphrase=" + sanitizeHostapd(pass) +
 		"\nwpa_key_mgmt=WPA-PSK\nrsn_pairwise=CCMP\nchannel=6\nhw_mode=g\nignore_broadcast_ssid=0\n"
 	if err := os.WriteFile(apConf, []byte(conf), 0600); err != nil {
 		logErrorf("wifi: failed to write %s: %v", apConf, err)
