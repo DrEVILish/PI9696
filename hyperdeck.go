@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"fmt"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -105,6 +106,13 @@ func hyperdeckAcceptLoop(l net.Listener) {
 	for {
 		c, err := l.Accept()
 		if err != nil {
+			// A transient accept failure (fd pressure, brief resource
+			// shortage) must not kill the server permanently; only a
+			// closed listener ends the loop.
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				time.Sleep(100 * time.Millisecond)
+				continue
+			}
 			return // listener closed
 		}
 		go handleHyperdeckConn(c)
@@ -112,10 +120,12 @@ func hyperdeckAcceptLoop(l net.Listener) {
 }
 
 // hyperdeckConn is one controller session: writes from the command loop and
-// the notify ticker share the socket under wmu.
+// the notify ticker share the socket under wmu; subscription state and the
+// change signature are touched by both goroutines under smu.
 type hyperdeckConn struct {
 	c               net.Conn
 	wmu             sync.Mutex
+	smu             sync.Mutex
 	notifyTransport bool
 	lastSig         string
 }
@@ -172,16 +182,22 @@ func handleHyperdeckConn(c net.Conn) {
 			case <-done:
 				return
 			case <-ticker.C:
-				if h.notifyTransport {
+				if h.transportSubscribed() {
 					h.pushTransportNotify()
 				}
 			}
 		}
 	}()
 
+	// Idle sessions are reaped: a connected-but-silent controller must not
+	// hold a goroutine and ticker forever.
 	sc := bufio.NewScanner(c)
 	sc.Buffer(make([]byte, 4096), 4096)
-	for sc.Scan() {
+	for {
+		c.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		if !sc.Scan() {
+			return
+		}
 		line := strings.TrimSpace(sc.Text())
 		if line == "" {
 			continue
@@ -192,10 +208,29 @@ func handleHyperdeckConn(c net.Conn) {
 	}
 }
 
+// hyperdeckWhenSeekable runs fn under the app mutex if a track is
+// playing or paused, reporting whether it ran. One guard for the
+// jog/shuttle/goto triple instead of three copies.
+func hyperdeckWhenSeekable(fn func()) bool {
+	mutex.Lock()
+	defer mutex.Unlock()
+	if currentState != StatePlaying && currentState != StatePaused {
+		return false
+	}
+	fn()
+	return true
+}
+
 // dispatch runs one command line; false means the session is over.
+// Only state-changing verbs reset the idle clock (noteActivity): a
+// polling controller asking transport info every second must not keep the
+// panel lit and defeat auto-dim.
 func (h *hyperdeckConn) dispatch(line string) bool {
 	verb, params := hyperdeckParse(line)
-	noteActivity()
+	switch verb {
+	case "record", "play", "stop", "jog", "shuttle", "goto":
+		noteActivity()
+	}
 	switch verb {
 	case "ping":
 		h.ok()
@@ -236,7 +271,8 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 		if named {
 			filePrefix = prev
 		}
-		full := lowDisk()
+		busy := isRecording || currentState == StatePlaying || currentState == StatePaused
+		full := !ok && !busy && lowDisk()
 		mutex.Unlock()
 		if ok {
 			h.ok()
@@ -244,37 +280,55 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 		} else if full {
 			h.fail(104, "disk full")
 		} else {
-			h.fail(103, "unsupported")
+			h.fail(103, "transport busy")
 		}
 	case "play":
+		// Unlike the physical PLAY key (which toggles), the protocol verb
+		// is idempotent: play-while-playing is a no-op 200, and paused
+		// resumes explicitly - a controller re-sending play must never
+		// pause the deck.
 		speed := hyperdeckIntParam(params, "speed", 100)
-		if speed == 0 {
-			// Shuttle-to-zero pauses a running track; anything else is a
-			// plain play through the physical PLAY key's toggle semantics.
-			mutex.Lock()
-			pausable := currentState == StatePlaying
-			if pausable {
+		mutex.Lock()
+		switch {
+		case currentState == StatePlaying:
+			// Idempotent, except speed 0 (shuttle-to-zero) which holds
+			// the track still - matching the shuttle case below.
+			if speed == 0 {
 				pausePlayback()
 			}
-			playing := currentState == StatePlaying || currentState == StatePaused
 			mutex.Unlock()
-			if playing {
+			h.ok()
+			h.afterChange()
+			return true
+		case currentState == StatePaused:
+			if speed == 0 {
+				mutex.Unlock()
 				h.ok()
-				h.afterChange()
-			} else {
-				h.fail(103, "not playing")
+				return true
 			}
+			resumePlayback()
+			mutex.Unlock()
+			h.ok()
+			h.afterChange()
+			return true
+		case isRecording:
+			mutex.Unlock()
+			h.fail(103, "recording in progress")
 			return true
 		}
+		mutex.Unlock()
 		// onButtonPress locks internally - never call it holding the app
 		// mutex (see handleInputButton, which calls it lock-free too).
 		onButtonPress(hardware.PlayButton)
 		mutex.Lock()
 		playing := currentState == StatePlaying || currentState == StatePaused
+		busy := !playing && currentState != StateIdle && currentState != StateIdleBrowse
 		mutex.Unlock()
 		if playing {
 			h.ok()
 			h.afterChange()
+		} else if busy {
+			h.fail(103, "transport busy")
 		} else {
 			h.fail(103, "no recordings to play")
 		}
@@ -291,23 +345,17 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 		if verb == "shuttle" && speed == 0 {
 			// Shuttle-to-zero is the deck idiom for "hold still": pause a
 			// running track, otherwise a plain stop.
-			mutex.Lock()
-			if currentState == StatePlaying {
-				pausePlayback()
-			}
-			mutex.Unlock()
+			hyperdeckWhenSeekable(func() {
+				if currentState == StatePlaying {
+					pausePlayback()
+				}
+			})
 			onButtonPress(hardware.StopButton)
 			h.ok()
 			h.afterChange()
 			return true
 		}
-		mutex.Lock()
-		seekable := currentState == StatePlaying || currentState == StatePaused
-		if seekable {
-			seekPlayback(dir)
-		}
-		mutex.Unlock()
-		if seekable {
+		if hyperdeckWhenSeekable(func() { seekPlayback(dir) }) {
 			h.ok()
 			h.afterChange()
 		} else {
@@ -317,13 +365,7 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 		// Only rewind-to-top is mappable: the unit plays whole takes, not
 		// clip timelines, so any other goto target is unsupported.
 		if t, ok := params["timeline"]; ok && strings.TrimSpace(t) == "0" {
-			mutex.Lock()
-			seekable := currentState == StatePlaying || currentState == StatePaused
-			if seekable {
-				restartPlaybackAt(0)
-			}
-			mutex.Unlock()
-			if seekable {
+			if hyperdeckWhenSeekable(func() { restartPlaybackAt(0) }) {
 				h.ok()
 				h.afterChange()
 			} else {
@@ -356,7 +398,7 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 		mutex.Unlock()
 		lines := make([]string, 0, len(files)*3)
 		for i, f := range files {
-			lines = append(lines, "clip id: "+strconv.Itoa(i), "name: "+baseName(f))
+			lines = append(lines, "clip id: "+strconv.Itoa(i), "name: "+filepath.Base(f))
 		}
 		h.block(206, "clips", lines)
 	case "slot select":
@@ -367,10 +409,10 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 		}
 	case "notify":
 		if v, ok := params["transport"]; ok {
-			h.notifyTransport = (v == "true")
+			h.setTransportSubscribed(strings.ToLower(strings.TrimSpace(v)) == "true")
 		}
 		h.block(209, "notify", []string{
-			"transport: " + boolStr(h.notifyTransport),
+			"transport: " + strconv.FormatBool(h.transportSubscribed()),
 			"slot: false",
 			"remote: false",
 			"configuration: false",
@@ -397,21 +439,39 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 // session right after a command moved the transport, so controllers see the
 // edge without waiting for the 500ms ticker.
 func (h *hyperdeckConn) afterChange() {
-	if h.notifyTransport {
+	if h.transportSubscribed() {
 		h.pushTransportNotify()
 	}
 }
 
+func (h *hyperdeckConn) transportSubscribed() bool {
+	h.smu.Lock()
+	defer h.smu.Unlock()
+	return h.notifyTransport
+}
+
+func (h *hyperdeckConn) setTransportSubscribed(on bool) {
+	h.smu.Lock()
+	defer h.smu.Unlock()
+	h.notifyTransport = on
+}
+
 func (h *hyperdeckConn) snapshotSig() {
-	h.lastSig = hyperdeckSig()
+	sig := hyperdeckSig()
+	h.smu.Lock()
+	defer h.smu.Unlock()
+	h.lastSig = sig
 }
 
 func (h *hyperdeckConn) pushTransportNotify() {
 	sig := hyperdeckSig()
+	h.smu.Lock()
 	if sig == h.lastSig {
+		h.smu.Unlock()
 		return
 	}
 	h.lastSig = sig
+	h.smu.Unlock()
 	h.block(508, "transport info", hyperdeckTransportBlock())
 }
 
@@ -569,18 +629,4 @@ func hyperdeckUniqueID() string {
 		return "PI9696"
 	}
 	return b.String()
-}
-
-func boolStr(b bool) string {
-	if b {
-		return "true"
-	}
-	return "false"
-}
-
-func baseName(p string) string {
-	if i := strings.LastIndex(p, "/"); i >= 0 {
-		return p[i+1:]
-	}
-	return p
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -174,6 +175,18 @@ func TestHyperdeckProtocolSmoke(t *testing.T) {
 	if first, _ := hyperdeckCmd(t, sc, c, "record: name: bad/name"); !strings.HasPrefix(first, "102") {
 		t.Errorf("bad name = %q, want 102", first)
 	}
+	// Rewind-to-top with nothing playing reports not-playing, not
+	// unsupported; other goto targets are unsupported.
+	if first, _ := hyperdeckCmd(t, sc, c, "goto: timeline: 0"); !strings.HasPrefix(first, "103") {
+		t.Errorf("idle goto-top = %q, want 103", first)
+	}
+	if first, _ := hyperdeckCmd(t, sc, c, "goto: clip id: 3"); !strings.HasPrefix(first, "103") {
+		t.Errorf("goto clip = %q, want 103", first)
+	}
+	// Subscription values are case-insensitive.
+	if _, lines := hyperdeckCmd(t, sc, c, "notify: transport: TRUE"); !hyperdeckHas(lines, "transport: true") {
+		t.Errorf("notify TRUE echo = %v", lines)
+	}
 	if first, _ := hyperdeckCmd(t, sc, c, "stop"); first != "200 ok" {
 		t.Errorf("idle stop = %q", first)
 	}
@@ -196,4 +209,29 @@ func TestHyperdeckToggleRoundTrip(t *testing.T) {
 	if !on || !off {
 		t.Errorf("toggle round-trip on=%v off=%v", on, off)
 	}
+}
+
+func TestHyperdeckNotifyConcurrent(t *testing.T) {
+	sc, _, cleanup := hyperdeckDial(t)
+	defer cleanup()
+
+	// Subscribe, then hammer subscription state and notify pushes from
+	// many goroutines: the ticker and the command loop touch both
+	// concurrently in production (see smu).
+	h := &hyperdeckConn{}
+	var wg sync.WaitGroup
+	for g := 0; g < 8; g++ {
+		wg.Add(1)
+		go func(g int) {
+			defer wg.Done()
+			for i := 0; i < 200; i++ {
+				h.setTransportSubscribed(i%2 == 0)
+				_ = h.transportSubscribed()
+				h.snapshotSig()
+				h.pushTransportNotify()
+			}
+		}(g)
+	}
+	wg.Wait()
+	_ = sc
 }
