@@ -162,6 +162,15 @@ func loadPersistedConfig() {
 	if c.Theme != "" && isKnownTheme(c.Theme) {
 		themeSlug = c.Theme
 	}
+	if c.DisplayMotion == "full" || c.DisplayMotion == "reduced" {
+		displayMotion = c.DisplayMotion
+	}
+	if c.DisplayContrast == "standard" || c.DisplayContrast == "high" {
+		displayContrast = c.DisplayContrast
+	}
+	if c.DensityIdx >= 0 && c.DensityIdx < len(displayDensityValues) {
+		displayDensityIdx = c.DensityIdx
+	}
 	if c.TransportMode == "icon" || c.TransportMode == "text" {
 		transportMode = c.TransportMode
 	}
@@ -202,6 +211,9 @@ func persistConfig() {
 		PeakHoldIdx:       peakHoldIdx,
 		TransportMode:     transportMode,
 		Theme:             themeSlug,
+		DisplayMotion:     displayMotion,
+		DisplayContrast:   displayContrast,
+		DensityIdx:        displayDensityIdx,
 		LogLevelIdx:       int(currentLogLevel()),
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
@@ -269,6 +281,9 @@ func exportConfigTo(dir string) error {
 		PeakHoldIdx:       peakHoldIdx,
 		TransportMode:     transportMode,
 		Theme:             themeSlug,
+		DisplayMotion:     displayMotion,
+		DisplayContrast:   displayContrast,
+		DensityIdx:        displayDensityIdx,
 		LogLevelIdx:       int(currentLogLevel()),
 		OledBrightnessPct: &oledBrightnessPct,
 		AutoDimDisabled:   !autoDimEnabled,
@@ -345,6 +360,15 @@ func importConfigFrom(dir string) error {
 	}
 	if c.Theme != "" && isKnownTheme(c.Theme) {
 		themeSlug = c.Theme
+	}
+	if c.DisplayMotion == "full" || c.DisplayMotion == "reduced" {
+		displayMotion = c.DisplayMotion
+	}
+	if c.DisplayContrast == "standard" || c.DisplayContrast == "high" {
+		displayContrast = c.DisplayContrast
+	}
+	if c.DensityIdx >= 0 && c.DensityIdx < len(displayDensityValues) {
+		displayDensityIdx = c.DensityIdx
 	}
 	if c.TransportMode == "icon" || c.TransportMode == "text" {
 		transportMode = c.TransportMode
@@ -886,6 +910,11 @@ type PersistedConfig struct {
 	// built-in look. Absent in pre-theme configs, which therefore stay on the
 	// built-in look after an upgrade.
 	Theme string `json:"theme,omitempty"`
+	// Library display options (motion/contrast/density). Absent in old
+	// configs decodes to the defaults (full / standard / Normal).
+	DisplayMotion   string `json:"displayMotion,omitempty"`
+	DisplayContrast string `json:"displayContrast,omitempty"`
+	DensityIdx      int    `json:"displayDensityIdx"`
 	// LogLevelIdx persists the current log threshold (0-3 = Error..Debug).
 	LogLevelIdx int `json:"logLevelIdx"`
 	// OledBrightnessPct holds the display brightness (0-100). Pointer so a
