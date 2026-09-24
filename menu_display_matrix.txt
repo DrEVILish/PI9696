@@ -2,7 +2,7 @@ PI9696 Menu Display - Dot Matrix Representation (256x64 pixels)
 ================================================================
 
 Display Dimensions: 256 pixels wide x 64 pixels tall
-Font: 8x8 pixel bitmap font
+Font: FiraCode TTF, context-sized (statusbar/header/menu/selected/details/alert)
 Status Bar: Top row (0-7) with format info and USB status
 Content Area: Rows 8-63 for main display content
 
@@ -11,7 +11,7 @@ DISPLAY LAYOUT OVERVIEW:
 
 0         64        128       192       256
 |---------|---------|---------|---------|
-| STATUS BAR: WAV 32bit 48kHz 2ch  4GB USB| Row 0-7
+| STATUS BAR: WAV 24bit 48kHz 2ch  4GB USB| Row 0-7
 | CONTENT | CONTENT | CONTENT | CONTENT | Row 8-15
 | AREA    | AREA    | AREA    | AREA    | Row 16-23
 |         |         |         |         | Row 24-31
@@ -47,16 +47,16 @@ STATUS BAR EXAMPLES:
 ===================
 
 With USB (4GB drive):
-WAV 32bit 48kHz 2ch                                             4GB [USB]
+WAV 24bit 48kHz 2ch                                             4GB [USB]
 
 With USB (1TB drive):
-WAV 32bit 96kHz 8ch                                             1TB [USB]
+WAV 24bit 96kHz 8ch                                             1TB [USB]
 
 Without USB:
-WAV 32bit 48kHz 2ch                                                 [ ]
+WAV 24bit 48kHz 2ch                                                 [ ]
 
 Large channel count:
-WAV 32bit 48kHz 128ch                                          16GB [USB]
+WAV 24bit 48kHz 128ch                                          16GB [USB]
 
 COMPLETE SCREEN LAYOUTS:
 ========================
@@ -65,7 +65,7 @@ IDLE/STANDBY SCREEN:
 -------------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                                                               |
 16-23 |                                                               |
 24-31 |                            Standby                            |
@@ -78,7 +78,7 @@ RECORDING SCREEN:
 ----------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                                                               |
 16-23 |                         ●REC 00:05:23                        |
 24-31 |                                                               |
@@ -91,7 +91,7 @@ SETTINGS MENU (accessible only from idle via encoder click):
 ------------------------------------------------------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                           Settings                            |
 16-23 |                                                               |
 24-31 | > Sample Rate:                                       48kHz    |
@@ -106,7 +106,7 @@ FILE COPY MENU:
 ---------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                      Copy Files to USB                       |
 16-23 |                                                               |
 24-31 | > Start Copy                                                  |
@@ -119,7 +119,7 @@ COPY PROGRESS SCREEN:
 --------------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                                                               |
 16-23 |                        Copying files...                       |
 24-31 |                                                               |
@@ -132,7 +132,7 @@ SYSTEM OPTIONS MENU:
 -------------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                       System Options                         |
 16-23 |                                                               |
 24-31 | > Delete All Recordings                                       |
@@ -145,7 +145,7 @@ CONFIRMATION DIALOG (Delete All):
 ---------------------------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                                                               |
 16-23 |                         ARE YOU SURE?                         |
 24-31 |                                                               |
@@ -158,7 +158,7 @@ CONFIRMATION DIALOG (Format USB):
 ---------------------------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                                                               |
 16-23 |                      Format USB drive?                        |
 24-31 |                                                               |
@@ -171,7 +171,7 @@ CONFIRMATION DIALOG (Shutdown):
 -------------------------------
 ROW   | FULL WIDTH (0-255)                                      |
 ------|----------------------------------------------------------|
-0-7   | WAV 32bit 48kHz 2ch                                  4GB [USB] |
+0-7   | WAV 24bit 48kHz 2ch                                  4GB [USB] |
 8-15  |                                                               |
 16-23 |                                                               |
 24-31 |                                                               |
