@@ -961,9 +961,15 @@ func demoViewData() demoView {
 func handleAPISettingsDemoMode(w http.ResponseWriter, r *http.Request) {
 	enabled := r.FormValue("enabled") != ""
 	mutex.Lock()
-	setDemoModeLocked(enabled)
+	ok := setDemoModeLocked(enabled)
 	noteActivity()
 	mutex.Unlock()
+	if !ok {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `<span class="err">BUSY - STOP FIRST</span>`)
+		return
+	}
 	demoFragmentTmpl.Execute(w, demoViewData())
 }
 
