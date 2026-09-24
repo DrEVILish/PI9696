@@ -1239,11 +1239,18 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, `<span class="err">SSID required</span>`)
 			return
 		}
-		if len(pass) < 8 {
+		if len(pass) < 8 || len(pass) > 63 {
 			mutex.Unlock()
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, `<span class="err">Password must be at least 8 characters</span>`)
+			fmt.Fprint(w, `<span class="err">Password must be 8-63 characters</span>`)
+			return
+		}
+		if strings.ContainsAny(pass, "\r\n\"\\") {
+			mutex.Unlock()
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `<span class="err">Password must not contain quotes, backslashes or line breaks</span>`)
 			return
 		}
 		if len(ssid) > 32 {
