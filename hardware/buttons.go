@@ -85,25 +85,29 @@ func NewButtonManager() (*ButtonManager, error) {
 		buttonType: PlayButton,
 	}
 
-	// Start monitoring goroutine
-	go bm.monitor()
+	// One watcher per button: a shared poll loop would serialize edge
+	// latency across pins, while per-pin edge waits wake only the button
+	// that moved. 500ms timeout keeps quit responsive and covers drivers
+	// that miss edges; debounce still gates repeats (see readButton).
+	for _, b := range bm.buttons {
+		go bm.watch(b)
+	}
 
 	return bm, nil
 }
 
-func (bm *ButtonManager) monitor() {
-	ticker := time.NewTicker(5 * time.Millisecond)
-	defer ticker.Stop()
-
+// watch services one button: immediate wake on either edge (pins are
+// BothEdges), timeout poll otherwise. Decode/debounce unchanged.
+func (bm *ButtonManager) watch(b *Button) {
+	var spins int
 	for {
 		select {
 		case <-bm.quit:
 			return
-		case <-ticker.C:
-			for _, button := range bm.buttons {
-				bm.readButton(button)
-			}
+		default:
 		}
+		edgeTick(b.pin, 500*time.Millisecond, &spins)
+		bm.readButton(b)
 	}
 }
 
