@@ -415,11 +415,7 @@ func boxesFromToken(t string) (b [8]string) {
 // loginPageTheme returns the dashboard's active theme for the login page.
 func loginPageTheme() (string, string) {
 	active := currentTheme()
-	css := ""
-	if active != themeNone {
-		css = "/static/themes/" + active + ".css"
-	}
-	return active, css
+	return active, themeCSSHref(active)
 }
 
 var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
@@ -609,11 +605,18 @@ const themeNone = "none"
 // choice follows the device rather than one browser. Guarded by mutex.
 var themeSlug = themeNone
 
-// themeManifest mirrors ftl-themes' dist/themes.json entries.
+// themeManifest mirrors ftl-themes' dist/themes.json entries. Version is
+// the build's content hash (identical across every entry) - used to
+// cache-bust theme asset URLs; scheme/luminance/shellAware are picker
+// metadata per CONTRACT.md.
 type themeManifest struct {
-	Slug        string `json:"slug"`
-	Label       string `json:"label"`
-	Description string `json:"description"`
+	Slug        string   `json:"slug"`
+	Label       string   `json:"label"`
+	Description string   `json:"description"`
+	Version     string   `json:"version"`
+	Scheme      string   `json:"scheme"`
+	Luminance   *float64 `json:"luminance"`
+	ShellAware  bool     `json:"shellAware"`
 }
 
 // themeAssetPath maps a path inside the submodule to its embed path.
@@ -622,6 +625,7 @@ func themeAssetPath(rel string) string { return "third_party/ftl-themes/" + rel 
 var (
 	themeListOnce sync.Once
 	themeList     []themeManifest
+	themeVersionV string // build version from the manifest, for cache-busting
 )
 
 // availableThemes reads the embedded manifest once. The "none" entry is
@@ -639,9 +643,39 @@ func availableThemes() []themeManifest {
 			logWarnf("theme manifest unparseable: %v", err)
 			return
 		}
+		if len(parsed) > 0 {
+			themeVersionV = parsed[0].Version
+		}
 		themeList = append(themeList, parsed...)
 	})
 	return themeList
+}
+
+// themeBuildVersion returns the manifest's build version ("" when the
+// manifest was unreadable), for cache-busting theme asset URLs.
+func themeBuildVersion() string {
+	availableThemes()
+	return themeVersionV
+}
+
+// themeCSSHref returns the versioned URL for a theme bundle, "" for
+// themeNone. Version query per CONTRACT.md "Cache-busting": a stale cached
+// bundle after an upgrade would otherwise 404 its own assets or show old
+// colors.
+func themeCSSHref(slug string) string {
+	if slug == "" || slug == themeNone {
+		return ""
+	}
+	return "/static/themes/" + slug + ".css?v=" + themeBuildVersion()
+}
+
+// iconSpriteHref returns the per-theme icon sprite URL; the generic sprite
+// is the fallback every theme without icon overrides already matches.
+func iconSpriteHref(slug string) string {
+	if slug == "" || slug == themeNone {
+		return "/static/themes/icons/generic.svg"
+	}
+	return "/static/themes/icons/" + slug + ".svg"
 }
 
 // isKnownTheme reports whether a slug names a bundle that is actually
@@ -714,7 +748,7 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		// dashboard's own URL and the browser would fetch the page as CSS.
 		href := ""
 		if active != themeNone {
-			href = fmt.Sprintf(" href=%q", "/static/themes/"+active+".css")
+			href = fmt.Sprintf(" href=%q", themeCSSHref(active))
 		}
 		fmt.Fprintf(w, "\n<link id=\"themecss\" rel=\"stylesheet\"%s hx-swap-oob=\"outerHTML\">", href)
 		// Charts snapshot the palette at creation (see telePaletteInit), so
@@ -2649,17 +2683,14 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	mutex.Unlock()
 
 	activeTheme := currentTheme()
-	activeThemeCSS := ""
-	if activeTheme != themeNone {
-		activeThemeCSS = "/static/themes/" + activeTheme + ".css"
-	}
+	activeThemeCSS := themeCSSHref(activeTheme)
 	// ?preview=<slug> renders a theme for this browser only, without
 	// persisting it: try-before-apply on shared hardware, where selecting
 	// rewrites the unit's look for every browser. Unknown slugs fall back
 	// to the persisted theme, never to an error page.
 	if pv := r.URL.Query().Get("preview"); isKnownTheme(pv) {
 		activeTheme = pv
-		activeThemeCSS = "/static/themes/" + pv + ".css"
+		activeThemeCSS = themeCSSHref(pv)
 	}
 
 	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf bytes.Buffer
@@ -3620,7 +3651,7 @@ var embeddedWeb embed.FS
 // theme); the fonts sit alongside because a bundle references them as
 // ../assets/fonts/... relative to its own served path.
 //
-//go:embed third_party/ftl-themes/dist/*.css third_party/ftl-themes/dist/themes.json third_party/ftl-themes/assets/fonts/*.woff2
+//go:embed third_party/ftl-themes/dist/*.css third_party/ftl-themes/dist/themes.json third_party/ftl-themes/dist/icons/*.svg third_party/ftl-themes/assets/fonts/*.woff2
 var embeddedThemes embed.FS
 
 // serveEmbeddedStatic serves a pinned vendored asset with immutable caching,
@@ -3723,6 +3754,16 @@ func newRemoteMux() *http.ServeMux {
 			return
 		}
 		serveEmbeddedStatic(w, r, embeddedThemes, themeAssetPath("dist/"+slug+".css"), "text/css")
+	})
+	// Per-theme icon sprites (dist/icons/<slug>.svg, merged by the library's
+	// build from generic + theme overrides) and the generic fallback.
+	mux.HandleFunc("GET /static/themes/icons/{file}", func(w http.ResponseWriter, r *http.Request) {
+		slug, ok := strings.CutSuffix(r.PathValue("file"), ".svg")
+		if !ok || (slug != "generic" && !isKnownTheme(slug)) {
+			http.NotFound(w, r)
+			return
+		}
+		serveEmbeddedStatic(w, r, embeddedThemes, themeAssetPath("dist/icons/"+slug+".svg"), "image/svg+xml")
 	})
 	mux.HandleFunc("GET /static/assets/fonts/{name}", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")

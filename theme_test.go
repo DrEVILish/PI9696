@@ -82,7 +82,7 @@ func TestThemeBundleServedAndUnknownRejected(t *testing.T) {
 		want int
 	}{
 		{"/static/themes/lcars.css", http.StatusOK},
-		{"/static/themes/blue-future.css", http.StatusOK},
+		{"/static/themes/matrix.css", http.StatusOK},
 		{"/static/themes/nope.css", http.StatusNotFound},
 		{"/static/themes/none.css", http.StatusNotFound},
 		{"/static/assets/fonts/Antonio-Bold.woff2", http.StatusOK},
@@ -121,7 +121,7 @@ func TestSelectingThemeLinksItAndPersists(t *testing.T) {
 	if !strings.Contains(body, `<html data-theme="lcars">`) {
 		t.Error("expected data-theme=lcars")
 	}
-	if !strings.Contains(body, `href="/static/themes/lcars.css"`) {
+	if !strings.Contains(body, `href="/static/themes/lcars.css?v=`) {
 		t.Error("expected the lcars bundle to be linked")
 	}
 	// An unknown persisted slug must fall back to the built-in look.
@@ -165,7 +165,7 @@ func TestThemePostSwapsStylesheetOutOfBand(t *testing.T) {
 	if !strings.Contains(body, `<div id="theme" class="setting-cell">`) {
 		t.Error("expected the setting row back for the hx-swap target")
 	}
-	if !strings.Contains(body, `href="/static/themes/lcars.css"`) ||
+	if !strings.Contains(body, `href="/static/themes/lcars.css?v=`) ||
 		!strings.Contains(body, `hx-swap-oob="outerHTML"`) {
 		t.Errorf("expected an OOB stylesheet swap, got:\n%s", body)
 	}
@@ -208,18 +208,18 @@ func TestLoginPageCarriesActiveTheme(t *testing.T) {
 	}
 
 	// Themed: marker + bundle link, so --ftl-* tokens the page reads resolve.
-	themeSlug = "blue-future"
-	if currentTheme() != "blue-future" {
-		t.Skip("blue-future bundle not embedded (submodule uninitialized?)")
+	themeSlug = "matrix"
+	if currentTheme() != "matrix" {
+		t.Skip("matrix bundle not embedded (submodule uninitialized?)")
 	}
 	req = httptest.NewRequest("GET", "/login", nil)
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	body = rr.Body.String()
-	if !strings.Contains(body, `<html data-theme="blue-future">`) {
+	if !strings.Contains(body, `<html data-theme="matrix">`) {
 		t.Error("login page should carry the active theme marker")
 	}
-	if !strings.Contains(body, `href="/static/themes/blue-future.css"`) {
+	if !strings.Contains(body, `href="/static/themes/matrix.css?v=`) {
 		t.Error("login page should link the active theme bundle")
 	}
 }
@@ -265,9 +265,9 @@ func TestPreviewRendersWithoutPersisting(t *testing.T) {
 		return rr.Body.String()
 	}
 
-	body := get("/?preview=blue-future")
-	if !strings.Contains(body, `<html data-theme="blue-future">`) ||
-		!strings.Contains(body, `href="/static/themes/blue-future.css"`) {
+	body := get("/?preview=matrix")
+	if !strings.Contains(body, `<html data-theme="matrix">`) ||
+		!strings.Contains(body, `href="/static/themes/matrix.css?v=`) {
 		t.Error("preview should render the requested bundle")
 	}
 	if themeSlug != themeNone {
