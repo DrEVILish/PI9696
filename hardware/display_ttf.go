@@ -495,10 +495,25 @@ func (d *TTFDisplay) Update() error {
 // change signal so the WebUI mirror can reload on change instead of polling.
 // Same lock discipline as EncodePNG: callers hold the app mutex.
 func (d *TTFDisplay) FrameHash() uint64 {
+	return fnvBytes(d.buffer)
+}
+
+// CanvasHash checksums the supersampled canvas EncodePNG derives the mirror
+// from. Canvas-only changes (sub-nibble antialiasing shifts that quantize
+// away in the packed buffer) leave FrameHash untouched, so the mirror needs
+// this second signal or it can disagree with the served PNG indefinitely.
+func (d *TTFDisplay) CanvasHash() uint64 {
+	if d.canvas == nil {
+		return 0
+	}
+	return fnvBytes(d.canvas.Pix)
+}
+
+func fnvBytes(b []byte) uint64 {
 	const offset, prime = 14695981039346656037, 1099511628211
 	h := uint64(offset)
-	for _, b := range d.buffer {
-		h ^= uint64(b)
+	for _, c := range b {
+		h ^= uint64(c)
 		h *= prime
 	}
 	return h

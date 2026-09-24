@@ -2676,10 +2676,11 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 <div id="devicename-error" hx-swap-oob="innerHTML"></div>`, template.HTMLEscapeString(current))
 }
 
-// handleDisplayPNG mirrors the OLED exactly - encoded from the same packed
-// framebuffer real hardware receives (see TTFDisplay.EncodePNG), not a
-// separate HTML/CSS reimplementation of the layout that could drift from
-// what render() actually draws.
+// handleDisplayPNG mirrors the OLED - encoded from the supersampled canvas
+// (see TTFDisplay.EncodePNG), not a separate HTML/CSS reimplementation of
+// the layout that could drift from what render() actually draws. The served
+// PNG can therefore show sub-nibble canvas detail the 4bpp panel quantizes
+// away; noteDisplayFrame tracks both hashes so the mirror still refreshes.
 //
 // Encodes into an in-memory buffer under the lock, then writes to the
 // response after releasing it. png.Encode writes straight through

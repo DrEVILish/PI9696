@@ -804,6 +804,7 @@ var (
 	cpuPct                 []float64 // latest per-core usage % (cpuUsageLoop)
 	displaySeq             uint64    // bumped when the panel framebuffer changes (see render); the WebUI mirror reloads on change, not on poll
 	displayLastHash        uint64
+	displayLastCanvasHash  uint64
 	displayPushed          bool      // first render always pushes (see render); afterwards only changed frames
 	vuRangeIdx             = 3      // index into vuRangeOptions; -90dBFS default
 	peakHoldIdx            = 4      // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
@@ -3699,10 +3700,15 @@ func render() {
 
 // noteDisplayFrame bumps displaySeq when the panel framebuffer differs from
 // the last render, so the WebUI mirror reloads on change instead of polling.
+// Tracks the packed buffer (what the panel shows, and what gates the SPI
+// push above) and the canvas (what the mirror PNG is encoded from) -
+// canvas-only shifts would otherwise leave the mirror stale indefinitely.
 // Must be called under the app mutex (render does).
 func noteDisplayFrame() {
-	if h := hwManager.FrameHash(); h != displayLastHash {
+	h, c := hwManager.FrameHash(), hwManager.CanvasHash()
+	if h != displayLastHash || c != displayLastCanvasHash {
 		displayLastHash = h
+		displayLastCanvasHash = c
 		displaySeq++
 	}
 }
