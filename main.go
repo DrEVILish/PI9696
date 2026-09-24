@@ -805,6 +805,7 @@ var (
 	displaySeq             uint64    // bumped when the panel framebuffer changes (see render); the WebUI mirror reloads on change, not on poll
 	displayLastHash        uint64
 	displayLastCanvasHash  uint64
+	lastDisplayErrLog      time.Time // throttles display-push failure logs to 1/min
 	displayPushed          bool      // first render always pushes (see render); afterwards only changed frames
 	vuRangeIdx             = 3      // index into vuRangeOptions; -90dBFS default
 	peakHoldIdx            = 4      // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
@@ -3692,7 +3693,15 @@ func render() {
 	// first-push flag covers a theoretical first-frame hash collision so
 	// boot can never leave a dark panel.
 	if !displayPushed || hwManager.FrameHash() != displayLastHash {
-		hwManager.UpdateDisplay()
+		// A dead SPI bus used to show a frozen-but-"fine" UI with nothing
+		// in the logs. Report push failures, throttled: render ticks at
+		// 10Hz and a hard bus fault would otherwise flood.
+		if err := hwManager.UpdateDisplay(); err != nil {
+			if now := time.Now(); now.Sub(lastDisplayErrLog) >= time.Minute {
+				lastDisplayErrLog = now
+				logErrorf("display push failed: %v", err)
+			}
+		}
 		displayPushed = true
 	}
 	noteDisplayFrame()
