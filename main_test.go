@@ -3018,3 +3018,37 @@ func TestMeterReaderDropsStaleGeneration(t *testing.T) {
 		t.Fatalf("current generation did not write meters: %v", fresh)
 	}
 }
+
+// A seek whose replacement process can't start (exclusive ALSA held, broken
+// binary) must land cleanly in Idle - the old process is confirmed dead at
+// that point, so leaving a stale playbackCmd behind would wedge the deck.
+func TestSeekWithUnstartableFFmpegGoesIdle(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	os.MkdirAll(RecordPath, 0755)
+	recFile := filepath.Join(RecordPath, "recording_20260101_000000_ch2_48kHz.wav")
+	if err := os.WriteFile(recFile, []byte("fake"), 0644); err != nil {
+		t.Fatalf("write fake recording: %v", err)
+	}
+	t.Cleanup(func() { os.Remove(recFile) })
+
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = false
+	mutex.Unlock()
+
+	onButtonPress(hardware.PlayButton)
+	onEncoderClick() // pause
+
+	// Hide every ffmpeg from PATH so the replacement Start fails.
+	t.Setenv("PATH", t.TempDir())
+	onEncoderRotate(1)
+
+	mutex.Lock()
+	state, cmd := currentState, playbackCmd
+	mutex.Unlock()
+	if state != StateIdle || cmd != nil {
+		t.Fatalf("failed seek left state=%v cmd=%v, want Idle/nil", state, cmd != nil)
+	}
+}

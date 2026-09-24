@@ -3027,6 +3027,9 @@ func maybeResumeInputMonitorLocked() {
 func stopPlayback() {
 	monitoringOutput = false
 	playbackPausedElapsed = 0
+	// Cancel a seek handoff in flight: restartPlaybackAt checks this after
+	// its wait and bails instead of resurrecting playback from under Stop.
+	seekingPlayback = false
 	if playbackCmd != nil && playbackCmd.Process != nil {
 		playbackCmd.Process.Signal(syscall.SIGTERM)
 		// A paused track is frozen with SIGSTOP (see pausePlayback), and a
@@ -3094,14 +3097,31 @@ func seekPlayback(direction int) {
 }
 
 // restartPlaybackAt starts a fresh ffmpeg at the given file offset. The
-// previous process (if any) is signalled to stop, but is not waited on here -
-// the goroutine that owns its cmd.Wait() reaps it, and because playbackCmd now
-// points at the new process that goroutine's playbackCmd==cmd check fails and
-// it leaves state alone. If the track was paused, the new process is
-// immediately SIGSTOP'd so the playhead lands at the seek point still paused.
+// previous process (if any) is signalled to stop and - unlike the old async
+// handoff - waited on (mutex released meanwhile) before the new process
+// opens the output: on an exclusive (non-dmix) ALSA device the new open
+// fails while the old process still holds it, and one seek detent would end
+// the whole track. If the track was paused, the new process is immediately
+// SIGSTOP'd so the playhead lands at the seek point still paused.
+// seekingPlayback serializes overlapping detents (extras during the ~ms
+// handoff are dropped; the next detent applies from the new position) and
+// lets stopPlayback cancel a handoff in flight.
+var seekingPlayback bool
+
 func restartPlaybackAt(pos time.Duration) {
-	if playbackCmd != nil && playbackCmd.Process != nil {
-		playbackCmd.Process.Signal(syscall.SIGTERM)
+	if seekingPlayback {
+		return
+	}
+	seekingPlayback = true
+
+	old := playbackCmd
+	oldDone := playbackDone
+	// Capture before the handoff: the old reaper runs during the wait below
+	// and flips state to Idle, so reading paused-ness afterwards always
+	// says "playing".
+	wasPaused := currentState == StatePaused
+	if old != nil && old.Process != nil {
+		old.Process.Signal(syscall.SIGTERM)
 		// Seek only ever happens while paused, so the outgoing process is
 		// usually SIGSTOP'd - and a stopped process defers SIGTERM until
 		// it's continued (the same trap stopPlayback hit; see its comment).
@@ -3110,21 +3130,70 @@ func restartPlaybackAt(pos time.Duration) {
 		// the ALSA output open - on an exclusive (non-dmix) ALSA device
 		// that would stop the new process from opening the output at all.
 		// SIGCONT is a harmless no-op if it's already running.
-		playbackCmd.Process.Signal(syscall.SIGCONT)
+		old.Process.Signal(syscall.SIGCONT)
+	}
+
+	if oldDone != nil {
+		// Release the device before opening it again; never hold the app
+		// mutex while waiting on a subprocess.
+		mutex.Unlock()
+		select {
+		case <-oldDone:
+		case <-time.After(2 * time.Second):
+			logWarnf("seek: old playback did not exit in 2s, killing")
+			if old != nil && old.Process != nil {
+				old.Process.Signal(syscall.SIGKILL)
+			}
+			<-oldDone
+		}
+		mutex.Lock()
+	}
+	cancelled := !seekingPlayback
+	seekingPlayback = false
+	// Stop pressed mid-handoff cancels the seek: don't resurrect playback.
+	// A fresh playback started meanwhile (playbackCmd replaced) and a
+	// recording started meanwhile must also survive untouched. Note the
+	// state check is deliberately absent: the old generation's reaper
+	// always runs during the wait above and flips state to Idle - that is
+	// the expected handoff, not a user stop (which clears the flag via
+	// stopPlayback).
+	if cancelled || isRecording {
+		return
+	}
+	if playbackCmd != nil && playbackCmd != old {
+		return
 	}
 
 	cmd := playbackCmdFor(playbackFile, pos)
 	if err := cmd.Start(); err != nil {
+		// The old process is confirmed dead here, so drive to idle cleanly
+		// instead of leaving a stale cmd behind.
 		logErrorf("Failed to seek playback: %v", err)
+		playbackCmd = nil
+		monitoringOutput = false
+		playbackPausedElapsed = 0
+		if currentState == StatePlaying || currentState == StatePaused {
+			currentState = StateIdle
+		}
+		maybeResumeInputMonitorLocked()
 		return
 	}
 
-	wasPaused := currentState == StatePaused
 	playbackCmd = cmd
+	// The old reaper may have run during the handoff wait: it clears
+	// monitoringOutput and can stand the input monitor back up (state
+	// briefly reads Idle). Restore output-metering mode like startPlayback,
+	// and the pre-seek play/pause state explicitly.
+	if monitoring && !demoMode {
+		stopMonitor()
+	}
+	monitoringOutput = true
 	if wasPaused {
+		currentState = StatePaused
 		playbackPausedElapsed = pos
 		cmd.Process.Signal(syscall.SIGSTOP)
 	} else {
+		currentState = StatePlaying
 		playbackStart = time.Now().Add(-pos)
 		playbackPausedElapsed = 0
 	}
