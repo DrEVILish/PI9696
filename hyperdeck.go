@@ -563,7 +563,15 @@ func hyperdeckStatusLocked() (string, int) {
 func hyperdeckClipIDLocked() string {
 	files := recordingFiles()
 	if isRecording {
-		return strconv.Itoa(len(files)) // take still being written sorts last
+		// ffmpeg creates the output file at take start, so the active take
+		// is already in the listing - index-match it, falling back to last
+		// only if it somehow isn't there yet.
+		for i, f := range files {
+			if f == recordingFile {
+				return strconv.Itoa(i)
+			}
+		}
+		return strconv.Itoa(len(files))
 	}
 	if playbackFile != "" {
 		for i, f := range files {

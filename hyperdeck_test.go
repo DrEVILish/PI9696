@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -297,5 +298,41 @@ func TestHyperdeckPlayIdempotent(t *testing.T) {
 	}
 	if state() != StatePlaying {
 		t.Fatal("play while paused should resume")
+	}
+}
+
+// The active take's file exists from take start, so its clip id must be its
+// index in the listing - not one past the end.
+func TestHyperdeckClipIDMatchesActiveTake(t *testing.T) {
+	initTestHardware(t)
+	if err := os.MkdirAll(RecordPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	recFile := filepath.Join(RecordPath, "recording_20260101_000003_ch2_48kHz.wav")
+	if err := os.WriteFile(recFile, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(recFile) })
+
+	mutex.Lock()
+	isRecording = true
+	recordingFile = recFile
+	id := hyperdeckClipIDLocked()
+	files := recordingFiles()
+	isRecording = false
+	recordingFile = ""
+	mutex.Unlock()
+
+	want := -1
+	for i, f := range files {
+		if f == recFile {
+			want = i
+		}
+	}
+	if want < 0 {
+		t.Fatalf("fixture take missing from recordingFiles")
+	}
+	if id != strconv.Itoa(want) {
+		t.Fatalf("clip id = %s, want index %d", id, want)
 	}
 }
