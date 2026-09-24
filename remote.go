@@ -3067,7 +3067,7 @@ func panelWSMessages() (config, recs string, configChanged, recsChanged bool) {
 		config, configChanged = c, c != lastPanelConfig
 		lastPanelConfig = c
 	}
-	if r, err := renderRecordingsHTML(); err == nil {
+	if r, err := renderRecordingsHTMLLimit(latestRecsPushCap); err == nil {
 		recs, recsChanged = r, r != lastPanelRecs
 		lastPanelRecs = r
 	}
@@ -3293,8 +3293,8 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <table class="recordings-table">
 <thead><tr><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
 <tbody>
-{{if not .}}<tr><td class="empty" colspan="7">None yet.</td></tr>{{else}}
-{{range .}}<tr>
+{{if not .Rows}}<tr><td class="empty" colspan="7">None yet.</td></tr>{{else}}
+{{range .Rows}}<tr>
 <td>{{.Name}}</td>
 <td>{{.Channels}}</td>
 <td>{{.Format}} {{.SampleRate}}kHz</td>
@@ -3306,8 +3306,15 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 {{end}}
 </tbody>
 </table>
+{{if .Capped}}<p class="recs-note">Showing latest {{len .Rows}} of {{.Total}} takes.</p>{{end}}
 </div>
 `))
+
+type recordingsView struct {
+	Rows   []recordingRow
+	Total  int
+	Capped bool
+}
 
 type recordingRow struct {
 	Name        string
@@ -3399,13 +3406,28 @@ func handleAPIRecordings(w http.ResponseWriter, r *http.Request) {
 
 // renderRecordingsHTML renders the dashboard recordings list; shared by the
 // one-shot GET (initial paint) and the telemetry-socket push.
+// latestRecs caps the pushed render (0 = all): the list re-renders on every
+// telemetry tick while recording (the in-progress take's duration grows),
+// so hundreds of takes would resend a large table every 2s. The push shows
+// the newest takes with a count note; the explicit GET renders everything.
+const latestRecsPushCap = 50
+
 func renderRecordingsHTML() (string, error) {
-	var rows []recordingRow
-	for _, f := range recordingFiles() {
-		rows = append(rows, buildRecordingRow(f))
+	return renderRecordingsHTMLLimit(0)
+}
+
+func renderRecordingsHTMLLimit(limit int) (string, error) {
+	files := recordingFiles()
+	view := recordingsView{Total: len(files)}
+	if limit > 0 && len(files) > limit {
+		files = files[len(files)-limit:]
+		view.Capped = true
+	}
+	for _, f := range files {
+		view.Rows = append(view.Rows, buildRecordingRow(f))
 	}
 	var buf bytes.Buffer
-	if err := recordingsTmpl.Execute(&buf, rows); err != nil {
+	if err := recordingsTmpl.Execute(&buf, view); err != nil {
 		return "", err
 	}
 	return buf.String(), nil
