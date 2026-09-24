@@ -3335,6 +3335,15 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, f := range recordingFiles() {
 		if relPath, err := filepath.Rel(RecordPath, f); err == nil && relPath == rel {
+			// Never serve the take currently being written: it would be a
+			// growing, half-finalized WAV (same rule as the USB copy loop).
+			mutex.Lock()
+			active := isRecording && f == recordingFile
+			mutex.Unlock()
+			if active {
+				http.NotFound(w, r)
+				return
+			}
 			http.ServeFile(w, r, f)
 			return
 		}
