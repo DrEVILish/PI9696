@@ -2990,3 +2990,4 @@ func TestRenderSkipsUnchangedFramePush(t *testing.T) {
 		t.Error("identical frame re-pushed to display; skip the SPI write when the hash matches")
 	}
 }
+

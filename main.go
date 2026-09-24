@@ -4852,8 +4852,24 @@ func lowDisk() bool {
 	if storageUnwritable() {
 		return true
 	}
+	// Exactly-full is stattable, so storageUnwritable misses it - and the
+	// estimate below is 0, which means "unknown". Check full explicitly.
+	if diskFull() {
+		return true
+	}
 	r := estimateRemainingTime()
 	return r > 0 && r < diskWarnMinutes*time.Minute
+}
+
+// diskFull reports a stattable-but-completely-full recording volume.
+// estimateRemainingTime returns 0 both for this and for an unknowable rate,
+// so the guards need the explicit distinction: full must refuse/stop takes,
+// unknown must not.
+func diskFull() bool {
+	if storageUnwritable() {
+		return false
+	}
+	return getFreeSpace() == 0
 }
 
 // cachedLowDisk memoizes lowDisk at 1Hz for the 100ms render tick: two
@@ -4889,7 +4905,7 @@ func checkMidTakeDiskLocked() {
 	} else {
 		lastMidTakeDiskCheck = now
 	}
-	if shouldAutoStopTake(estimateRemainingTime()) {
+	if shouldAutoStopTake(estimateRemainingTime()) || diskFull() {
 		diskWarnUntil = time.Now().Add(5 * time.Second)
 		logWarnf("Auto-stopping take: under a minute of space remains")
 		stopRecording()
@@ -4940,8 +4956,8 @@ func storageUnwritable() bool {
 // recording is allowed at all, and getRemainingStorage() is what the idle
 // screen / WebUI report - both must reflect the volume a new take will
 // actually land on. If the recording path can't be stat'd (unmounted/unwritable)
-// it returns 0, which lowDisk()/shouldAutoStopTake treat as low via
-// storageUnwritable. Results are cached for 1s: the idle/recording screens
+// it returns 0; lowDisk() treats that as low via storageUnwritable, and an
+// exactly-full (stattable, 0 free) volume via diskFull. Results are cached for 1s: the idle/recording screens
 // call it twice per render at 10Hz, and free space never needs fresher
 // than the mid-take disk check's own 1s throttle (see
 // checkMidTakeDiskLocked). Own mutex - callers hold the app mutex or not
