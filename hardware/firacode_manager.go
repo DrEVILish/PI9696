@@ -127,7 +127,10 @@ func (fc *FiraCodeConfig) ValidateInstallation() error {
 	return nil
 }
 
-// SwitchToContext changes font and size based on UI context
+// SwitchToContext changes font and size based on UI context. A missing
+// optional face (Light/SemiBold/Medium installs vary) falls back to Regular
+// at the requested size: without this a failed switch leaves the previous
+// context's face stuck, since most draw callers ignore the error return.
 func (fcm *FiraCodeManager) SwitchToContext(context string) error {
 	fontPath := fcm.GetFontForContext(context)
 	fontSize := fcm.GetSizeForContext(context)
@@ -136,7 +139,13 @@ func (fcm *FiraCodeManager) SwitchToContext(context string) error {
 		return nil // Already using correct font/size
 	}
 
-	return fcm.switchFont(fontPath, fontSize)
+	if err := fcm.switchFont(fontPath, fontSize); err != nil {
+		if fontPath == fcm.config.Regular {
+			return err
+		}
+		return fcm.switchFont(fcm.config.Regular, fontSize)
+	}
+	return nil
 }
 
 // GetFontForContext returns the best font variant for different UI contexts
@@ -168,7 +177,7 @@ func (fcm *FiraCodeManager) GetSizeForContext(context string) float64 {
 		return fcm.config.sizes["StatusBar"]
 	case "recording", "alert":
 		return fcm.config.sizes["Recording"]
-	case "menu", "navigation", "settings":
+	case "menu", "navigation", "settings", "selected", "active":
 		return fcm.config.sizes["MenuItems"]
 	case "header", "title", "section":
 		return fcm.config.sizes["Headers"]
