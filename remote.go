@@ -363,26 +363,28 @@ func handleIcon(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, pi9696IconSVG)
 }
 
-// manifestTmpl embeds the current device name so an installed home-screen
-// icon reflects a renamed unit without a rebuild. start_url ("/") requires
-// auth like every other route - opening the installed app when the session
-// cookie has expired just lands on /login, same as any bookmark would.
-var manifestTmpl = template.Must(template.New("manifest").Parse(`{
-  "name": "{{.DeviceName}} Remote",
-  "short_name": "{{.DeviceName}}",
-  "start_url": "/",
-  "display": "standalone",
-  "background_color": "#020509",
-  "theme_color": "#00d9ff",
-  "icons": [{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}]
-}`))
-
+// manifestTmpl is static JSON with the device name filled in so an installed
+// home-screen icon reflects a renamed unit without a rebuild. Rendered with
+// encoding/json (not html/template): the name validator excludes
+// JSON-significant chars today, but the wrong engine invites a future break.
 func handleManifest(w http.ResponseWriter, r *http.Request) {
 	mutex.Lock()
 	name := deviceName
 	mutex.Unlock()
 	w.Header().Set("Content-Type", "application/manifest+json")
-	manifestTmpl.Execute(w, struct{ DeviceName string }{name})
+	manifest := map[string]any{
+		"name":             name + " Remote",
+		"short_name":       name,
+		"start_url":        "/",
+		"display":          "standalone",
+		"background_color": "#020509",
+		"theme_color":      "#00d9ff",
+		"icons":            []map[string]string{{"src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any"}},
+	}
+	// start_url ("/") requires auth like every other route - opening the
+	// installed app when the session cookie has expired just lands on
+	// /login, same as any bookmark would.
+	json.NewEncoder(w).Encode(manifest)
 }
 
 type loginPageData struct {
