@@ -229,7 +229,11 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 	verb, params := hyperdeckParse(line)
 	switch verb {
 	case "record", "play", "stop", "jog", "shuttle", "goto":
+		// noteActivity is lock-free by design (other callers hold the app
+		// mutex); dispatch runs on the connection goroutine, so take it.
+		mutex.Lock()
 		noteActivity()
+		mutex.Unlock()
 	}
 	switch verb {
 	case "ping":
