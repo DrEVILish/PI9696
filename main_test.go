@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"image/png"
 	"io"
 	"net/http"
@@ -2906,5 +2907,30 @@ func TestEnlargeFifoGrowsPipe(t *testing.T) {
 	enlargeFifo(path)
 	if got := pipeSize(); got <= before {
 		t.Errorf("pipe size %d, want growth past default %d", got, before)
+	}
+}
+
+func TestMeterReaderFlushesMidStreamBatch(t *testing.T) {
+	origPeak, origRMS := meterChannelPeak, meterChannelRMS
+	t.Cleanup(func() { meterChannelPeak, meterChannelRMS = origPeak, origRMS })
+	meterChannelPeak = make([]float64, 4)
+	meterChannelRMS = make([]float64, 4)
+
+	// More channel lines than one flush batch: every value must land,
+	// including those parsed before the batch boundary.
+	var b strings.Builder
+	for i := 0; i < 40; i++ {
+		fmt.Fprintf(&b, "lavfi.astats.%d.Peak_level=%f\n", (i%4)+1, -1.0-float64(i))
+	}
+	meterReader(strings.NewReader(b.String()))
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	// Channel 1's last write is i=36 -> -37.0; channel 4's is i=39 -> -40.0.
+	if meterChannelPeak[0] != -37.0 {
+		t.Errorf("ch1 peak = %v, want -37", meterChannelPeak[0])
+	}
+	if meterChannelPeak[3] != -40.0 {
+		t.Errorf("ch4 peak = %v, want -40", meterChannelPeak[3])
 	}
 }
