@@ -1966,6 +1966,24 @@ func syncDemoGeneratorLocked() {
 	}
 }
 
+// enlargeFifo bumps a freshly created FIFO's kernel buffer past the 64KB
+// default: at 128ch/48kHz s32le the stream runs ~24MB/s, so 64KB holds
+// ~2.6ms of audio and any reader stall back-pressures the writer into a
+// gap. 4MB holds ~160ms - enough to ride out scheduling jitter (the kernel
+// clamps to pipe-max-size, 1MB here, still 16x). Best-effort: failure keeps
+// the default size. O_RDWR open never blocks on a FIFO.
+func enlargeFifo(path string) {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	const linux_F_SETPIPE_SZ = 1031
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), linux_F_SETPIPE_SZ, 4<<20); errno != 0 {
+		logDebugf("fifo %s kept default pipe size: %v", path, errno)
+	}
+}
+
 func demoFifoName() string {
 	// Nanosecond stamp: two generations started within the same second
 	// (toggle off/on, or a test right after another) must never share a
@@ -1982,6 +2000,7 @@ func startDemoGeneratorLocked() {
 		logErrorf("demo: failed to create FIFO %s: %v", path, err)
 		return
 	}
+	enlargeFifo(path)
 	demoFifoPath = path
 	quit := make(chan struct{})
 	demoGenQuit = quit
@@ -2148,6 +2167,7 @@ func doStartInferno() {
 		mutex.Unlock()
 		return
 	}
+	enlargeFifo(path)
 
 	// The Inferno server is built once during installation
 	// (`cargo build --release`), so at runtime we start the prebuilt binary
