@@ -253,7 +253,7 @@ func TestMeterReaderParsesAstatsOutput(t *testing.T) {
 		"lavfi.astats.Overall.RMS_level=-21.091526\n" +
 		"lavfi.astats.Overall.DC_offset=0.001483\n"
 
-	meterReader(strings.NewReader(input))
+	meterReader(strings.NewReader(input), meterGen)
 
 	mutex.Lock()
 	peak, rms := meterPeakDB, meterRMSDB
@@ -2921,7 +2921,7 @@ func TestMeterReaderFlushesMidStreamBatch(t *testing.T) {
 	for i := 0; i < 40; i++ {
 		fmt.Fprintf(&b, "lavfi.astats.%d.Peak_level=%f\n", (i%4)+1, -1.0-float64(i))
 	}
-	meterReader(strings.NewReader(b.String()))
+	meterReader(strings.NewReader(b.String()), meterGen)
 
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -2991,3 +2991,30 @@ func TestRenderSkipsUnchangedFramePush(t *testing.T) {
 	}
 }
 
+
+// A meterReader from a preempted session (old ffmpeg exiting late) must not
+// corrupt the new session's meters: flushes from a stale generation drop.
+func TestMeterReaderDropsStaleGeneration(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	meterPeakDB = meterSilence
+	meterGen++
+	current := meterGen
+	mutex.Unlock()
+
+	meterReader(strings.NewReader("lavfi.astats.Overall.Peak_level=-1.0\n"), current-1)
+	mutex.Lock()
+	stale := meterPeakDB
+	mutex.Unlock()
+	if stale != meterSilence {
+		t.Fatalf("stale generation wrote meters: %v", stale)
+	}
+
+	meterReader(strings.NewReader("lavfi.astats.Overall.Peak_level=-1.0\n"), current)
+	mutex.Lock()
+	fresh := meterPeakDB
+	mutex.Unlock()
+	if fresh != -1.0 {
+		t.Fatalf("current generation did not write meters: %v", fresh)
+	}
+}

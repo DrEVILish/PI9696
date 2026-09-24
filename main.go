@@ -797,6 +797,7 @@ var (
 	meterRMSDB             = meterSilence
 	meterChannelPeak       []float64 // raw per-channel instantaneous dBFS straight from ffmpeg, index 0 = channel 1; see meterReader
 	meterChannelRMS        []float64
+	meterGen               uint64 // session generation: bumped on every record/monitor start; a stale meterReader (old ffmpeg exiting late) flushes only if its generation is still current, so it can't corrupt the new session's meters
 	meterChannelPeakHeld   []float64 // display-facing peak after hold/decay ballistics - see decayPeakHold; everything that shows a peak marker (OLED, WebUI) reads this, never meterChannelPeak directly
 	peakHeldSetAt          []time.Time
 	bootTime               time.Time // set at startup, used by uptime readout
@@ -2438,6 +2439,7 @@ func startRecording() {
 	currentState = StateRecording
 	meterPeakDB = meterSilence
 	meterRMSDB = meterSilence
+	meterGen++
 	meterChannelPeak = make([]float64, channelCount)
 	meterChannelRMS = make([]float64, channelCount)
 	for i := range meterChannelPeak {
@@ -2447,7 +2449,7 @@ func startRecording() {
 	done := make(chan struct{})
 	recordingDone = done
 
-	go meterReader(stdout)
+	go meterReader(stdout, meterGen)
 
 	// Deliberately NOT waiting for meterReader to see stdout EOF before
 	// calling cmd.Wait() below, even though the exec docs call concurrent
@@ -2544,7 +2546,7 @@ func sanitizeMeterDB(v float64) float64 {
 // ffmpeg's stdout (see the -af comment in startRecording) into the
 // package-level meter vars. Exits on its own once ffmpeg closes stdout
 // (process exit) - no separate stop signal needed.
-func meterReader(stdout io.Reader) {
+func meterReader(stdout io.Reader, gen uint64) {
 	scanner := bufio.NewScanner(stdout)
 	// astats lines for 128ch takes exceed the 64KB default: one long line
 	// would silently kill meters for the whole take.
@@ -2567,21 +2569,26 @@ func meterReader(stdout io.Reader) {
 			return
 		}
 		mutex.Lock()
-		for _, u := range pending[:n] {
-			if u.channel == 0 {
-				if u.isRMS {
-					meterRMSDB = u.v
-				} else {
-					meterPeakDB = u.v
+		// Stale session check: the previous ffmpeg (e.g. a preempted
+		// monitor) can still be flushing while the new session's slices
+		// are live - drop its updates instead of corrupting them.
+		if gen == meterGen {
+			for _, u := range pending[:n] {
+				if u.channel == 0 {
+					if u.isRMS {
+						meterRMSDB = u.v
+					} else {
+						meterPeakDB = u.v
+					}
+					continue
 				}
-				continue
-			}
-			dest := meterChannelPeak
-			if u.isRMS {
-				dest = meterChannelRMS
-			}
-			if u.channel >= 1 && u.channel <= len(dest) {
-				dest[u.channel-1] = u.v
+				dest := meterChannelPeak
+				if u.isRMS {
+					dest = meterChannelRMS
+				}
+				if u.channel >= 1 && u.channel <= len(dest) {
+					dest[u.channel-1] = u.v
+				}
 			}
 		}
 		mutex.Unlock()
@@ -2661,6 +2668,7 @@ func startMonitor() {
 
 	monitorCmd = cmd
 	monitoring = true
+	meterGen++
 	meterChannelPeak = make([]float64, channelCount)
 	meterChannelRMS = make([]float64, channelCount)
 	for i := range meterChannelPeak {
@@ -2670,7 +2678,7 @@ func startMonitor() {
 	done := make(chan struct{})
 	monitorDone = done
 
-	go meterReader(stdout)
+	go meterReader(stdout, meterGen)
 
 	// Same fire-and-forget-Wait() pattern as startRecording, for the same
 	// reason: this goroutine is the sole owner of cmd.Wait() and is what
