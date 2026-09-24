@@ -3,10 +3,14 @@ package main
 import (
 	"bufio"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"pi9696/hardware"
 )
 
 func TestHyperdeckParse(t *testing.T) {
@@ -234,4 +238,64 @@ func TestHyperdeckNotifyConcurrent(t *testing.T) {
 	}
 	wg.Wait()
 	_ = sc
+}
+
+// TestHyperdeckPlayIdempotent drives real (fake-ffmpeg) playback and proves
+// the protocol verb doesn't inherit the physical PLAY key's toggle: re-sent
+// play is a no-op 200 while playing, speed 0 pauses, and play resumes.
+func TestHyperdeckPlayIdempotent(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	if err := os.MkdirAll(RecordPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	recFile := filepath.Join(RecordPath, "recording_20260101_000002_ch2_48kHz.wav")
+	if err := os.WriteFile(recFile, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(recFile) })
+
+	mutex.Lock()
+	currentState = StateIdle
+	isRecording = false
+	mutex.Unlock()
+	onButtonPress(hardware.PlayButton)
+	mutex.Lock()
+	if currentState != StatePlaying {
+		mutex.Unlock()
+		t.Fatal("setup: expected playback to start")
+	}
+	mutex.Unlock()
+	t.Cleanup(func() {
+		onButtonPress(hardware.StopButton)
+		waitForPlaybackIdle(t)
+	})
+
+	sc, c, cleanup := hyperdeckDial(t)
+	defer cleanup()
+
+	state := func() AppState {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return currentState
+	}
+	if first, _ := hyperdeckCmd(t, sc, c, "play"); first != "200 ok" {
+		t.Fatalf("play while playing = %q, want 200 ok", first)
+	}
+	if state() != StatePlaying {
+		t.Fatal("re-sent play paused the deck; the verb must be idempotent")
+	}
+	if first, _ := hyperdeckCmd(t, sc, c, "play: speed: 0"); first != "200 ok" {
+		t.Fatalf("play speed 0 = %q, want 200 ok", first)
+	}
+	if state() != StatePaused {
+		t.Fatal("play speed 0 should hold the track paused")
+	}
+	if first, _ := hyperdeckCmd(t, sc, c, "play"); first != "200 ok" {
+		t.Fatalf("play while paused = %q, want 200 ok", first)
+	}
+	if state() != StatePlaying {
+		t.Fatal("play while paused should resume")
+	}
 }
