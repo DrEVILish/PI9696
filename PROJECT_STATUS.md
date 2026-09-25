@@ -15,8 +15,9 @@ Implementation status, product decisions, and feature history. For specs/usage �
 | Recording | Inferno → FIFO → ffmpeg → 24-bit WAV in `/rec/YYYY-MM-DD/`, with start-time naming, tag presets, low-disk gating (30-min rule), fsync, mid-take auto-stop (<1 min) |
 | Playback | Most recent take to local ALSA; click=pause, rotate=seek, hold=exit; progress bar + elapsed/total |
 | OLED | Full menu system, status bar `[ETH] [INF] [USB]`, VU (12/page + `n/T` indicator)/waveform/info pages, access-QR on network page, brightness + auto-dim + menu timeout back to Standby |
-| WebUI | Live OLED mirror (reloads on framebuffer change), on-screen encoder/buttons, settings modal, VU meters (100 ms WebSocket), telemetry over hx-ws push (status + CPU/RAM/temp/disk graphs, 24h clock) with conn lamp, recordings browser + Download-ALL ZIP + manifest, token pre-fill via `?t=` |
+| WebUI | Live OLED mirror (reloads on framebuffer change), on-screen encoder/buttons, settings modal, VU meters (100 ms WebSocket) as ftl-meter-v strips, telemetry over hx-ws push (status + CPU/RAM/temp/disk graphs, 24h clock) with conn lamp, recordings browser + Download-ALL ZIP + manifest, token pre-fill via `?t=` |
 | Auth | Token → session (12 h), rate-limited login, constant-time compare |
+| Theming | ftl-themes engine (submodule @ 2dd8f32): 22 themes as single bundles, `html[data-theme]` + OOB swap; shared icon sprite (1,017 ids, Tabler MIT) per theme at `/static/themes/icons/<slug>.svg`; display options (motion/contrast/density) persisted device-wide; markup on `.ftl-*` components (field-row, switch, slider, table, modal, meter, empty-state); engine bugs reported upstream (meter-span default #43, stale icon docs #44) |
 | Files | Copy/delete/format USB; config export/import (non-secret JSON) |
 | Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log |
 | Button lamps | REC (GPIO12) lit while recording; PLAY (GPIO16) solid/blink; STOP: none |
