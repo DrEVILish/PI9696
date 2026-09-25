@@ -1610,6 +1610,13 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon.svg">
+<!-- Core is always linked (reset + shared components, no tokens of its
+   own); the active theme bundle on top supplies the --ftl-* tokens. Both
+   links precede the app <style>: per CONTRACT.md the app stylesheet loads
+   after the theme so its equal-specificity rules (e.g. the modal
+   backdrop's closed display:none) win the cascade. -->
+<link rel="stylesheet" href="/static/themes/ftl-core.css?v={{.CoreVersion}}">
+<link id="themecss" rel="stylesheet"{{if .ThemeCSS}} href="{{.ThemeCSS}}"{{end}}>
 <meta name="theme-color" content="#00d9ff">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1967,10 +1974,7 @@ body.meters-collapsed{padding-bottom:4em}
    selector never matches and the dashboard paints exactly as before. */
 html[data-theme]:not([data-theme="none"]) body{background:transparent}
 </style>
-<!-- Core is always linked (reset + shared components, no tokens of its
-   own); the active theme bundle on top supplies the --ftl-* tokens. -->
-<link rel="stylesheet" href="/static/themes/ftl-core.css?v={{.CoreVersion}}">
-<link id="themecss" rel="stylesheet"{{if .ThemeCSS}} href="{{.ThemeCSS}}"{{end}}></head>
+</head>
 <body class="ftl-app">
 
 <!-- ftl-app shell (ftl-themes#3): dual-classed regions so layout themes can

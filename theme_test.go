@@ -44,7 +44,7 @@ func TestDefaultThemeRendersBuiltInLook(t *testing.T) {
 	if !strings.Contains(body, `<html data-theme="none">`) {
 		t.Error("expected data-theme=none on <html>")
 	}
-	if !strings.Contains(body, `<link id="themecss" rel="stylesheet"></head>`) {
+	if !strings.Contains(body, `<link id="themecss" rel="stylesheet">`) {
 		t.Error("expected a theme <link> with NO href when no theme is selected: href=\"\" would make the browser fetch the page itself as CSS")
 	}
 	// The bridge must keep every original literal as its fallback.
