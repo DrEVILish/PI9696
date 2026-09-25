@@ -2142,7 +2142,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
 
 <div class="recordings-section">
   <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)"><svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-download"/></svg> Download ALL (.zip)</a></h2>
-  <div id="recordings" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+  <div id="recordings" class="ftl-scroll" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
 </div>
 </main>
 
@@ -2168,7 +2168,7 @@ html[data-theme]:not([data-theme="none"]) body{background:transparent}
       <h2>Unit Settings</h2>
       <button class="ftl-btn-close" id="settingsClose" type="button" aria-label="Close settings"></button>
     </div>
-    <div class="modal-body">
+    <div class="modal-body ftl-scroll">
       <section class="settings-group ftl-field-group">
         <h3 class="settings-group-title ftl-field-group-title">Device</h3>
         <div id="devicename" class="setting-cell">
@@ -3459,7 +3459,7 @@ func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
 }
 
 var recordingsTmpl = template.Must(template.New("recordings").Parse(`
-<div class="recordings-wrap">
+<div class="recordings-wrap ftl-scroll">
 <table class="ftl-table is-sticky">
 <thead><tr><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
 <tbody>
