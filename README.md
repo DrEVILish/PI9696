@@ -123,6 +123,12 @@ Playback path:
 - Settings modal (all persisted settings)
 - Per-channel VU meters over 100 ms WebSocket push
 - INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
+- Theming: ftl-themes bundles (22 themes, `third_party/ftl-themes` submodule) —
+  one linked stylesheet + `html[data-theme]`; the `third_party/ftl-themes/CONTRACT.md`
+  is the integration spec. Markup uses the library's own components (`.ftl-*`),
+  the shared icon sprite (`/static/themes/icons/<slug>.svg`, per-theme art with a
+  generic fallback) and the app-shell hooks. Density/Motion/Contrast display
+  options persist device-wide beside the theme choice.
 
 ### Auth & Security
 
