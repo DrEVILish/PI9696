@@ -906,9 +906,8 @@ type PersistedConfig struct {
 	VURangeIdx    int    `json:"vuRangeIdx"`
 	PeakHoldIdx   int    `json:"peakHoldIdx"`
 	TransportMode string `json:"transportMode"`
-	// Theme is the web dashboard's ftl-themes slug, or "none"/absent for the
-	// built-in look. Absent in pre-theme configs, which therefore stay on the
-	// built-in look after an upgrade.
+	// Theme is the web dashboard's ftl-themes slug. Absent or naming a
+	// bundle that no longer ships falls back to the default theme.
 	Theme string `json:"theme,omitempty"`
 	// Library display options (motion/contrast/density). Absent in old
 	// configs decodes to the defaults (full / standard / Normal).

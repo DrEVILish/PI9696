@@ -27,10 +27,10 @@ func sessionCookie(t *testing.T, mux http.Handler) *http.Cookie {
 	return nil
 }
 
-func TestDefaultThemeRendersBuiltInLook(t *testing.T) {
-	themeSlug = themeNone
-	if got := currentTheme(); got != themeNone {
-		t.Fatalf("currentTheme() = %q, want %q", got, themeNone)
+func TestDefaultThemeIsFTL(t *testing.T) {
+	themeSlug = defaultThemeSlug
+	if got := currentTheme(); got != defaultThemeSlug {
+		t.Fatalf("currentTheme() = %q, want %q", got, defaultThemeSlug)
 	}
 	mux := newRemoteMux()
 	req := httptest.NewRequest("GET", "/", nil)
@@ -41,11 +41,11 @@ func TestDefaultThemeRendersBuiltInLook(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status %d", rr.Code)
 	}
-	if !strings.Contains(body, `<html data-theme="none">`) {
-		t.Error("expected data-theme=none on <html>")
+	if !strings.Contains(body, `<html data-theme="`+defaultThemeSlug+`">`) {
+		t.Errorf("expected data-theme=%s on <html>", defaultThemeSlug)
 	}
-	if !strings.Contains(body, `<link id="themecss" rel="stylesheet">`) {
-		t.Error("expected a theme <link> with NO href when no theme is selected: href=\"\" would make the browser fetch the page itself as CSS")
+	if !strings.Contains(body, `href="/static/themes/`+defaultThemeSlug+`.css?v=`) {
+		t.Errorf("expected the %s bundle to be linked", defaultThemeSlug)
 	}
 	// The bridge must keep every original literal as its fallback.
 	for _, want := range []string{
@@ -79,6 +79,7 @@ func TestThemeBundleServedAndUnknownRejected(t *testing.T) {
 		{"/static/themes/matrix.css", http.StatusOK},
 		{"/static/themes/ftl-core.css", http.StatusOK},
 		{"/static/themes/icons/generic.svg", http.StatusOK},
+		{"/static/themes/icons/xbmc.svg", http.StatusOK},
 		{"/static/themes/icons/windows95.svg", http.StatusOK},
 		{"/static/themes/icons/nope.svg", http.StatusNotFound},
 		{"/static/themes/nope.css", http.StatusNotFound},
@@ -105,7 +106,7 @@ func TestThemeBundleServedAndUnknownRejected(t *testing.T) {
 }
 
 func TestSelectingThemeLinksItAndPersists(t *testing.T) {
-	defer func() { themeSlug = themeNone }()
+	defer func() { themeSlug = defaultThemeSlug }()
 	themeSlug = "lcars"
 	if got := currentTheme(); got != "lcars" {
 		t.Fatalf("currentTheme() = %q", got)
@@ -122,10 +123,10 @@ func TestSelectingThemeLinksItAndPersists(t *testing.T) {
 	if !strings.Contains(body, `href="/static/themes/lcars.css?v=`) {
 		t.Error("expected the lcars bundle to be linked")
 	}
-	// An unknown persisted slug must fall back to the built-in look.
+	// An unknown persisted slug must fall back to the default theme.
 	themeSlug = "removed-theme"
-	if got := currentTheme(); got != themeNone {
-		t.Errorf("unknown slug should fall back to %q, got %q", themeNone, got)
+	if got := currentTheme(); got != defaultThemeSlug {
+		t.Errorf("unknown slug should fall back to %q, got %q", defaultThemeSlug, got)
 	}
 }
 
@@ -133,12 +134,12 @@ func TestSelectingThemeLinksItAndPersists(t *testing.T) {
 // setting row and an out-of-band <link> swap, so the theme applies without a
 // reload that would drop the live meter and telemetry sockets.
 func TestThemePostSwapsStylesheetOutOfBand(t *testing.T) {
-	defer func() { themeSlug = themeNone }()
-	themeSlug = themeNone
+	defer func() { themeSlug = defaultThemeSlug }()
+	themeSlug = defaultThemeSlug
 	mux := newRemoteMux()
 	cookie := sessionCookie(t, mux)
 
-	// index 4 is LCARS in the manifest order asserted by the picker markup.
+	// Resolve LCARS's picker index from the manifest (order is upstream's).
 	idx := -1
 	for i, th := range availableThemes() {
 		if th.Slug == "lcars" {
@@ -174,38 +175,39 @@ func TestThemePostSwapsStylesheetOutOfBand(t *testing.T) {
 		t.Errorf("themeSlug = %q, want lcars", themeSlug)
 	}
 
-	// Switching back must drop the href entirely, not emit href="".
+	// Switching back to idx 0 links a real bundle, never href="".
 	req = httptest.NewRequest("POST", "/api/settings/theme", strings.NewReader("idx=0"))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
 	rr = httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	if strings.Contains(rr.Body.String(), `href=""`) {
-		t.Error(`switching back to the built-in look must omit href, not emit href=""`)
+		t.Error(`switching back must link a bundle, not emit href=""`)
 	}
-	if themeSlug != themeNone {
-		t.Errorf("themeSlug = %q, want %q", themeSlug, themeNone)
+	first := availableThemes()[0].Slug
+	if themeSlug != first {
+		t.Errorf("themeSlug = %q, want %q", themeSlug, first)
 	}
 }
 
 func TestLoginPageCarriesActiveTheme(t *testing.T) {
-	defer func() { themeSlug = themeNone }()
+	defer func() { themeSlug = defaultThemeSlug }()
 	mux := newRemoteMux()
 
-	// Unthemed: marker "none", no theme stylesheet.
-	themeSlug = themeNone
+	// Default: marker + bundle link, so --ftl-* tokens the page reads resolve.
+	themeSlug = defaultThemeSlug
 	req := httptest.NewRequest("GET", "/login", nil)
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	body := rr.Body.String()
-	if !strings.Contains(body, `<html data-theme="none">`) {
-		t.Error("login page should carry data-theme=none when unthemed")
+	if !strings.Contains(body, `<html data-theme="`+defaultThemeSlug+`">`) {
+		t.Errorf("login page should carry data-theme=%s", defaultThemeSlug)
 	}
-	if strings.Contains(body, `rel="stylesheet" href="/static/themes/matrix`) {
-		t.Error("login page must not link a theme stylesheet when unthemed")
+	if !strings.Contains(body, `href="/static/themes/`+defaultThemeSlug+`.css?v=`) {
+		t.Errorf("login page should link the %s bundle", defaultThemeSlug)
 	}
 
-	// Themed: marker + bundle link, so --ftl-* tokens the page reads resolve.
+	// Switching persists: marker + bundle link follow the new theme.
 	themeSlug = "matrix"
 	if currentTheme() != "matrix" {
 		t.Skip("matrix bundle not embedded (submodule uninitialized?)")
@@ -247,8 +249,8 @@ func TestDashboardCarriesAppShell(t *testing.T) {
 }
 
 func TestPreviewRendersWithoutPersisting(t *testing.T) {
-	defer func() { themeSlug = themeNone }()
-	themeSlug = themeNone
+	defer func() { themeSlug = defaultThemeSlug }()
+	themeSlug = defaultThemeSlug
 	mux := newRemoteMux()
 	cookie := sessionCookie(t, mux)
 
@@ -268,17 +270,17 @@ func TestPreviewRendersWithoutPersisting(t *testing.T) {
 		!strings.Contains(body, `href="/static/themes/matrix.css?v=`) {
 		t.Error("preview should render the requested bundle")
 	}
-	if themeSlug != themeNone {
+	if themeSlug != defaultThemeSlug {
 		t.Errorf("preview must not persist: themeSlug = %q", themeSlug)
 	}
 	body = get("/?preview=nope")
-	if !strings.Contains(body, `<html data-theme="none">`) {
+	if !strings.Contains(body, `<html data-theme="`+defaultThemeSlug+`">`) {
 		t.Error("unknown preview slug should fall back to the persisted theme")
 	}
 }
 
 func TestLayoutBridgeKeepsBuiltInGeometry(t *testing.T) {
-	themeSlug = themeNone
+	themeSlug = defaultThemeSlug
 	mux := newRemoteMux()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(sessionCookie(t, mux))
@@ -298,13 +300,13 @@ func TestLayoutBridgeKeepsBuiltInGeometry(t *testing.T) {
 	}
 }
 
-func TestUnknownPersistedThemeFallsBackToNone(t *testing.T) {
-	defer func() { themeSlug = themeNone }()
+func TestUnknownPersistedThemeFallsBackToDefault(t *testing.T) {
+	defer func() { themeSlug = defaultThemeSlug }()
 	// A theme removed upstream (e.g. winxp-zune) must degrade to the
-	// built-in look, never to a broken page or a stale link.
+	// default theme, never to a broken page or a stale link.
 	themeSlug = "winxp-zune"
-	if got := currentTheme(); got != themeNone {
-		t.Fatalf("currentTheme() = %q for a removed slug, want %q", got, themeNone)
+	if got := currentTheme(); got != defaultThemeSlug {
+		t.Fatalf("currentTheme() = %q for a removed slug, want %q", got, defaultThemeSlug)
 	}
 	mux := newRemoteMux()
 	req := httptest.NewRequest("GET", "/", nil)
@@ -312,23 +314,19 @@ func TestUnknownPersistedThemeFallsBackToNone(t *testing.T) {
 	rr := httptest.NewRecorder()
 	mux.ServeHTTP(rr, req)
 	body := rr.Body.String()
-	if !strings.Contains(body, `<html data-theme="none">`) {
-		t.Error("removed persisted theme should render data-theme=none")
+	if !strings.Contains(body, `<html data-theme="`+defaultThemeSlug+`">`) {
+		t.Errorf("removed persisted theme should render data-theme=%s", defaultThemeSlug)
 	}
-	// A bundle href only ever appears on the themecss link; unthemed the
-	// link exists but carries no href (icons still use the generic sprite).
-	if strings.Contains(body, `id="themecss" rel="stylesheet" href`) {
-		t.Error("removed persisted theme must not link any bundle")
+	if !strings.Contains(body, `href="/static/themes/`+defaultThemeSlug+`.css?v=`) {
+		t.Errorf("removed persisted theme should link the %s bundle", defaultThemeSlug)
 	}
-	// Icons always come from the library: unthemed resolves to the generic
-	// sprite (the same set a no-override theme would use).
-	if !strings.Contains(body, `/static/themes/icons/generic.svg`) {
-		t.Error("unthemed dashboard should reference the generic icon sprite")
+	if !strings.Contains(body, `/static/themes/icons/`+defaultThemeSlug+`.svg`) {
+		t.Errorf("dashboard should reference the %s icon sprite", defaultThemeSlug)
 	}
 }
 
 func TestDualClassMarkupPresent(t *testing.T) {
-	themeSlug = themeNone
+	themeSlug = defaultThemeSlug
 	mux := newRemoteMux()
 	req := httptest.NewRequest("GET", "/", nil)
 	req.AddCookie(sessionCookie(t, mux))

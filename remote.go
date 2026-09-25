@@ -430,7 +430,7 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <!-- Core is always linked (reset + shared components, no tokens of its own);
    the active theme bundle on top supplies the --ftl-* tokens. -->
 <link rel="stylesheet" href="/static/themes/ftl-core.css?v={{.CoreVersion}}">
-{{if .ThemeCSS}}<link rel="stylesheet" href="{{.ThemeCSS}}">{{end}}
+<link rel="stylesheet" href="{{.ThemeCSS}}">
 <style>
 body{font-family:var(--ftl-font,"Consolas",monospace);background:radial-gradient(ellipse at center,var(--ftl-surface,#0a1a2e),var(--ftl-bg,#020509) 75%);color:var(--ftl-text,#cfeeff);display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
 .logo-svg{width:480px;max-width:85vw;display:block}
@@ -603,14 +603,16 @@ func handleAPIRotateToken(w http.ResponseWriter, r *http.Request) {
 // --ftl-* tokens and so re-colours every existing rule through those same
 // fallbacks - plus the app shell, which re-lays-out the page.
 
-// themeNone is the slug meaning "no theme file; use the built-in look".
-const themeNone = "none"
+// defaultThemeSlug is the ftl-themes bundle a fresh or upgraded unit links:
+// xbmc's blue-on-navy is the closest shipping palette to the old built-in
+// look. blue-future (the baseline sci-fi HUD this dashboard was extracted
+// from) takes over once upstream un-archives it - see ftl-themes#49.
+const defaultThemeSlug = "xbmc"
 
-// themeSlug names the bundle the dashboard links, or themeNone for the
-// built-in look - the default, so an upgraded unit keeps rendering exactly
-// as it did. Persisted in the unit's config like every other setting, so the
-// choice follows the device rather than one browser. Guarded by mutex.
-var themeSlug = themeNone
+// themeSlug names the bundle the dashboard links. Persisted in the unit's
+// config like every other setting, so the choice follows the device rather
+// than one browser. Guarded by mutex.
+var themeSlug = defaultThemeSlug
 
 // Library display options (CONTRACT.md "User display options"): browser
 // switches an app may offer beside the theme, applied as documentElement
@@ -670,11 +672,11 @@ var (
 	themeVersionV string // build version from the manifest, for cache-busting
 )
 
-// availableThemes reads the embedded manifest once. The "none" entry is
-// synthesised: it is this device's own look, not one of ftl-themes'.
+// availableThemes reads the embedded manifest once: only ftl-themes
+// bundles, no synthesized entries - the dashboard always links one theme.
 func availableThemes() []themeManifest {
 	themeListOnce.Do(func() {
-		themeList = []themeManifest{{Slug: themeNone, Label: "Built-in", Description: "The unit's own look"}}
+		themeList = nil
 		data, err := embeddedThemes.ReadFile(themeAssetPath("dist/themes.json"))
 		if err != nil {
 			logWarnf("theme manifest unreadable: %v", err)
@@ -700,46 +702,40 @@ func themeBuildVersion() string {
 	return themeVersionV
 }
 
-// themeCSSHref returns the versioned URL for a theme bundle, "" for
-// themeNone. Version query per CONTRACT.md "Cache-busting": a stale cached
-// bundle after an upgrade would otherwise 404 its own assets or show old
-// colors.
+// themeCSSHref returns the versioned URL for a theme bundle. Version query
+// per CONTRACT.md "Cache-busting": a stale cached bundle after an upgrade
+// would otherwise 404 its own assets or show old colors.
 func themeCSSHref(slug string) string {
-	if slug == "" || slug == themeNone {
-		return ""
-	}
 	return "/static/themes/" + slug + ".css?v=" + themeBuildVersion()
 }
 
-// iconSpriteHref returns the per-theme icon sprite URL; the generic sprite
-// is the fallback every theme without icon overrides already matches.
+// iconSpriteHref returns the per-theme icon sprite URL.
 func iconSpriteHref(slug string) string {
-	if slug == "" || slug == themeNone {
-		return "/static/themes/icons/generic.svg"
-	}
 	return "/static/themes/icons/" + slug + ".svg"
 }
 
 // isKnownTheme reports whether a slug names a bundle that is actually
 // embedded. Guards the static route and any persisted value.
 func isKnownTheme(slug string) bool {
-	if slug == "" || slug == themeNone {
+	if slug == "" {
 		return false
 	}
 	for _, t := range availableThemes() {
-		if t.Slug == slug && t.Slug != themeNone {
+		if t.Slug == slug {
 			return true
 		}
 	}
 	return false
 }
 
-// currentTheme returns the active slug, or themeNone. Caller holds no lock.
+// currentTheme returns the active slug, falling back to the default when
+// the persisted value names a bundle that no longer ships (e.g. an
+// upstream-archived theme or an old "none"). Caller holds no lock.
 func currentTheme() string {
 	mutex.Lock()
 	defer mutex.Unlock()
 	if !isKnownTheme(themeSlug) {
-		return themeNone
+		return defaultThemeSlug
 	}
 	return themeSlug
 }
@@ -885,12 +881,7 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		// the change is visible immediately, without a reload that would lose
 		// the live meter and telemetry sockets.
 		active := currentTheme()
-		// No href attribute at all when unthemed: href="" would resolve to the
-		// dashboard's own URL and the browser would fetch the page as CSS.
-		href := ""
-		if active != themeNone {
-			href = fmt.Sprintf(" href=%q", themeCSSHref(active))
-		}
+		href := fmt.Sprintf(" href=%q", themeCSSHref(active))
 		fmt.Fprintf(w, "\n<link id=\"themecss\" rel=\"stylesheet\"%s hx-swap-oob=\"outerHTML\">", href)
 		// Charts snapshot the palette at creation (see telePaletteInit), so
 		// drop them: the next telemetry push (<=2s) rebuilds them in the new
@@ -1616,7 +1607,7 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
    after the theme so its equal-specificity rules (e.g. the modal
    backdrop's closed display:none) win the cascade. -->
 <link rel="stylesheet" href="/static/themes/ftl-core.css?v={{.CoreVersion}}">
-<link id="themecss" rel="stylesheet"{{if .ThemeCSS}} href="{{.ThemeCSS}}"{{end}}>
+<link id="themecss" rel="stylesheet" href="{{.ThemeCSS}}">
 <meta name="theme-color" content="#00d9ff">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -1725,8 +1716,7 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
    stays-app-side section); regions themselves are shell-arranged. */
 
 /* ftl-app shell none-case (ftl-themes#3): with no theme linked these hooks
-   must generate zero boxes, so the built-in look renders exactly as before
-   the shell existed. display:contents dissolves the wrapper (children lay
+   must generate zero boxes: display:contents dissolves the wrapper (children lay
    out against body as they always did); the decorative rail is always empty
    in this app, so it never displays. Linked themes override both. */
 main.ftl-app-main{display:contents}
@@ -1969,10 +1959,9 @@ body.meters-collapsed{padding-bottom:4em}
 .wifi-qr-row{display:flex;align-items:center;gap:1em;flex-wrap:wrap}
 .wifi-qr-info p{margin:0.2em 0;font-size:0.85em}
 .wifi-qr-img img{width:180px;height:180px;image-rendering:pixelated;border:1px solid var(--border);border-radius:4px}
-/* Only when a theme is active: let the theme's own page background show
-   through instead of the built-in gradient. With data-theme="none" this
-   selector never matches and the dashboard paints exactly as before. */
-html[data-theme]:not([data-theme="none"]) body{background:transparent}
+/* The theme owns the page background; the built-in gradient underneath is
+   only a fallback while the bundle loads. */
+html[data-theme] body{background:transparent}
 </style>
 </head>
 <body class="ftl-app">
