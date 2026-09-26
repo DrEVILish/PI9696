@@ -436,7 +436,7 @@ body{font-family:var(--ftl-font,"Consolas",monospace);background:radial-gradient
 .logo-svg{width:480px;max-width:85vw;display:block}
 /* Box geometry is the shared .ftl-panel; the centered layout is app-owned. */
 form.ftl-panel{text-align:center;min-width:20em}
-.token-row{display:flex;align-items:center;justify-content:center;gap:0.4em;margin-bottom:1em}
+.token-row{display:flex;align-items:center;justify-content:center;gap:var(--ftl-space-2xs,0.4em);margin-bottom:var(--ftl-space-m,1em)}
 .token-row .ftl-input{font-size:1.3em;width:1.4em;padding:0.4em 0;text-align:center;text-transform:uppercase}
 .token-row .dash{color:var(--ftl-muted,#5b8aa8);font-size:1.3em}
 .err{color:var(--ftl-danger,#ff3355)}
@@ -1304,9 +1304,11 @@ var filePrefixFragmentTmpl = template.Must(template.New("fileprefix").Parse(`<di
 <div class="ftl-field-row">
 <form hx-post="/api/settings/prefix" hx-target="#fileprefix" hx-swap="outerHTML" hx-status:400="target:#prefix-error">
 <label class="ftl-label" for="filePrefixInput">Prefix</label>
+<div class="ftl-input-group">
 <input id="filePrefixInput" class="ftl-input" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
-<span class="hint ftl-field-hint">file_YYYYMMDD…</span>
 <button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
+</div>
+<span class="hint ftl-field-hint">file_YYYYMMDD…</span>
 </form>
 <div id="prefix-error"></div>
 </div>
@@ -1625,7 +1627,7 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 :root{--glow:var(--ftl-accent,#00d9ff);--panel:var(--ftl-surface,#0a1526);--border:var(--ftl-border,#0f3a5c);--text:var(--ftl-text,#cfeeff);--dim:var(--ftl-muted,#5b8aa8);--rec:var(--ftl-danger,#ff3355);--idle:var(--ftl-success,#2bffb0);--orange:var(--ftl-warning,#ff8c1a);--meter-h:120px;--ftl-meter-low:var(--ftl-success,#0aff9d);--ftl-meter-mid:var(--ftl-warning,#ffe400);--ftl-meter-high:var(--ftl-danger,#ff2a2a)}
 *{box-sizing:border-box}
 body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--ftl-surface,#0a1a2e),var(--ftl-bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
-h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 0.8em}
+h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 var(--ftl-space-s,0.8em)}
 a{color:var(--glow)}
 input{font-family:inherit;background:var(--ftl-input-bg,#08192b);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
 button{font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--ftl-surface-2,#08192b);color:var(--glow);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
@@ -1643,7 +1645,7 @@ th{color:var(--dim);text-transform:uppercase;font-size:0.72em;letter-spacing:0.0
 
 /* Panels get HUD corner brackets - the recurring "sci-fi readout" motif
    tying the three columns together. */
-.panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:1em 1.2em;box-shadow:var(--ftl-panel-shadow,0 0 20px rgba(0,180,255,0.08),inset 0 0 30px rgba(0,180,255,0.03))}
+.panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:var(--ftl-space-m,1em) var(--ftl-space-l,1.2em);box-shadow:var(--ftl-panel-shadow,0 0 20px rgba(0,180,255,0.08),inset 0 0 30px rgba(0,180,255,0.03))}
 .panel::before,.panel::after{content:'';position:absolute;width:14px;height:14px;border:2px solid var(--glow);opacity:0.55}
 .panel::before{top:-1px;left:-1px;border-right:none;border-bottom:none}
 .panel::after{bottom:-1px;right:-1px;border-left:none;border-top:none}
@@ -1723,7 +1725,7 @@ main.ftl-app-main{display:contents}
 .ftl-app-rail:empty{display:none}
 
 .recordings-section{padding:0 1.2em 1.2em}
-.recordings-section h2{margin:1.2em 0 0.6em;font-size:1.1em;letter-spacing:0.05em}
+.recordings-section h2{margin:var(--ftl-space-l,1.2em) 0 var(--ftl-space-xs,0.6em);font-size:1.1em;letter-spacing:0.05em}
 /* The table is the shared .ftl-table.is-sticky (sticky head + themed rows);
    only the download cell's right alignment stays app-owned. */
 .recs-dl{text-align:right}
@@ -1748,8 +1750,8 @@ main.ftl-app-main{display:contents}
 .modal-backdrop{display:none;z-index:200}
 .modal-backdrop.open{display:flex}
 .modal--confirm{position:relative}
-.stop-prompt{color:var(--dim);margin:1.2em 0}
-.stop-actions{display:flex;gap:0.8em;justify-content:flex-end}
+.stop-prompt{color:var(--dim);margin:var(--ftl-space-l,1.2em) 0}
+.stop-actions{display:flex;gap:var(--ftl-space-s,0.8em);justify-content:flex-end}
 .stop-actions button{min-width:7em;padding:0.8em 1em}
 .modal--confirm .ftl-btn-close{position:absolute;top:0.9em;right:0.9em}
 
@@ -1757,20 +1759,33 @@ main.ftl-app-main{display:contents}
    a long setting list never runs past the viewport edge. Setting families are
    grouped under section titles and laid out on a responsive 2-column grid. */
 .modal--settings{width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column;padding:0}
-.modal--settings .modal-head{display:flex;align-items:center;justify-content:space-between;gap:1em;padding:1.1em 1.4em;border-bottom:1px solid var(--border)}
-.modal--settings .modal-body{padding:0.9em 1.4em 1.4em;overflow-y:auto}
-.settings-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:0.7em;padding:1em 0 0.4em}
-/* The first group sits right under the header bar, which already provides
-   top padding - drop the leading gap there so the sheet's vertical rhythm is
-   even instead of stacking every group with an identical extra top pad. */
-.modal-body>.settings-group:first-child{padding-top:0}
-.settings-group-title{grid-column:1/-1;margin:0 0 0.2em;font-size:0.7em;letter-spacing:0.2em;text-transform:uppercase;color:var(--glow);border-bottom:1px solid var(--border);padding-bottom:0.4em}
+.modal--settings .modal-head{display:flex;align-items:center;justify-content:space-between;gap:var(--ftl-space-m,1em);padding:var(--ftl-space-m,1.1em) var(--ftl-space-l,1.4em);border-bottom:1px solid var(--border)}
+.modal--settings .modal-head h2{margin:0;border:0;padding:0}
+/* Settings sheet: the library's vertical tab rail beside scrolling panes.
+   The rail is fixed-width, the active pane fills the rest; panes are plain
+   group grids, shown one at a time (see selectSettingsTab). */
+.modal--settings .modal-body{display:flex;gap:var(--ftl-space-s,0.75rem);min-height:0;overflow:hidden;padding:var(--ftl-space-s,0.9em) var(--ftl-space-l,1.4em) var(--ftl-space-l,1.4em)}
+.settings-tabs{flex:none;min-width:9.5em;overflow-y:auto}
+.settings-panes{flex:1;min-width:0;overflow-y:auto}
+.settings-pane{display:none}
+.settings-pane.is-active{display:block}
+/* Narrow screens: the rail becomes a horizontal scroll row above the pane. */
+@media (max-width:800px){
+  .modal--settings .modal-body{flex-direction:column;overflow-y:auto}
+  .settings-tabs[aria-orientation="vertical"]{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;min-width:0;border-inline-end:0;border-bottom:1px solid var(--border);padding-inline-end:0}
+  .settings-tabs[aria-orientation="vertical"] > .ftl-tab{flex:none;border-bottom-color:transparent}
+  .settings-tabs[aria-orientation="vertical"] > .ftl-tab.is-active{border-bottom:2px solid var(--ftl-tab-underline-active,var(--ftl-accent));border-inline-end-width:0}
+  .settings-panes{overflow:visible}
+}
+.settings-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--ftl-space-s,0.7em);padding:1em 0 0.4em}
 /* Rows/labels/hints/selects/inputs are the shared ftl-field-row family; the
    only app-owned pieces are the pieces the library doesn't know: the form
    layout inside a row and the paired SSID/password fields. */
-.ftl-field-row form{display:flex;align-items:center;gap:0.8em;flex:1;width:100%}
+.ftl-field-row form{display:flex;align-items:center;gap:var(--ftl-space-s,0.8em);flex:1;width:100%}
+.ftl-field-row form .ftl-input-group{flex:1 1 auto;min-width:0;width:auto}
 .ftl-field-row .ftl-select{min-width:9em}
 .ftl-field-row .ftl-input[type="number"]{flex:none;width:6em}
+#config-msg:empty{display:none}
 .ftl-field-row--pair{gap:0.8em 1.2em;flex-wrap:wrap}
 .ftl-field-row--pair .field{flex:1 1 42%;display:flex;align-items:center;gap:0.6em;min-width:0}
 .ftl-field-row--pair .field label{flex:none;width:auto;max-width:8em}
@@ -1881,15 +1896,15 @@ main.ftl-app-main{display:contents}
    VU levels stay on screen while you operate the transport, with a slim
    header bar that collapses/expands the meter bank on demand. */
 .meter-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);backdrop-filter:blur(2px)}
-.meter-bar{display:flex;align-items:center;gap:1em;padding:0.3em 1.2em;border-bottom:1px solid var(--border)}
+.meter-bar{display:flex;align-items:center;gap:var(--ftl-space-m,1em);padding:0.3em 1.2em;border-bottom:1px solid var(--border)}
 .meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--dim);text-transform:uppercase}
 .meter-badge{font-size:0.62em;letter-spacing:0.12em;color:var(--glow);border:1px solid var(--border);border-radius:10px;padding:0.05em 0.6em}
 .meter-caret{width:1.9em;height:1.9em;border-radius:50%;margin-left:auto}
-.meter-body{padding:0.7em 1em;transition:max-height 0.25s ease,opacity 0.25s ease,padding 0.25s ease;max-height:220px;overflow:hidden}
+.meter-body{padding:var(--ftl-space-s,0.7em) var(--ftl-space-m,1em);transition:max-height 0.25s ease,opacity 0.25s ease,padding 0.25s ease;max-height:220px;overflow:hidden}
 .meter-footer.collapsed .meter-body{max-height:0;padding-top:0;padding-bottom:0;opacity:0}
 /* The meter bank itself - a shared dB-FS scale (standard audio-meter log
    taper, see VU_CURVE/vuPct in the script) beside one meter per channel. */
-.meter-bridge{display:flex;align-items:stretch;justify-content:center;gap:0.8em;max-width:1300px;margin:0 auto;background:#050c16;border:1px solid var(--border);border-radius:10px;padding:0.7em 1em;box-shadow:inset 0 0 24px rgba(0,180,255,0.06)}
+.meter-bridge{display:flex;align-items:stretch;justify-content:center;gap:var(--ftl-space-s,0.8em);max-width:1300px;margin:0 auto;background:#050c16;border:1px solid var(--border);border-radius:10px;padding:var(--ftl-space-s,0.7em) var(--ftl-space-m,1em);box-shadow:inset 0 0 24px rgba(0,180,255,0.06)}
 /* The dB scale column and every meter track share the exact same inner
    height so a given dB reading lands on the same pixel row in each. The
    scale uses a transparent 1px border (see below) so its content box equals
@@ -1897,7 +1912,7 @@ main.ftl-app-main{display:contents}
 .db-scale{position:relative;height:var(--meter-h);width:2.6em;flex:none;border:1px solid transparent}
 .db-scale span{position:absolute;left:0;right:0.3em;text-align:right;transform:translateY(50%);font-size:0.6em;color:var(--dim);font-weight:bold}
 .db-scale span::after{content:'';position:absolute;right:0;top:50%;width:100%;height:1px;background:rgba(0,217,255,0.25);transform:translateY(50%)}
-.ch-meters{display:flex;justify-content:center;gap:0.6em;overflow-x:auto;padding-bottom:2px}
+.ch-meters{display:flex;justify-content:center;gap:var(--ftl-space-xs,0.6em);overflow-x:auto;padding-bottom:2px}
 .ch-meter{display:flex;flex-direction:column;align-items:center;gap:0.25em;flex:none}
 /* Each strip is the shared .ftl-meter.ftl-meter-v; the app keeps only the
    strip's geometry (14px wide, exactly --meter-h tall so the dB scale's
@@ -1956,7 +1971,7 @@ body.meters-collapsed{padding-bottom:4em}
 }
 
 /* WiFi settings panel */
-.wifi-qr-row{display:flex;align-items:center;gap:1em;flex-wrap:wrap}
+.wifi-qr-row{display:flex;align-items:center;gap:var(--ftl-space-m,1em);flex-wrap:wrap}
 .wifi-qr-info p{margin:0.2em 0;font-size:0.85em}
 .wifi-qr-img img{width:180px;height:180px;image-rendering:pixelated;border:1px solid var(--border);border-radius:4px}
 /* The theme owns the page background; the built-in gradient underneath is
@@ -2157,48 +2172,57 @@ html[data-theme] body{background:transparent}
       <h2>Unit Settings</h2>
       <button class="ftl-btn-close" id="settingsClose" type="button" aria-label="Close settings"></button>
     </div>
-    <div class="modal-body ftl-scroll">
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Device</h3>
+    <div class="modal-body">
+      <div class="ftl-tabs settings-tabs" role="tablist" aria-orientation="vertical" aria-label="Settings groups">
+        <button type="button" class="ftl-tab is-active" role="tab" aria-selected="true" data-pane="pane-device" id="tab-device">Device</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-audio" id="tab-audio">Audio</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-metering" id="tab-metering">Metering</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-metadata" id="tab-metadata">Metadata</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-transport" id="tab-transport">Transport</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-display" id="tab-display">Display</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-demo" id="tab-demo">Demo</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-logging" id="tab-logging">Logging</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-config" id="tab-config">Config</button>
+        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-network" id="tab-network">Network</button>
+      </div>
+      <div class="settings-panes ftl-scroll">
+      <section class="settings-group ftl-field-group settings-pane is-active" role="tabpanel" aria-labelledby="tab-device" id="pane-device">
         <div id="devicename" class="setting-cell">
           <div class="ftl-field-row">
             <form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
-              <label for="deviceNameInput">Unit Name</label>
-              <input id="deviceNameInput" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-              <button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
+              <label class="ftl-label" for="deviceNameInput">Unit Name</label>
+              <div class="ftl-input-group">
+                <input id="deviceNameInput" class="ftl-input" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
+                <button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
+              </div>
             </form>
           </div>
           <div id="devicename-error"></div>
         </div>
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Audio</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-audio" id="pane-audio">
         {{.SampleRateFragment}}
         {{.ChannelCountFragment}}
         {{.MonitorFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Metering</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-metering" id="pane-metering">
         {{.VURangeFragment}}
         {{.PeakHoldFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Metadata</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-metadata" id="pane-metadata">
         {{.PrefixFragment}}
         {{.TagFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Transport</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-transport" id="pane-transport">
         {{.TransportFragment}}
         {{.HyperdeckFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Display</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-display" id="pane-display">
         {{.ThemeFragment}}
         {{.MotionFragment}}
         {{.ContrastFragment}}
@@ -2207,27 +2231,23 @@ html[data-theme] body{background:transparent}
         {{.AutoDimFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Demo</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-demo" id="pane-demo">
         {{.DemoFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Logging</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-logging" id="pane-logging">
         {{.LogLevelFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Config</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-config" id="pane-config">
         <div class="ftl-field-row ftl-field-row--pair">
           <button hx-post="/api/config/export" hx-target="#config-msg" class="ftl-btn ftl-btn-secondary">Export to USB</button>
           <button hx-post="/api/config/import" hx-target="#config-msg" class="ftl-btn ftl-btn-secondary">Import from USB</button>
         </div>
-        <div class="setting-row ftl-field-row" id="config-msg"></div>
+        <div class="ftl-field-row" id="config-msg"></div>
       </section>
 
-      <section class="settings-group ftl-field-group">
-        <h3 class="settings-group-title ftl-field-group-title">Network</h3>
+      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-network" id="pane-network">
         <div id="wifi-settings">
           {{.WifiQRFragment}}
           <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML" hx-status:400="target:#wifi-error">
@@ -2254,6 +2274,7 @@ html[data-theme] body{background:transparent}
           <div id="wifi-error"></div>
         </div>
       </section>
+      </div>
     </div>
   </div>
 </div>
@@ -2281,6 +2302,26 @@ var settingsModal = document.getElementById('settingsModal');
 settingsBtn.addEventListener('click', function() { settingsModal.classList.add('open'); });
 document.getElementById('settingsClose').addEventListener('click', function() { settingsModal.classList.remove('open'); });
 settingsModal.addEventListener('click', function(e) { if (e.target === settingsModal) settingsModal.classList.remove('open'); });
+
+// Settings sheet tabs: the vertical .ftl-tabs rail switches the group pane
+// shown beside it (one group at a time instead of a ten-group scroll).
+// Fragments keep their ids, so htmx posts re-render into hidden panes fine.
+// The last open tab persists per browser like the meter collapse below.
+var settingsTabs = Array.prototype.slice.call(document.querySelectorAll('.settings-tabs .ftl-tab'));
+function selectSettingsTab(name, save) {
+  if (!document.getElementById(name)) name = 'pane-device';
+  settingsTabs.forEach(function(t) {
+    var on = t.dataset.pane === name;
+    t.classList.toggle('is-active', on);
+    t.setAttribute('aria-selected', on ? 'true' : 'false');
+    var pane = document.getElementById(t.dataset.pane);
+    if (pane) pane.classList.toggle('is-active', on);
+  });
+  if (save !== false) { try { localStorage.setItem('pi9696_settingsTab', name); } catch (e) {} }
+}
+settingsTabs.forEach(function(t) { t.addEventListener('click', function() { selectSettingsTab(t.dataset.pane); }); });
+try { selectSettingsTab(localStorage.getItem('pi9696_settingsTab') || 'pane-device', false); }
+catch (e) { selectSettingsTab('pane-device', false); }
 
 // Transport buttons are drawn by JS so they can switch between ICON and TEXT
 // mode (Settings -> Transport Buttons) and, for the PLAY key, between a play
@@ -2414,11 +2455,10 @@ function rebuildDbScale(floor) {
   // Position the green->yellow and yellow->red meter bands at the design's
   // absolute thresholds (-18 / -6 dBFS) mapped through the current floor.
   // The shared .ftl-meter reads these as --ftl-meter-warn-at/-peak-at; the
-  // span is the track height so the stops land as percentages of the bar.
+  // gradient spans the track by default (fixed upstream in ftl-themes#43).
   var root = document.documentElement;
   root.style.setProperty('--ftl-meter-warn-at', vuPct(-18) + '%');
   root.style.setProperty('--ftl-meter-peak-at', vuPct(-6) + '%');
-  root.style.setProperty('--ftl-meter-span', 'var(--meter-h)');
 }
 
 // ---- 7-segment time display (inline SVG segments, italic via skewX) ----

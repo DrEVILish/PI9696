@@ -344,6 +344,10 @@ func TestDualClassMarkupPresent(t *testing.T) {
 		`'transport-row ftl-transport'`,
 		`is-pause`,
 		`is-play`,
+		`class="ftl-tabs settings-tabs"`,
+		`data-pane="pane-display"`,
+		`settings-pane`,
+		`class="ftl-input-group"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lost dual-class hook %q", want)
