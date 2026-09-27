@@ -189,11 +189,12 @@ func main() {
 	if err := os.WriteFile("inferno/go.mod", []byte("module inferno\n\ngo 1.21\n"), 0644); err != nil {
 		t.Fatalf("write inferno go.mod: %v", err)
 	}
-	// Build the stub binary to the expected location
-	if err := os.MkdirAll("inferno/target/release", 0755); err != nil {
-		t.Fatalf("mkdir target/release: %v", err)
+	// Build the stub binary to the exact path production code uses, so this
+	// helper can't drift from InfernoBinary and paper over a rename.
+	if err := os.MkdirAll(filepath.Dir(InfernoBinary), 0755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(InfernoBinary), err)
 	}
-	cmd := exec.Command("go", "build", "-o", "inferno/target/release/inferno", "inferno/main.go")
+	cmd := exec.Command("go", "build", "-o", InfernoBinary, "inferno/main.go")
 	cmd.Dir = "."
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build inferno stub: %v: %s", err, out)

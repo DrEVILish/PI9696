@@ -40,12 +40,16 @@ const (
 	meterSilence        = -100.0 // dB sentinel shown/reported when no recording is active
 )
 
-// InfernoBinary is the prebuilt Inferno server executable, produced once at
+// InfernoBinary is the prebuilt Inferno receiver executable, produced once at
 // install time (`cargo build --release`) rather than compiled at runtime. It's
 // relative to the app's working directory (the systemd unit runs the app from
-// its project dir). See the inferno template README for the CLI
-// contract it implements.
-const InfernoBinary = "inferno/target/release/inferno"
+// its project dir).
+//
+// The binary is inferno's `inferno2pipe` tool, which satisfies the CLI contract
+// this app depends on: `-c <channels> -o <output_fifo>` plus the
+// INFERNO_SAMPLE_RATE/INFERNO_NAME env vars. The workspace ships no binary
+// literally named `inferno`, so the name must match the tool.
+const InfernoBinary = "inferno/target/release/inferno2pipe"
 
 // ConfigPath is where the app persists non-destructive settings (unit name,
 // format/channel/tag choices, meter preferences, WiFi config) across
