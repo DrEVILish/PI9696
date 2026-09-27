@@ -874,6 +874,7 @@ var (
 	infernoCmd             *exec.Cmd
 	ffmpegCmd              *exec.Cmd
 	fifoPath               string
+	fifoKeeper             *os.File // held open so the enlarged pipe buffer survives; see enlargeFifo
 	infernoState           InfernoState
 	lastSampleRate         int
 	lastChannelCount       int
@@ -2029,6 +2030,10 @@ func checkInfernoRestart() {
 // binary, no network and no audio hardware.
 var demoMode bool
 var demoFifoPath string
+
+// demoFifoKeeper is held for the demo FIFO's lifetime, same reason as
+// fifoKeeper - see enlargeFifo.
+var demoFifoKeeper *os.File
 var demoGenQuit chan struct{}
 var demoGenRunning bool
 
@@ -2067,21 +2072,34 @@ const (
 	linuxFGetPipeSz = 1032
 )
 
-// enlargeFifo bumps a freshly created FIFO's kernel buffer past the 64KB
-// default: at 128ch/48kHz s32le the stream runs ~24MB/s, so 64KB holds
-// ~2.6ms of audio and any reader stall back-pressures the writer into a
-// gap. 4MB holds ~160ms - enough to ride out scheduling jitter (the kernel
-// clamps to pipe-max-size, 1MB here, still 16x). Best-effort: failure keeps
-// the default size. O_RDWR open never blocks on a FIFO.
-func enlargeFifo(path string) {
+// enlargeFifo opens a freshly created FIFO and asks the kernel for a larger
+// buffer, returning the descriptor that must be held for as long as the FIFO
+// is in use (nil if the FIFO could not be opened).
+//
+// Holding it is not incidental. A pipe's buffer belongs to the open pipe inode
+// and is released when the last descriptor closes, so sizing the pipe from a
+// descriptor we immediately drop leaves it back at the 64KB default - which is
+// the exact failure this exists to prevent. Keeping a reference also stops a
+// reader seeing EOF in the window before the other end attaches. O_RDWR never
+// blocks on a FIFO, and the app only ever sizes with it, never reads.
+//
+// At 128ch/48kHz s32le the stream runs ~24MB/s, so 64KB holds ~2.6ms of audio
+// and any reader stall back-pressures the writer into a gap; 4MB holds ~160ms
+// (the kernel clamps to pipe-max-size, 1MB by default). Best-effort: if the
+// kernel refuses - see the CAP_SYS_RESOURCE note in DEPLOYMENT.md - the default
+// size is kept and the reason logged.
+func enlargeFifo(path string) *os.File {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
-		return
+		logDebugf("fifo %s not opened for sizing: %v", path, err)
+		return nil
 	}
-	defer f.Close()
 	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), linuxFSetPipeSz, 4<<20); errno != 0 {
 		logDebugf("fifo %s kept default pipe size: %v", path, errno)
+	} else {
+		logDebugf("fifo %s buffer grown to 4MB", path)
 	}
+	return f
 }
 
 func demoFifoName() string {
@@ -2100,7 +2118,7 @@ func startDemoGeneratorLocked() {
 		logErrorf("demo: failed to create FIFO %s: %v", path, err)
 		return
 	}
-	enlargeFifo(path)
+	demoFifoKeeper = enlargeFifo(path)
 	demoFifoPath = path
 	quit := make(chan struct{})
 	demoGenQuit = quit
@@ -2149,6 +2167,17 @@ func setDemoModeLocked(on bool) bool {
 // reader draining and ignore quit forever. Raw O_NONBLOCK writes give true
 // EAGAIN so every iteration stays responsive to quit.
 func demoGenLoop(path string, quit <-chan struct{}) {
+	// Registered before the open attempt so the keeper is released on every
+	// exit, including the early return below. This goroutine is the sole owner
+	// of demoFifoKeeper once started, so stopDemoGeneratorLocked only signals.
+	defer func() {
+		mutex.Lock()
+		if demoFifoKeeper != nil {
+			demoFifoKeeper.Close()
+			demoFifoKeeper = nil
+		}
+		mutex.Unlock()
+	}()
 	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		logErrorf("demo: failed to open FIFO %s: %v", path, err)
@@ -2275,7 +2304,7 @@ func doStartInferno() {
 		mutex.Unlock()
 		return
 	}
-	enlargeFifo(path)
+	fifoKeeper = enlargeFifo(path)
 
 	// The Inferno server is built once during installation
 	// (`cargo build --release`), so at runtime we start the prebuilt binary
@@ -2352,8 +2381,10 @@ func doStopInferno() {
 	mutex.Lock()
 	cmd := infernoCmd
 	path := fifoPath
+	keeper := fifoKeeper
 	infernoCmd = nil
 	fifoPath = ""
+	fifoKeeper = nil
 	infernoState = InfernoStopped
 	mutex.Unlock()
 
@@ -2381,6 +2412,9 @@ func doStopInferno() {
 	}
 
 	if path != "" {
+		if keeper != nil {
+			keeper.Close()
+		}
 		os.Remove(path)
 	}
 
