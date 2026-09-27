@@ -17,6 +17,7 @@ import (
 	"golang.org/x/image/math/fixed"
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/conn/v3/gpio/gpioreg"
+	"periph.io/x/conn/v3/physic"
 	"periph.io/x/conn/v3/spi"
 	"periph.io/x/conn/v3/spi/spireg"
 	"periph.io/x/host/v3"
@@ -38,6 +39,12 @@ func simFramePath() string {
 	}
 	return "/tmp/pi9696_sim_frame.png"
 }
+
+// spiClock is the SSD1322 SPI clock. 10MHz, as WIRING.md requires (below that
+// the panel garbles). physic.Frequency is scaled with Hertz == 1e6, so this
+// must be written as a unit constant: a bare 10000000 literal is 10Hz, which
+// the driver rejects outright, failing display init and therefore startup.
+const spiClock = physic.Frequency(10 * physic.MegaHertz)
 
 // renderScale is how much larger than the physical 256x64 panel the internal
 // canvas is drawn at. Text is rasterized and positioned at this resolution,
@@ -82,7 +89,7 @@ func NewTTFDisplay(fontPath string, fontSize float64) (*TTFDisplay, error) {
 			return nil, fmt.Errorf("failed to open SPI: %v", err)
 		}
 
-		spiConn, err = spiPort.Connect(10000000, spi.Mode0, 8)
+		spiConn, err = spiPort.Connect(spiClock, spi.Mode0, 8)
 		if err != nil {
 			spiPort.Close()
 			return nil, fmt.Errorf("failed to connect SPI: %v", err)
