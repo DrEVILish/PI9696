@@ -164,42 +164,61 @@ func testSessionCookie(t *testing.T) *http.Cookie {
 	return nil
 }
 
+// withFakeInfernoProject points InfernoBinary at a stub that behaves like
+// inferno2pipe, built in a temp dir.
+//
+// It must never write inside the project's own inferno/ checkout: the real
+// tree is the installed AoIP server, and this helper used to create a stub
+// there and then os.RemoveAll("inferno") on cleanup - so running the suite on
+// a deployed unit silently deleted the built binary and the next start failed
+// with InfernoFailed. Temp dir, temp module, cleanup restores the variable.
 func withFakeInfernoProject(t *testing.T) {
 	t.Helper()
-	if err := os.MkdirAll("inferno", 0755); err != nil {
-		t.Fatalf("mkdir inferno: %v", err)
-	}
-	// Write a minimal Go stub instead of Cargo.toml - the production code
-	// uses the prebuilt binary at InfernoBinary, not cargo run.
+	dir := t.TempDir()
 	stub := `package main
 import ("flag"; "fmt"; "os"; "time")
 func main() {
 	channels := flag.Int("c", 2, "channels")
 	output := flag.String("o", "", "output FIFO")
 	flag.Parse()
-	if *output == "" { fmt.Fprintln(os.Stderr, "Usage: inferno -c <channels> -o <output_fifo>"); os.Exit(1) }
+	if *output == "" { fmt.Fprintln(os.Stderr, "Usage: inferno2pipe -c <channels> -o <output_fifo>"); os.Exit(1) }
 	f, _ := os.OpenFile(*output, os.O_WRONLY, 0)
 	defer f.Close()
 	buf := make([]byte, *channels*4*1024)
 	for { f.Write(buf); time.Sleep(10*time.Millisecond) }
 }`
-	if err := os.WriteFile("inferno/main.go", []byte(stub), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(stub), 0644); err != nil {
 		t.Fatalf("write inferno stub: %v", err)
 	}
-	if err := os.WriteFile("inferno/go.mod", []byte("module inferno\n\ngo 1.21\n"), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module inferno2pipe\n\ngo 1.21\n"), 0644); err != nil {
 		t.Fatalf("write inferno go.mod: %v", err)
 	}
-	// Build the stub binary to the exact path production code uses, so this
-	// helper can't drift from InfernoBinary and paper over a rename.
-	if err := os.MkdirAll(filepath.Dir(InfernoBinary), 0755); err != nil {
-		t.Fatalf("mkdir %s: %v", filepath.Dir(InfernoBinary), err)
-	}
-	cmd := exec.Command("go", "build", "-o", InfernoBinary, "inferno/main.go")
-	cmd.Dir = "."
+	bin := filepath.Join(dir, "inferno2pipe")
+	cmd := exec.Command("go", "build", "-o", bin, "main.go")
+	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build inferno stub: %v: %s", err, out)
 	}
-	t.Cleanup(func() { os.RemoveAll("inferno") })
+
+	orig := InfernoBinary
+	InfernoBinary = bin
+	t.Cleanup(func() { InfernoBinary = orig })
+}
+
+// Guards the destructive mistake directly: the suite must not remove the
+// installed inferno/ checkout. Cheap, and it fails loudly if someone reverts
+// the helper to writing inside the project tree.
+func TestSuiteDoesNotTouchInstalledInferno(t *testing.T) {
+	if _, err := os.Stat("inferno"); err != nil {
+		t.Skip("no inferno/ checkout in this working tree")
+	}
+	entries, err := os.ReadDir("inferno")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("inferno/ is empty - a previous test run deleted the installed build")
+	}
 }
 
 // Traps SIGTERM and exits cleanly, standing in for both cargo (Inferno) and
