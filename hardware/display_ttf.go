@@ -249,12 +249,30 @@ func (d *TTFDisplay) writeCommand(cmd []byte) error {
 	return d.spiConn.Tx(cmd, nil)
 }
 
+// maxSPITx is the largest single transfer the sysfs SPI driver accepts
+// ("maximum Tx length is 4096"). A full 256x64 4bpp frame is 8192 bytes, so a
+// panel push has to be split.
+const maxSPITx = 4096
+
 func (d *TTFDisplay) writeData(data []byte) error {
 	if d.sim {
 		return nil
 	}
 	d.dcPin.Out(gpio.High) // Data mode
-	return d.spiConn.Tx(data, nil)
+	// Chunked: the driver rejects any single transfer over maxSPITx, which a
+	// full framebuffer update exceeds. DC stays high across the chunks, so the
+	// panel sees one continuous data burst.
+	for len(data) > 0 {
+		n := len(data)
+		if n > maxSPITx {
+			n = maxSPITx
+		}
+		if err := d.spiConn.Tx(data[:n], nil); err != nil {
+			return err
+		}
+		data = data[n:]
+	}
+	return nil
 }
 
 func (d *TTFDisplay) Clear() {
