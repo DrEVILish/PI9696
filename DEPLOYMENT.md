@@ -326,6 +326,22 @@ PI9696_SIM=1 PI9696_REMOTE_PORT=8081 ./pi9696   # prints the token to stderr
 
 ---
 
+## Upstream issues filed
+
+Against [`teodly/inferno`](https://github.com/teodly/inferno) (the `DrEVILish`
+fork this project consumes has issues disabled):
+
+| # | Issue |
+|---|---|
+| [#52](https://github.com/teodly/inferno/issues/52) | `inferno2pipe/README.md` documents a CLI the binary does not have, and omits the clock daemon |
+| [#53](https://github.com/teodly/inferno/issues/53) | No PTP hardware clock on an SBC and statime cannot be master, so transmit is impossible without the test clock stub |
+| [#54](https://github.com/teodly/inferno/issues/54) | `test/dockerized_trx` uses `netaudio` flags removed in 0.3.14 |
+| [#55](https://github.com/teodly/inferno/issues/55) | Subscribed `alsa_pcm_inferno` RX records silence while `inferno2pipe` RX works (single host) |
+
+Nothing to report for `ftl-themes` from this bring-up.
+
+---
+
 ## Known limitations on this unit
 
 - **Playback still goes to local ALSA**, not out through Inferno. Inferno's
