@@ -3312,3 +3312,68 @@ func TestRemoteControlPortOverride(t *testing.T) {
 		t.Fatalf("overridden port = %q, want 80", got)
 	}
 }
+
+// A child that ignores SIGTERM is the exact failure this guards: ffmpeg's
+// signal handler only acts at its next main-loop iteration, so one blocked in a
+// read on an empty FIFO never exits and wedges the transport. terminateFfmpeg
+// must escalate rather than wait forever.
+func TestTerminateFfmpegKillsStubbornChild(t *testing.T) {
+	initTestHardware(t)
+	orig := ffmpegStopGrace
+	ffmpegStopGrace = 150 * time.Millisecond
+	t.Cleanup(func() { ffmpegStopGrace = orig })
+
+	// Traps and ignores SIGTERM, like ffmpeg blocked on a FIFO does.
+	fakeExecutable(t, "stubborn", `#!/bin/sh
+trap '' TERM
+sleep 300 &
+wait $!
+`)
+	cmd := exec.Command("stubborn")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
+
+	terminateFfmpeg(cmd.Process, exited, "stubborn")
+
+	select {
+	case <-exited:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("stubborn child survived SIGTERM + SIGKILL escalation")
+	}
+}
+
+// The ordinary case must not escalate: a child that exits on SIGTERM has to be
+// left to finalize on its own, because that is what makes a partial WAV
+// playable.
+func TestTerminateFfmpegLetsWellBehavedChildExit(t *testing.T) {
+	initTestHardware(t)
+	orig := ffmpegStopGrace
+	ffmpegStopGrace = 5 * time.Second
+	t.Cleanup(func() { ffmpegStopGrace = orig })
+
+	fakeExecutable(t, "polite", `#!/bin/sh
+trap 'exit 0' TERM
+sleep 300 &
+wait $!
+`)
+	cmd := exec.Command("polite")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); close(exited) }()
+
+	start := time.Now()
+	terminateFfmpeg(cmd.Process, exited, "polite")
+	select {
+	case <-exited:
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("polite child took %s to exit; SIGTERM should have been enough", elapsed)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("polite child never exited")
+	}
+}

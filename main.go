@@ -664,6 +664,46 @@ func signalTERM(p *os.Process, what string) {
 	}
 }
 
+// ffmpegStopGrace is how long a signalled ffmpeg gets to exit on its own before
+// it is killed. It has to be long enough for ffmpeg to finalize a take on slow
+// storage - the WAV segment muxer writes valid chunk sizes on SIGTERM, and that
+// is what makes a partial take playable - and it is only ever reached in the
+// pathological case below, so erring long is safe.
+var ffmpegStopGrace = 10 * time.Second
+
+// terminateFfmpeg asks an ffmpeg child to exit and makes sure it does.
+//
+// SIGTERM alone is not sufficient. ffmpeg's signal handler only acts at its
+// next main-loop iteration, so an ffmpeg blocked in a read on a FIFO that has
+// no data never gets there and survives the signal indefinitely. That wedges
+// the whole transport: the goroutine owning cmd.Wait() never returns, so
+// isRecording stays set and currentState stays StateRecording, which silently
+// refuses every later record and play request. It also lets a second input
+// monitor start while the first is still draining the FIFO - a FIFO has
+// exactly one reader, so the audio splits between them and the recorder never
+// even creates its output file.
+//
+// Hence the escalation to SIGKILL, mirroring doStopInferno's handling of a
+// hung Inferno. Fire-and-forget by design: callers reach this from the app
+// mutex and from HTTP handlers, so blocking on the child's exit would freeze
+// the UI for the whole grace period.
+func terminateFfmpeg(p *os.Process, exited <-chan struct{}, what string) {
+	if p == nil {
+		return
+	}
+	signalTERM(p, what)
+	go func() {
+		select {
+		case <-exited:
+		case <-time.After(ffmpegStopGrace):
+			logWarnf("%s ignored SIGTERM after %s, sending SIGKILL", what, ffmpegStopGrace)
+			if err := p.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				logWarnf("%s: SIGKILL failed: %v", what, err)
+			}
+		}
+	}()
+}
+
 // sanitizeHostapd strips characters hostapd (or its parsing) would treat
 // specially; SSIDs are otherwise free-form UTF-8.
 func sanitizeHostapd(s string) string {
@@ -2780,8 +2820,12 @@ func meterReader(stdout io.Reader, gen uint64) {
 // cmd.Wait() and does the actual state cleanup once ffmpeg exits, so a
 // second Wait() here would race it (see startRecording's comment).
 func stopRecording() {
+	// recordingDone is read without the app mutex, matching gracefulShutdown:
+	// callers reach this holding the mutex, and Go mutexes are not reentrant.
+	// A stale read is harmless - the worst case is escalating to SIGKILL
+	// against an already-exited process.
 	if ffmpegCmd != nil && ffmpegCmd.Process != nil {
-		signalTERM(ffmpegCmd.Process, "recording")
+		terminateFfmpeg(ffmpegCmd.Process, recordingDone, "recording")
 	}
 }
 
@@ -2851,8 +2895,9 @@ func startMonitor() {
 // exit - see stopRecording's comment for why (blocking here would freeze
 // the app mutex on ffmpeg's exit).
 func stopMonitor() {
+	// Read without the mutex for the same reason as stopRecording.
 	if monitorCmd != nil && monitorCmd.Process != nil {
-		signalTERM(monitorCmd.Process, "monitor")
+		terminateFfmpeg(monitorCmd.Process, monitorDone, "monitor")
 	}
 }
 
