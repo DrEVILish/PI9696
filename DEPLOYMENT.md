@@ -81,8 +81,14 @@ app depends on *and* carries the modern transmit support.
 | `target/release/inferno2pipe` | the receiver the app runs — **not** named `inferno` |
 | `target/release/libasound_module_pcm_inferno.so` | ALSA virtual soundcard, for transmit |
 
-There is no binary called `inferno`; the app's `InfernoBinary` constant points
-at `inferno/target/release/inferno2pipe`.
+There is no binary called `inferno`; the app looks for
+`inferno/target/release/inferno2pipe` (override with `PI9696_INFERNO_BIN` if
+you install it somewhere else).
+
+**Never run `go test ./...` inside a deployed project directory that has a real
+`inferno/` build in it.** Older test helpers did exactly that; the current ones
+build their stub in a temp dir, and `TestSuiteDoesNotTouchInstalledInferno`
+fails if `inferno/` is ever emptied.
 
 ```bash
 # ALSA virtual soundcard (needed to transmit, and for any Dante output path)

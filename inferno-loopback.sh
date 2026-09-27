@@ -44,7 +44,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-for f in "$I2P" netaudio ffmpeg; do
+# -x for the path (command -v does not accept a path in some shells),
+# command -v for the PATH-resolved tools.
+[ -x "$I2P" ] || { echo "missing inferno receiver: $I2P (cargo build --release in inferno/)"; exit 1; }
+for f in netaudio ffmpeg python3; do
     command -v "$f" >/dev/null 2>&1 || { echo "missing required tool: $f"; exit 1; }
 done
 [ -S /tmp/ptp-usrvclock ] || { echo "no usrvclock socket at /tmp/ptp-usrvclock - start a clock source first"; exit 1; }
