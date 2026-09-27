@@ -41,15 +41,27 @@ const (
 )
 
 // InfernoBinary is the prebuilt Inferno receiver executable, produced once at
-// install time (`cargo build --release`) rather than compiled at runtime. It's
-// relative to the app's working directory (the systemd unit runs the app from
-// its project dir).
+// install time (`cargo build --release`) rather than compiled at runtime. The
+// default is relative to the app's working directory (the systemd unit runs the
+// app from its project dir).
 //
 // The binary is inferno's `inferno2pipe` tool, which satisfies the CLI contract
 // this app depends on: `-c <channels> -o <output_fifo>` plus the
 // INFERNO_SAMPLE_RATE/INFERNO_NAME env vars. The workspace ships no binary
 // literally named `inferno`, so the name must match the tool.
-const InfernoBinary = "inferno/target/release/inferno2pipe"
+//
+// Override with PI9696_INFERNO_BIN to run an installed copy from anywhere (a
+// var, not a const, so tests can point it at a stub without touching the real
+// inferno/ checkout - which is what they used to do, and deleting a built
+// Inferno tree is a spectacular way to fail a deploy).
+var InfernoBinary = infernoBinary()
+
+func infernoBinary() string {
+	if p := os.Getenv("PI9696_INFERNO_BIN"); p != "" {
+		return p
+	}
+	return "inferno/target/release/inferno2pipe"
+}
 
 // ConfigPath is where the app persists non-destructive settings (unit name,
 // format/channel/tag choices, meter preferences, WiFi config) across
