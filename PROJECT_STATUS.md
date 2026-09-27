@@ -30,7 +30,7 @@ Implementation status, product decisions, and feature history. For specs/usage �
 
 | # | Gap | Status |
 |---|-----|--------|
-| 1 | Playback via Inferno/AoIP | Blocked: Inferno contract is receive-only (no input/stream command) |
+| 1 | Playback via Inferno/AoIP | Not blocked on Inferno — its transmit is verified working (tone → ALSA virtual device → Dante → received by a subscriber). Blocked on *verification*: needs a second Dante receiver, which a single host cannot provide. Routing ffmpeg at the `inferno` ALSA device is the remaining work |
 | 2 | Sim-mode OLED input | Deferred: WebUI encoder works; add only if needed |
 | 3 | Recordings list at scale | Deferred: 15 s re-glob ceiling; list is scrollable per directive |
 
@@ -47,7 +47,7 @@ Implementation status, product decisions, and feature history. For specs/usage �
 - No power source monitoring (mains assumed)
 - No OTA updates in initial release
 - Playback seek/scrub (implemented in 1.16.0)
-- **Target:** playback out through Inferno/AoIP (not yet implemented — Known Gaps #1)
+- **Target:** playback out through Inferno/AoIP (not yet implemented — Known Gaps #1). Inferno transmit is confirmed working, so this is an integration task, not an upstream blocker
 
 ### Refinements
 
@@ -65,7 +65,7 @@ Implementation status, product decisions, and feature history. For specs/usage �
 - Status indication: button lamps only; status on OLED
 - Button lamps: REC + PLAY only; STOP has no lamp
 - No beeper; no power loss recovery; LAN only; no redundancy
-- Inferno sourced from official repos (fetched/pinned at install time)
+- Inferno sourced from official repos (fetched/pinned at install time) — pinned at v0.5.4; the only recent tag that keeps the `-c/-o` + `INFERNO_SAMPLE_RATE`/`INFERNO_NAME` contract this app invokes. The binary is `inferno2pipe`
 - Inferno is bidirectional (AES67/Dante: sends + receives)
 - Channel ceiling: 1–128 (top end pending stress testing)
 - All sample rates (44.1/48/96/192 kHz) selectable
@@ -80,7 +80,7 @@ Implementation status, product decisions, and feature history. For specs/usage �
 
 ### Hardware Interface
 
-- **Display (SSD1322, SPI)** — FiraCode TTF, named font contexts, brightness via contrast 0xC1; inert in sim
+- **Display (SSD1322, SPI)** — FiraCode TTF, named font contexts, brightness via contrast 0xC1; inert in sim. Bring-up found two faults here that SIM mode could never surface: the SPI clock was 10Hz rather than 10MHz (periph scales `physic.Hertz` to 1e6), and a full 8192-byte frame push exceeded the sysfs driver's 4096-byte transfer limit
 - **Encoder (EC11)** — rotate / click / hold with debouncing
 - **Buttons** — Record (GPIO5), Stop (GPIO6), Play (GPIO13); internal pull-ups
 - **Lamps** — REC (GPIO12), PLAY (GPIO16); change-only writes via `LampManager`; inert in sim
@@ -89,7 +89,8 @@ Implementation status, product decisions, and feature history. For specs/usage �
 ### Recording Engine
 
 - Persistent Inferno server (auto-started when any IP comes up; auto-restarted on rate/channel change)
-- Pipeline: Inferno → FIFO (`rec/raw/`) → ffmpeg (`s32le` → WAV 24-bit) → `/rec/YYYY-MM-DD/`
+- Pipeline: Inferno (`inferno2pipe`) → FIFO (`rec/raw/`) → ffmpeg (`s32le` → WAV 24-bit) → `/rec/YYYY-MM-DD/`
+- FIFO buffer grown to 4 MB and the sizing descriptor held for the FIFO's lifetime — a pipe's buffer is released with its last descriptor, so sizing then closing left the 64 KB default
 - Metering: pass-through `astats` filter → `meterReader` → peak/RMS globals (under mutex)
 - Start gating: only from idle, never over active take, refused when <30 min space
 - WAV INFO chunk via ffmpeg `-metadata` (`date`, `comment`); verified round-trip via `ffprobe`
@@ -100,7 +101,7 @@ Implementation status, product decisions, and feature history. For specs/usage �
 - Click = play/pause (SIGSTOP/SIGCONT); rotate while paused = 5 s scrub (restart ffmpeg with `-ss`); hold = exit
 - SIGTERM + SIGCONT on stop (a SIGSTOP'd process defers SIGTERM — without this, stop-while-paused hangs)
 - Progress bar + elapsed/total with [PAUSED] marker
-- **Target:** route out through Inferno (blocked on contract — Known Gaps #1)
+- **Target:** route out through Inferno (blocked only on verification — Known Gaps #1)
 
 ### WebUI
 
@@ -140,10 +141,17 @@ Implementation status, product decisions, and feature history. For specs/usage �
 
 ### Deployment Checklist
 
-- [ ] Hardware assembled per `WIRING.md`; SPI enabled
-- [ ] Inferno built and systemd unit installed
-- [ ] Recording verified end-to-end (Inferno reachable; `[INF]` in status bar)
-- [ ] USB copy/download verified; WebUI login verified from browser
+See DEPLOYMENT.md for the full install record and the reasoning behind the order.
+
+- [x] SPI enabled in firmware (`dtparam=spi=on`) — the app exits at startup without it
+- [x] Inferno built (v0.5.4, submodules initialised) and `inferno2pipe` present
+- [x] Clock source exporting the usrvclock overlay (`pi9696-clock.service`) — without it Inferno starts but never transmits
+- [x] systemd unit generated from `deploy/pi9696.service`; no `CapabilityBoundingSet` (it costs `CAP_SYS_RESOURCE`, and with it the 4 MB FIFO)
+- [x] Recording verified end-to-end: Dante TX → `inferno2pipe` → FIFO → ffmpeg → 24-bit WAV, content confirmed as the transmitted 1 kHz tone
+- [x] Audio out of Inferno verified (`inferno-loopback.sh`): ALSA virtual device transmits, subscriber receives
+- [ ] Hardware assembled per `WIRING.md`; OLED rendering seen on glass (SPI path exercised, panel not attached)
+- [ ] WebUI login verified from a browser (token is OLED-only by design, so this needs the panel or a SIM instance)
+- [ ] USB copy/download verified
 - [ ] Log level left at Error (default) unless debugging
 
 ---
