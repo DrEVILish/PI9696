@@ -27,7 +27,7 @@ go build -o pi9696 . && sudo ./pi9696
 | File naming | `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` in `/rec/YYYY-MM-DD/` |
 | Display | SSD1322 256×64 OLED (SPI), FiraCode TTF |
 | Controls | EC11 rotary encoder + Record/Stop/Play buttons |
-| Remote | HTTP on port 8080 (token + session auth, no HTTPS) |
+| Remote | HTTP on port 8080 (token + session auth, no HTTPS); `PI9696_REMOTE_PORT` overrides |
 | Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport toggle, default off, no auth) |
 | Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log |
 | File size | ~8.3 MB/min at 48 kHz stereo 24-bit |
@@ -167,13 +167,34 @@ Fixed 256×64 layout with FiraCode TTF rendering in named contexts:
 
 ### On the Pi
 
+Full install record, including the clock service and the kernel limits, is in
+[DEPLOYMENT.md](DEPLOYMENT.md). The order matters:
+
 ```bash
-git clone <repo> /opt/PI9696 && cd /opt/PI9696
-# system prep: enable SPI, install fonts, build inferno/, install systemd unit
-sudo systemctl start pi9696
-sudo systemctl status pi9696
-sudo journalctl -u pi9696 -f
+# 1. SPI must be enabled or the app exits at startup (display init opens SPI)
+sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' /boot/firmware/config.txt && sudo reboot
+
+# 2. Inferno (pinned v0.5.4; note the submodules, and that the binary the app
+#    runs is target/release/inferno2pipe, not "inferno")
+sudo apt install -y build-essential pkg-config libasound2-dev libudev-dev
+git clone https://github.com/DrEVILish/inferno inferno
+cd inferno && git checkout v0.5.4 && git submodule update --init --recursive
+cargo build --release && cd ..
+
+# 3. A clock source must be exporting the usrvclock overlay, or Inferno starts
+#    but never transmits (deploy/pi9696-clock.service)
+
+# 4. Unit files, generated from the repo template rather than hand-written
+sudo sed -e 's|__PI9696_DIR__|/opt/PI9696|g' deploy/pi9696.service \
+    | sudo tee /etc/systemd/system/pi9696.service > /dev/null
+sudo cp deploy/pi9696-clock.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now pi9696-clock pi9696
+sudo systemctl status pi9696 && sudo journalctl -u pi9696 -f
 ```
+
+Audio only flows once a Dante controller (netaudio) subscribes the app's device
+to a transmitter — Inferno never auto-connects. `./inferno-loopback.sh` proves
+the path end to end without any Dante hardware present.
 
 ### Without a Pi (simulator)
 
@@ -186,7 +207,7 @@ Sim facts:
 - Every frame dumped to `/tmp/pi9696_sim_frame.png` (override: `PI9696_SIM_OUT`)
 - Token printed to stderr: `sim mode: remote access token XX XX XXXX`
 - Config path: `/tmp/pi9696-config.json` (vs `/etc/pi9696/config.json` on real Pi)
-- Recording requires `inferno/target/release/inferno` (build it with `cargo build --release` in `inferno/`)
+- Recording requires `inferno/target/release/inferno2pipe` (build with `cargo build --release` in `inferno/`) and a running clock source — see DEPLOYMENT.md
 
 ### Rebuilding
 
@@ -245,7 +266,7 @@ go test ./...        # run all tests
 
 These are documented in PROJECT_STATUS.md but worth flagging here:
 
-1. **Playback via Inferno/AoIP** — blocked on Inferno's receive-only contract. Local ALSA only.
+1. **Playback via Inferno/AoIP** — Inferno's *transmit* works (verified: tone → ALSA virtual device → Dante → received), so the output path is a matter of pointing ffmpeg at the `inferno` ALSA device. Still local ALSA, because a second Dante receiver is needed to confirm it and a single host cannot provide one.
 2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
 3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
 4. **FIFO handoff window** — monitor→recording transition has an unbounded window where both processes read the FIFO. Acceptance documented in code comments.
@@ -253,6 +274,7 @@ These are documented in PROJECT_STATUS.md but worth flagging here:
 6. **Meter race on monitor→record** — stale monitor goroutine can clear recording's meter slices if it completes after startRecording reallocates them. Meters may show dead for the take.
 7. **No analog/USB audio I/O** — Ethernet only (product decision).
 8. **Sim config path** — `PI9696_SIM=1` writes to `/tmp/pi9696-config.json`; real Pi writes to `/etc/pi9696/config.json`. Per-test env override is ignored (ConfigPath resolved once in init).
+9. **FIFO buffer needs `CAP_SYS_RESOURCE`** — the 4 MB raw FIFO needs the capability to grow; a `CapabilityBoundingSet` on the unit silently costs it, and the recorder keeps working at the 64 KB default. See DEPLOYMENT.md.
 
 ---
 
