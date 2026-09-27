@@ -1,20 +1,29 @@
 [Unit]
 Description=usrvclock exporter for Inferno (PI9696)
 Documentation=https://gitlab.com/lumifaza/usrvclock
+Documentation=https://github.com/teodly/inferno
 # Inferno needs a clock overlay on the usrvclock socket before it will
-# transmit; without one it aborts with "no clock available (timeout waiting
-# for overlay update)" and the Dante TX device never carries audio.
+# transmit; without one it aborts with
+#   "no clock available (timeout waiting for overlay update)"
+# or, once connected but never updated,
+#   "unable to get start timestamp for ring buffer output"
+# and the Dante TX device never carries audio. The receiver still starts, so
+# the fault looks like a broken Dante path rather than a missing clock.
 #
-# This unit runs a stub exporter because this test LAN has no PTP grandmaster
-# (no Dante device, and the Pi 4's eth0 has no PTP hardware clock). For a real
-# install run statime here instead, from the inferno-pinned fork:
+# This unit runs a stub exporter because this test LAN has no Dante device.
+# Per the Inferno README, software timestamping is the default and works with
+# any NIC, using the Statime fork:
 #
 #   git clone --recurse-submodules -b inferno-dev https://github.com/teodly/statime
-#   cargo build --release
+#   cd statime && cargo build --release
+#   # edit inferno-ptpv1.toml: set interface, leave the rest as shipped
 #   ExecStart=/opt/pi9696/statime/target/release/statime -c inferno-ptpv1.toml
 #
-# and disable systemd-timesyncd while inferno is in use: NTP stepping the
-# system clock collides with PTP (inferno README, "Quirks").
+# Measured here: with protocol-version = PTPv2 that does become a working
+# master, but with no Dante device on the network it never publishes the
+# overlay, so transmit still cannot start. Replace this stub with Statime as
+# soon as a Dante device is on the LAN. The README also notes that NTP stepping
+# the system clock collides with PTP.
 Before=pi9696.service
 
 [Service]
