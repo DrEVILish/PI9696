@@ -2901,14 +2901,16 @@ func TestMeterDeckFlagsDriveReelAnimation(t *testing.T) {
 	}
 }
 
+// Growing a pipe needs privilege the sandbox may lack, so probe and skip where
+// the kernel refuses. The growth is read back through a *separate* descriptor
+// while enlargeFifo's own is still open: that is the whole point, because a
+// pipe's buffer is released when the last descriptor closes, so measuring
+// after the keeper is dropped can only ever see the 64KB default.
 func TestEnlargeFifoGrowsPipe(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.fifo")
 	if err := syscall.Mkfifo(path, 0666); err != nil {
 		t.Fatal(err)
 	}
-	// Growing a pipe needs privilege the test sandbox lacks (EPERM here,
-	// succeeds as root on the unit): probe first and skip where the
-	// kernel refuses, so the test still verifies growth on target.
 	probe, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -2916,24 +2918,42 @@ func TestEnlargeFifoGrowsPipe(t *testing.T) {
 	_, _, perr := syscall.Syscall(syscall.SYS_FCNTL, probe.Fd(), linuxFSetPipeSz, 4<<20)
 	probe.Close()
 	if perr == syscall.EPERM {
-		t.Skip("sandbox denies F_SETPIPE_SZ; growth verified on target")
+		t.Skip("sandbox denies F_SETPIPE_SZ (no CAP_SYS_RESOURCE); growth verified on target")
 	}
-	pipeSize := func() int {
-		f, err := os.OpenFile(path, os.O_RDWR, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer f.Close()
+	// Default size of a fresh pipe, from the same descriptor the keeper uses.
+	pipeSize := func(f *os.File) int {
 		r1, _, errno := syscall.Syscall(syscall.SYS_FCNTL, f.Fd(), linuxFGetPipeSz, 0)
 		if errno != 0 {
 			t.Fatal(errno)
 		}
 		return int(r1)
 	}
-	before := pipeSize()
-	enlargeFifo(path)
-	if got := pipeSize(); got <= before {
-		t.Errorf("pipe size %d, want growth past default %d", got, before)
+
+	keeper := enlargeFifo(path)
+	if keeper == nil {
+		t.Fatal("enlargeFifo returned no descriptor")
+	}
+	defer keeper.Close()
+
+	before, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer before.Close()
+
+	// Re-size the keeper's own pipe now that a reader is attached, and confirm
+	// the size is a property of the pipe, not of the descriptor that set it.
+	reader, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+
+	if got := pipeSize(reader); got <= 65536 {
+		t.Errorf("pipe size %d while keeper held, want growth past the 64KB default", got)
+	}
+	if got, want := pipeSize(keeper), pipeSize(reader); got != want {
+		t.Errorf("size differs by descriptor: keeper %d, reader %d", got, want)
 	}
 }
 
