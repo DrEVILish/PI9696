@@ -101,12 +101,13 @@ pcm.inferno {
 }
 ```
 
-Do **not** copy inferno's own `alsa_pcm_inferno/asoundrc`. It expands every
-`@args.X` to a bare `X $X`; unset vars expand to the empty string, and
-`inferno_aoip` inserts those empty values into its config map and then panics
-parsing them as integers. Worse, the ALSA config is merged *before* the
-environment and only fills gaps (`config.entry(key).or_insert(env_value)`), so
-any key present in asoundrc silently wins over the env var you meant to set.
+Keeping it minimal is not superstition: `inferno_aoip` merges the ALSA config
+*before* the environment and only fills gaps (`config.entry(key).or_insert(env_value)`),
+so any key given a non-empty value in asoundrc silently wins over the
+`INFERNO_*` env var you meant to set — which matters when you run several
+instances with different `NAME`/`PROCESS_ID`/`ALT_PORT`. Leaving a key out
+lets the env var through; leaving it empty is harmless (verified: unset
+`@args.X` expansions are dropped, and `INFERNO_ALT_PORT` is still honoured).
 `SAMPLE_RATE` defaults to 48000 if absent.
 
 ---
