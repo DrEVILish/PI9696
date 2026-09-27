@@ -1,0 +1,28 @@
+[Unit]
+Description=usrvclock exporter for Inferno (PI9696)
+Documentation=https://gitlab.com/lumifaza/usrvclock
+# Inferno needs a clock overlay on the usrvclock socket before it will
+# transmit; without one it aborts with "no clock available (timeout waiting
+# for overlay update)" and the Dante TX device never carries audio.
+#
+# This unit runs a stub exporter because this test LAN has no PTP grandmaster
+# (no Dante device, and the Pi 4's eth0 has no PTP hardware clock). For a real
+# install run statime here instead, from the inferno-pinned fork:
+#
+#   git clone --recurse-submodules -b inferno-dev https://github.com/teodly/statime
+#   cargo build --release
+#   ExecStart=/opt/pi9696/statime/target/release/statime -c inferno-ptpv1.toml
+#
+# and disable systemd-timesyncd while inferno is in use: NTP stepping the
+# system clock collides with PTP (inferno README, "Quirks").
+Before=pi9696.service
+
+[Service]
+Type=simple
+Environment=USRVCLOCK_SOCKET=/tmp/ptp-usrvclock
+ExecStart=/opt/pi9696/fake_usrvclock_server
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
