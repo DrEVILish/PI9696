@@ -30,6 +30,14 @@ go.work.sum
 # FiraCode fonts - downloaded at install time, not committed
 fonts/
 
+# Inferno AoIP and its PTP clock daemon - pinned third-party checkouts built at
+# install time (see DEPLOYMENT.md), not part of this app's source.
+/inferno/
+/statime/
+# usrvclock stub built from inferno's test sources, used where the LAN has no
+# PTP grandmaster (see deploy/pi9696-clock.service)
+/fake_usrvclock_server
+
 # htmax.js (htmx + bundled extensions) - downloaded at install time, not committed
 web/htmax.min.js
 # uPlot bundle + CSS (telemetry graphs) - downloaded at install time, not committed
