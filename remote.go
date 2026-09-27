@@ -3941,7 +3941,15 @@ func newRemoteMux() *http.ServeMux {
 	return mux
 }
 
-const remoteControlPort = "8080"
+// remoteControlPort is the TCP port the control surface binds to. 8080 by
+// default; override with PI9696_REMOTE_PORT for a host that fronts the UI on
+// the standard HTTP port instead. Read once at startup, like the bind address.
+func remoteControlPort() string {
+	if p := os.Getenv("PI9696_REMOTE_PORT"); p != "" {
+		return p
+	}
+	return "8080"
+}
 
 // startRemoteServer binds to the given address (normally "0.0.0.0" from
 // remoteControlLoop, or a specific host via PI9696_REMOTE_BIND for dev
@@ -3949,7 +3957,7 @@ const remoteControlPort = "8080"
 // the Round 3 design decision, replacing the old eth0-only constraint; access
 // is still gated by the token/session auth.
 func startRemoteServer(ip string) (*http.Server, error) {
-	listener, err := net.Listen("tcp", net.JoinHostPort(ip, remoteControlPort))
+	listener, err := net.Listen("tcp", net.JoinHostPort(ip, remoteControlPort()))
 	if err != nil {
 		return nil, err
 	}
@@ -4083,7 +4091,7 @@ func remoteAccessInfo() []string {
 	}
 	return []string{
 		"Remote Access",
-		fmt.Sprintf("http://%s:%s", ip, remoteControlPort),
+		fmt.Sprintf("http://%s:%s", ip, remoteControlPort()),
 		"Token: " + formatToken(remoteToken),
 	}
 }
