@@ -3,6 +3,12 @@
 Install record for a Debian Trixie test unit. Everything here is verified on
 hardware; where something is inferred or environment-specific it says so.
 
+**The [Inferno README](https://github.com/teodly/inferno) is authoritative** for
+building, configuring and deploying Inferno. This document does not restate it
+and does not override it: it records what was actually measured on this unit,
+and the two places where reality differed from the expected path. If the two
+ever disagree, the upstream README wins and this file is what needs fixing.
+
 Test unit: Raspberry Pi 4 Model B rev 1.5, Debian 13 (trixie) aarch64,
 kernel 6.18.50+rpt-rpi-v8, no OLED/buttons attached.
 
@@ -98,23 +104,41 @@ cp target/release/libasound_module_pcm_inferno.so \
 
 ### asoundrc
 
-Keep it minimal — all settings from `INFERNO_*` env vars:
+The README recommends putting settings in `asoundrc` rather than the device
+string, because a long ALSA device string can be truncated. Use Inferno's own
+`alsa_pcm_inferno/asoundrc` as the starting point:
 
-```
-pcm.inferno {
-    type inferno
-    hint { show on; description "Inferno virtual device" }
-}
+```bash
+cp inferno/alsa_pcm_inferno/asoundrc /etc/asound.conf
 ```
 
-Keeping it minimal is not superstition: `inferno_aoip` merges the ALSA config
-*before* the environment and only fills gaps (`config.entry(key).or_insert(env_value)`),
-so any key given a non-empty value in asoundrc silently wins over the
-`INFERNO_*` env var you meant to set — which matters when you run several
-instances with different `NAME`/`PROCESS_ID`/`ALT_PORT`. Leaving a key out
-lets the env var through; leaving it empty is harmless (verified: unset
-`@args.X` expansions are dropped, and `INFERNO_ALT_PORT` is still honoured).
-`SAMPLE_RATE` defaults to 48000 if absent.
+Its `@args.X` indirection is safe: unset variables expand to empty and are
+dropped rather than reaching the config parser (verified — an unset
+`INFERNO_ALT_PORT` is still honoured, and nothing panics).
+
+One behaviour worth knowing when running several instances on one IP, because
+it is easy to lose an afternoon to: `inferno_aoip` merges the ALSA config
+*first* and only fills gaps from the environment
+(`config.entry(key).or_insert(env_value)`). A key given a **non-empty** value in
+`asoundrc` therefore wins over the `INFERNO_*` env var of the same name. Leave
+a key out (or empty) if you intend to set it per instance.
+
+Defaults, all documented upstream and all confirmed here: `SAMPLE_RATE` 48000,
+`RX_CHANNELS` and `TX_CHANNELS` 2, `RX_LATENCY_NS` and `TX_LATENCY_NS` 10 ms,
+`CLOCK_PATH` `/tmp/ptp-usrvclock`.
+
+### Running more than one instance
+
+Only one instance can use the standard Dante UDP ports. Per the README, each
+extra instance needs both `ALT_PORT` and `PROCESS_ID` — a distinct `DEVICE_ID`
+is *not* sufficient — and instances should be separated by at least 10 ports
+(`ALT_PORT` to `ALT_PORT+3` are used today). Without this the second instance
+dies with `error starting really needed listener: Address already in use`.
+
+Latency is a real constraint rather than a tuning knob: Dante caps it at 40 ms,
+and the README's method for finding your own floor is to measure worst-case
+scheduling latency with `cyclictest` and derive `TX_LATENCY_NS`/`RX_LATENCY_NS`
+from it.
 
 ---
 
@@ -147,24 +171,54 @@ lower, but it is not zero.
 
 ### Without one (this test unit — no Dante hardware on the LAN)
 
-Neither a Dante device nor a hardware clock master exists here, so statime
-either sits as an unsupported PTPv1 master or, as PTPv2 master, never produces
-an overlay. Use the clock stub from inferno's own test suite instead:
+The README's PTPv2 route does work as advertised: with `protocol-version =
+"PTPv2"` Statime becomes a working master and announces on the wire.
+
+```
+INFO statime::port: new state for port 1: Listening -> Master
+TRACE statime::port::master: sending sync message
+```
+
+It still will not transmit on this LAN, because with no Dante device present
+the clock overlay is never published. Inferno connects and reports `clock
+ready`, then has nothing to schedule against:
+
+```
+ERROR inferno_aoip::device_server::flows_tx] unable to get start timestamp for ring buffer output: RecvError(())
+```
+
+This is not contrary to the README so much as its stated caveat: master
+operation removes the need for a Dante device to *exist*, but "at least one
+Dante device with AES67 enabled must be present in the network to make Inferno
+and Dante devices interoperate". With zero devices there is nothing to
+discipline the master clock against and the usrvclock export never becomes
+valid. Tested with both `virtual-system-clock-base` values the README mentions
+(`monotonic` and the shipped `monotonic_raw`) - no overlay either way.
+
+So for a LAN with no Dante hardware, build the clock stub from Inferno's own
+test suite:
 
 ```bash
 gcc -O2 -o /opt/pi9696/fake_usrvclock_server \
     inferno/test/dockerized_trx/fake_usrvclock_server/fake_usrvclock_server.c
 ```
 
-`deploy/pi9696-clock.service` runs it, with the statime invocation documented in
-the unit for a real install.
+`deploy/pi9696-clock.service` runs it, and carries the documented Statime
+invocation for a real install. Replace it with Statime the moment a Dante
+device is on the network.
 
 ### Hardware clock caveat
 
 The Pi 4's `eth0` has **software timestamping only** — `ethtool -T eth0` reports
-`PTP Hardware Clock: none` and there is no `/dev/ptp0`, so `hardware-clock`
-must be `none`. AES67/Dante clock quality on a Pi 4 is correspondingly worse
-than on hardware with a PTP-capable NIC.
+`PTP Hardware Clock: none` and there is no `/dev/ptp0`. That is expected and
+supported: the README lists "Raspberry Pi 4 (no hardware PTP)" as a tested host
+and names software timestamping as the default that "is compatible with all
+NICs". Leave `hardware-clock` at its shipped default (`auto`) rather than
+forcing `none`; it falls back on its own.
+
+The practical consequence is clock quality, not function — Dante clock quality
+on a Pi 4 is software-derived, so it is worse than a PTP-capable NIC and
+latency has to be set with more margin.
 
 ---
 
@@ -183,9 +237,11 @@ netaudio device list
 netaudio subscription add --tx tx:1@TXDEVICE --rx rx:1@RXDEVICE
 ```
 
-Note the CLI in v0.3.14 is `--tx tx:N@DEV --rx rx:N@DEV`. Inferno's own test
-scripts use `--rx-device-name`/`--rx-channel-name` from an older release,
-which no longer exists.
+The README lists `network-audio-controller` as supported control software, and
+this is how the loopback script drives it. One divergence from Inferno's own
+test scripts: those use `--rx-device-name`/`--rx-channel-name`, which no longer
+exist in netaudio 0.3.14 (`No such option`). The current syntax is positional per
+channel, as above.
 
 Two traps:
 
@@ -332,19 +388,23 @@ PI9696_SIM=1 PI9696_REMOTE_PORT=8081 ./pi9696   # prints the token to stderr
 
 ---
 
-## Upstream issues filed
+## Reporting issues upstream
 
-Against [`teodly/inferno`](https://github.com/teodly/inferno) (the `DrEVILish`
-fork this project consumes has issues disabled):
+Nothing is filed to `teodly/inferno` without the maintainer's explicit
+consent — not even doc bugs or divergences like the `netaudio` flags above.
 
-| # | Issue |
+The observations that would have been worth reporting are recorded here instead,
+so they are not lost:
+
+| Observation | Where it is covered |
 |---|---|
-| [#52](https://github.com/teodly/inferno/issues/52) | `inferno2pipe/README.md` documents a CLI the binary does not have, and omits the clock daemon |
-| [#53](https://github.com/teodly/inferno/issues/53) | No PTP hardware clock on an SBC and statime cannot be master, so transmit is impossible without the test clock stub |
-| [#54](https://github.com/teodly/inferno/issues/54) | `test/dockerized_trx` uses `netaudio` flags removed in 0.3.14 |
-| [#55](https://github.com/teodly/inferno/issues/55) | Subscribed `alsa_pcm_inferno` RX records silence while `inferno2pipe` RX works (single host) |
+| `inferno2pipe/README.md` documents `./save_to_file N` and `sample_rate=`, but the v0.5.4 binary takes `-c`/`-o` and `INFERNO_SAMPLE_RATE`; it also omits the clock daemon the top-level README calls mandatory | §2, §3 |
+| With no Dante device on the LAN, Statime as PTPv2 master never publishes the usrvclock overlay, so transmit cannot start | §3 |
+| `test/dockerized_trx/control_and_test.sh` uses `netaudio` flags removed in 0.3.14 | §4 |
+| `alsa_pcm_inferno` RX recorded silence while `inferno2pipe` RX worked — same host, verified subscription, likely a same-IP addressing artifact rather than a plugin fault | Known limitations |
+| `netaudio subscription list` reported `Unresolved` for flows that were carrying audio | §4 |
 
-Nothing to report for `ftl-themes` from this bring-up.
+Nothing outstanding for `ftl-themes`.
 
 ---
 
@@ -358,5 +418,10 @@ Nothing to report for `ftl-themes` from this bring-up.
   resolved per receiver).
 - **No OLED or buttons attached.** The panel SPI path is fixed and exercised
   (`/dev/spidev0.0`, 4 MB FIFO), but rendering has not been seen on glass.
-- **Statime cannot be a clock master here** — see the stub above.
+- **A second ALSA-based receiver records silence** on this single host, while
+  `inferno2pipe` from the same build receives correctly. Unresolved: all
+  instances share 192.0.2.69, so the unicast endpoints the transmitter
+  advertises cannot be resolved per receiver. Needs a second host to settle.
+- **No Dante device on the LAN**, so the clock comes from the test stub rather
+  than Statime — see the clock section.
 - **Pi 4 has no PTP hardware clock**, so AES67 clock quality is software-only.
