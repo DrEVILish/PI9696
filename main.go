@@ -1017,9 +1017,9 @@ func main() {
 	// unless you intend to restrict the bind address.
 	if bindHost := os.Getenv("PI9696_REMOTE_BIND"); bindHost != "" {
 		if _, err := startRemoteServer(bindHost); err != nil {
-			log.Fatalf("PI9696_REMOTE_BIND: failed to bind %s:%s: %v", bindHost, remoteControlPort, err)
+			log.Fatalf("PI9696_REMOTE_BIND: failed to bind %s:%s: %v", bindHost, remoteControlPort(), err)
 		}
-		logInfof("TEST-ONLY remote control server: http://%s:%s (token on OLED: Settings -> Remote Access)", bindHost, remoteControlPort)
+		logInfof("TEST-ONLY remote control server: http://%s:%s (token on OLED: Settings -> Remote Access)", bindHost, remoteControlPort())
 	} else {
 		go remoteControlLoop()
 	}
@@ -4128,7 +4128,7 @@ func renderIdleInfoPage() {
 	}
 	ip := anyInterfaceIP()
 	if ip != "" {
-		bmp := qrBitmap("http://" + ip + ":" + remoteControlPort + "/#t=" + remoteToken)
+		bmp := qrBitmap("http://" + ip + ":" + remoteControlPort() + "/#t=" + remoteToken)
 		drawQRBitmapFit(bmp)
 	} else {
 		hwManager.DrawCenteredText("Token: "+formatToken(remoteToken), "selected", y+4)

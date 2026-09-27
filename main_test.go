@@ -3260,3 +3260,16 @@ func TestStartPlaybackRefusesBusyTransport(t *testing.T) {
 		t.Fatalf("startPlayback during recording started cmd=%v state=%v", cmd != nil, state)
 	}
 }
+
+// The control port is fixed at 8080 unless PI9696_REMOTE_PORT overrides it, so
+// a host that fronts the UI on port 80 can do so from the unit file instead of
+// patching the source. The default must survive an unrelated env var.
+func TestRemoteControlPortOverride(t *testing.T) {
+	if got := remoteControlPort(); got != "8080" {
+		t.Fatalf("default port = %q, want 8080", got)
+	}
+	t.Setenv("PI9696_REMOTE_PORT", "80")
+	if got := remoteControlPort(); got != "80" {
+		t.Fatalf("overridden port = %q, want 80", got)
+	}
+}
