@@ -129,11 +129,15 @@ Playback currently goes to local ALSA (target: route out through Inferno — Kno
 4. Button test: `sudo ./test-hardware buttons`
 5. Complete test: `sudo ./test-hardware all`
 
+> `test-hardware` is not yet implemented — this sequence is the spec for it.
+> Until it lands, the equivalents are `go run ./cmd/simcheck` (renders every
+> OLED screen to PNG) and `./inferno-loopback.sh` (proves the Dante path).
+
 ### Audio Verification
 
 ```bash
 # Verify Inferno stream + FIFO pipeline
-cd inferno && INFERNO_SAMPLE_RATE=48000 ./target/release/inferno -c 2 -o /tmp/test.fifo
+cd inferno && INFERNO_SAMPLE_RATE=48000 ./target/release/inferno2pipe -c 2 -o /tmp/test.fifo
 ffmpeg -f s32le -ar 48000 -ac 2 -i /tmp/test.fifo -c:a pcm_s24le test.wav
 file test.wav
 ```
