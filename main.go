@@ -2059,14 +2059,25 @@ func networkMonitorLoop() {
 // Callers (adjustSampleRate, adjustChannelCount) are always invoked from
 // onEncoderRotate, which already holds mutex; enqueueInferno only sends on
 // a buffered channel, so this stays fast.
+// infernoRestartNeeded reports whether the running Inferno server no longer
+// matches the audio settings. Only the sample rate and channel count matter:
+// every other setting applies live, so restarting on those would drop the
+// Dante device (and its subscriptions) for no reason. Callers hold the app
+// mutex; factored out of checkInfernoRestart so the rule is unit-testable.
+func infernoRestartNeeded() bool {
+	if demoMode || infernoState != InfernoRunning {
+		return false
+	}
+	return sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount
+}
+
 func checkInfernoRestart() {
-	currentSampleRate := sampleRates[sampleRateIdx]
 	if demoMode {
 		// The demo generator re-reads settings per chunk, so there is
 		// nothing to restart - and must be no worker traffic either.
 		return
 	}
-	if (currentSampleRate != lastSampleRate || channelCount != lastChannelCount) && infernoState == InfernoRunning {
+	if infernoRestartNeeded() {
 		logInfof("Settings changed, restarting Inferno server")
 		enqueueInferno(infernoCmdRestart)
 	}
@@ -2124,6 +2135,17 @@ const (
 	linuxFGetPipeSz = 1032
 )
 
+// closeFifoKeeperLocked releases the sizing descriptor enlargeFifo returned.
+// Must be called with the app mutex held. The keeper has to die with its
+// FIFO: leaving it open after a failed start leaks the fd and leaves a stale
+// reference to an unlinked pipe that the next successful start would silently
+// orphan by overwriting.
+func closeFifoKeeperLocked() {
+	if fifoKeeper != nil {
+		fifoKeeper.Close()
+		fifoKeeper = nil
+	}
+}
 // enlargeFifo opens a freshly created FIFO and asks the kernel for a larger
 // buffer, returning the descriptor that must be held for as long as the FIFO
 // is in use (nil if the FIFO could not be opened).
@@ -2152,6 +2174,20 @@ func enlargeFifo(path string) *os.File {
 		logDebugf("fifo %s buffer grown to 4MB", path)
 	}
 	return f
+}
+
+// uniqueRecordingFile returns a path in dir for stem that doesn't collide
+// with an existing take. Second-resolution timestamps collide when takes
+// start within the same second; without the -1, -2 suffix ffmpeg would
+// truncate the previous take.
+func uniqueRecordingFile(dir, stem string) string {
+	path := filepath.Join(dir, stem+".wav")
+	for n := 1; ; n++ {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return path
+		}
+		path = filepath.Join(dir, fmt.Sprintf("%s-%d.wav", stem, n))
+	}
 }
 
 func demoFifoName() string {
@@ -2381,6 +2417,7 @@ func doStartInferno() {
 		logErrorf("Cannot start Inferno server: built binary %s not found (%v) - build the Inferno binary first", binary, err)
 		mutex.Lock()
 		infernoState = InfernoFailed
+		closeFifoKeeperLocked()
 		mutex.Unlock()
 		os.Remove(path)
 		return
@@ -2398,6 +2435,7 @@ func doStartInferno() {
 		os.Remove(path)
 		mutex.Lock()
 		infernoState = InfernoFailed
+		closeFifoKeeperLocked()
 		mutex.Unlock()
 		return
 	}
@@ -2551,17 +2589,8 @@ func startRecording() {
 	// Filename prefix comes from the WebUI text field or the OLED preset
 	// list (Round 3 design: prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav); an
 	// unset prefix keeps the historical "recording_..." default.
-	recordingFile = filepath.Join(recordingSubdir(recordStart),
-		fmt.Sprintf("%s_%s_ch%d_%dkHz.wav", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000))
-	// Second-resolution timestamps collide when takes start within the same
-	// second (ffmpeg would truncate the previous take): suffix -1, -2...
-	for n := 1; ; n++ {
-		if _, err := os.Stat(recordingFile); os.IsNotExist(err) {
-			break
-		}
-		recordingFile = filepath.Join(recordingSubdir(recordStart),
-			fmt.Sprintf("%s_%s_ch%d_%dkHz-%d.wav", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000, n))
-	}
+	stem := fmt.Sprintf("%s_%s_ch%d_%dkHz", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000)
+	recordingFile = uniqueRecordingFile(recordingSubdir(recordStart), stem)
 
 	// Create recording directory
 	os.MkdirAll(filepath.Dir(recordingFile), 0755)
@@ -3029,6 +3058,25 @@ func latestRecording() string {
 // rested entirely on each caller, and one direct caller would overlap record
 // and ALSA playback (meter modes, monitoringOutput, and FIFO teardown all
 // assume exclusivity).
+// validatePlaybackFile refuses a take whose recorded format doesn't match the
+// current device configuration. ffmpeg would otherwise resample/rechannel
+// silently and the deck would play, say, a 44.1kHz take at 48kHz sounding
+// wrong with nothing telling the operator why. Takes whose names don't parse
+// (legacy/renamed files) pass through unchanged - absence of evidence is not
+// evidence of a mismatch.
+func validatePlaybackFile(file string) error {
+	row := buildRecordingRow(file)
+	if row.SampleRate <= 0 || row.Channels <= 0 {
+		return nil
+	}
+	wantRate := sampleRates[sampleRateIdx]
+	if row.SampleRate*1000 != wantRate || row.Channels != channelCount {
+		return fmt.Errorf("take is %dkHz/%dch but the device is set to %dkHz/%dch - match the sample rate and channel count to play it",
+			row.SampleRate, row.Channels, wantRate/1000, channelCount)
+	}
+	return nil
+}
+
 func startPlayback() {
 	if currentState != StateIdle && currentState != StateIdleBrowse {
 		logWarnf("startPlayback refused: not idle (state %d)", currentState)
@@ -3041,6 +3089,17 @@ func startPlayback() {
 	file := latestRecording()
 	if file == "" {
 		logWarnf("No recordings to play")
+		return
+	}
+	// Demo playback is synthesized at the current settings regardless of the
+	// take's filename, so format validation is meaningless there; real
+	// playback must match or ffmpeg would resample silently.
+	if err := validatePlaybackFile(file); err != nil && !demoMode {
+		logErrorf("startPlayback refused: %v", err)
+		// OLED lines are 256px wide and overflow silently, so the panel gets
+		// the short form while the log and the dashboard get the detail.
+		showSysNotice("Rate mismatch")
+		showWebNotice(err.Error())
 		return
 	}
 	playbackDuration = playbackFileDuration(file)

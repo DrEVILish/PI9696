@@ -1653,6 +1653,7 @@ func TestStopWhilePausedAwakensStoppedFFmpeg(t *testing.T) {
 	mutex.Lock()
 	currentState = StateIdle
 	isRecording = false
+	sampleRateIdx, channelCount = 1, 2 // match the staged 48kHz/2ch take
 	mutex.Unlock()
 
 	onButtonPress(hardware.PlayButton)
@@ -3091,6 +3092,8 @@ func TestMeterReaderDropsStaleGeneration(t *testing.T) {
 // that point, so leaving a stale playbackCmd behind would wedge the deck.
 func TestSeekWithUnstartableFFmpegGoesIdle(t *testing.T) {
 	initTestHardware(t)
+	origSR, origCh := sampleRateIdx, channelCount
+	t.Cleanup(func() { mutex.Lock(); sampleRateIdx, channelCount = origSR, origCh; mutex.Unlock() })
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
 
 	os.MkdirAll(RecordPath, 0755)
@@ -3103,6 +3106,7 @@ func TestSeekWithUnstartableFFmpegGoesIdle(t *testing.T) {
 	mutex.Lock()
 	currentState = StateIdle
 	isRecording = false
+	sampleRateIdx, channelCount = 1, 2 // match the staged 48kHz/2ch take
 	mutex.Unlock()
 
 	onButtonPress(hardware.PlayButton)
@@ -3124,6 +3128,8 @@ func TestSeekWithUnstartableFFmpegGoesIdle(t *testing.T) {
 // demo FIFO out from under the recording ffmpeg (silent truncated take).
 func TestDemoToggleRefusedDuringTransport(t *testing.T) {
 	initTestHardware(t)
+	origSR, origCh := sampleRateIdx, channelCount
+	t.Cleanup(func() { mutex.Lock(); sampleRateIdx, channelCount = origSR, origCh; mutex.Unlock() })
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
 
 	os.MkdirAll(RecordPath, 0755)
@@ -3137,6 +3143,7 @@ func TestDemoToggleRefusedDuringTransport(t *testing.T) {
 	currentState = StateIdle
 	isRecording = false
 	demoMode = false
+	sampleRateIdx, channelCount = 1, 2 // match the staged 48kHz/2ch take
 	mutex.Unlock()
 
 	onButtonPress(hardware.PlayButton)
@@ -3375,5 +3382,370 @@ wait $!
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("polite child never exited")
+	}
+}
+
+// validatePlaybackFile must refuse takes recorded at a different rate or
+// channel count than the device is set to, because ffmpeg would otherwise
+// resample/rechannel silently and the deck would sound wrong with nothing
+// telling the operator why. Unparseable names pass through: absence of
+// evidence is not evidence of a mismatch.
+func TestValidatePlaybackFile(t *testing.T) {
+	initTestHardware(t)
+	origSR, origCh := sampleRateIdx, channelCount
+	t.Cleanup(func() { mutex.Lock(); sampleRateIdx, channelCount = origSR, origCh; mutex.Unlock() })
+	mutex.Lock()
+	sampleRateIdx = 1 // 48000
+	channelCount = 2
+	mutex.Unlock()
+
+	if err := validatePlaybackFile("Show_20260101_120000_ch2_48kHz.wav"); err != nil {
+		t.Errorf("matching take refused: %v", err)
+	}
+	err := validatePlaybackFile("Show_20260101_120000_ch2_44kHz.wav")
+	if err == nil {
+		t.Fatal("44.1kHz take accepted while device is at 48kHz")
+	}
+	if !strings.Contains(err.Error(), "44") || !strings.Contains(err.Error(), "48") {
+		t.Errorf("rate-mismatch error names neither side: %q", err)
+	}
+	err = validatePlaybackFile("Show_20260101_120000_ch8_48kHz.wav")
+	if err == nil {
+		t.Fatal("8ch take accepted while device is at 2ch")
+	}
+	if !strings.Contains(err.Error(), "8") || !strings.Contains(err.Error(), "2ch") {
+		t.Errorf("channel-mismatch error names neither side: %q", err)
+	}
+	// Suffix variants and legacy/renamed files must not trip the check.
+	if err := validatePlaybackFile("Show_20260101_120000_ch2_48kHz-1.wav"); err != nil {
+		t.Errorf("collided-name take refused: %v", err)
+	}
+	if err := validatePlaybackFile("weirdname.wav"); err != nil {
+		t.Errorf("unparseable name refused: %v", err)
+	}
+	if err := validatePlaybackFile("Show_20260101_120000_ch0_48kHz.wav"); err != nil {
+		t.Errorf("zero-channel parse refused: %v", err)
+	}
+}
+
+// A refused take must reach the dashboard, not just the log: the notice has
+// to render in the status panel and then expire on its own.
+func TestPlaybackRefusalReachesStatusPanel(t *testing.T) {
+	initTestHardware(t)
+	origNotice, origUntil := webNotice, webNoticeUntil
+	t.Cleanup(func() { mutex.Lock(); webNotice, webNoticeUntil = origNotice, origUntil; mutex.Unlock() })
+
+	mutex.Lock()
+	webNotice, webNoticeUntil = "", time.Time{}
+	showWebNotice("take is 44kHz/2ch but the device is set to 48kHz/2ch")
+	mutex.Unlock()
+	v := currentStatusView()
+	if v.Notice == "" {
+		t.Fatal("status panel shows no notice after a refusal")
+	}
+	html, err := renderStatusHTML()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(html, "44kHz/2ch") {
+		t.Error("rendered status omits the refusal detail")
+	}
+
+	mutex.Lock()
+	webNoticeUntil = time.Now().Add(-time.Second)
+	mutex.Unlock()
+	if v := currentStatusView(); v.Notice != "" {
+		t.Error("expired notice still rendered")
+	}
+}
+
+// End to end: a mismatched take on disk must leave the transport alone - no
+// process started, no state flipped - while still telling the user why.
+// Staged under the real RecordPath (a const), like the other recording tests,
+// with a unique name and cleanup so the mtime-keyed rescan stays exact.
+func TestStartPlaybackRefusesMismatchedTake(t *testing.T) {
+	initTestHardware(t)
+	origState, origRecFlag := currentState, isRecording
+	origCmd, origSR, origCh := playbackCmd, sampleRateIdx, channelCount
+	origDemo, origNotice, origUntil := demoMode, webNotice, webNoticeUntil
+	t.Cleanup(func() {
+		mutex.Lock()
+		currentState, isRecording = origState, origRecFlag
+		playbackCmd, sampleRateIdx, channelCount = origCmd, origSR, origCh
+		demoMode, webNotice, webNoticeUntil = origDemo, origNotice, origUntil
+		mutex.Unlock()
+	})
+
+	mutex.Lock()
+	currentState, isRecording, playbackCmd = StateIdle, false, nil
+	sampleRateIdx, channelCount = 1, 2 // 48kHz stereo
+	demoMode = false
+	mutex.Unlock()
+
+	bad := filepath.Join(RecordPath, "refuse_20260101_120000_ch2_44kHz.wav")
+	if err := os.WriteFile(bad, []byte("fake"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(bad) })
+	startPlayback()
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if playbackCmd != nil {
+		t.Error("mismatched take started a playback process")
+	}
+	if currentState != StateIdle {
+		t.Errorf("state moved to %d on a refused take", currentState)
+	}
+	if webNotice == "" {
+		t.Error("refused take set no dashboard notice")
+	}
+}
+
+// infernoRestartNeeded must fire only on audio-setting drift: restarting on
+// anything else drops the Dante device (and its subscriptions) for no reason,
+// while missing a real drift leaves Inferno recording at a stale rate.
+func TestInfernoRestartNeededOnlyOnAudioChange(t *testing.T) {
+	initTestHardware(t)
+	origDemo, origState := demoMode, infernoState
+	origSR, origCh := sampleRateIdx, channelCount
+	origLastSR, origLastCh := lastSampleRate, lastChannelCount
+	origTag := tagPresetIdx
+	t.Cleanup(func() {
+		mutex.Lock()
+		demoMode, infernoState = origDemo, origState
+		sampleRateIdx, channelCount = origSR, origCh
+		lastSampleRate, lastChannelCount = origLastSR, origLastCh
+		tagPresetIdx = origTag
+		mutex.Unlock()
+	})
+
+	mutex.Lock()
+	demoMode, infernoState = false, InfernoRunning
+	sampleRateIdx, channelCount = 1, 2
+	lastSampleRate, lastChannelCount = sampleRates[1], 2
+	mutex.Unlock()
+
+	mutex.Lock()
+	if infernoRestartNeeded() {
+		mutex.Unlock()
+		t.Fatal("restart requested with no drift")
+	}
+	// A non-audio change must not restart either.
+	tagPresetIdx = (origTag + 1) % len(tagPresets)
+	if infernoRestartNeeded() {
+		mutex.Unlock()
+		t.Fatal("restart requested for a tag-preset change")
+	}
+	tagPresetIdx = origTag
+	// Either audio dimension drifting must restart.
+	sampleRateIdx = 2
+	if !infernoRestartNeeded() {
+		mutex.Unlock()
+		t.Fatal("no restart requested for a sample-rate change")
+	}
+	sampleRateIdx = 1
+	channelCount = 8
+	if !infernoRestartNeeded() {
+		mutex.Unlock()
+		t.Fatal("no restart requested for a channel-count change")
+	}
+	channelCount = 2
+	// Not running, or demo owning the chain: never restart.
+	infernoState = InfernoStopped
+	if infernoRestartNeeded() {
+		mutex.Unlock()
+		t.Fatal("restart requested while Inferno is stopped")
+	}
+	infernoState = InfernoRunning
+	demoMode = true
+	if infernoRestartNeeded() {
+		mutex.Unlock()
+		t.Fatal("restart requested while demo mode owns the chain")
+	}
+	mutex.Unlock()
+}
+
+// Every field persistConfig writes must survive a save/load cycle, not just
+// the three the export/import test covers. A field that silently drops (a new
+// setting added to the struct but given no load branch, or a load branch with
+// a wrong range) would reset on every boot with no error anywhere.
+func TestPersistRoundTripsAllFields(t *testing.T) {
+	initTestHardware(t)
+	dir := t.TempDir()
+	origPath := ConfigPath
+	origLog := currentLogLevel()
+	origDev, origSR, origCh := deviceName, sampleRateIdx, channelCount
+	origTag, origPrefix, origVU, origPeak := tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx
+	origTM := transportMode
+	origTheme, origMotion, origContrast, origDensity := themeSlug, displayMotion, displayContrast, displayDensityIdx
+	origBright, origDim, origTimeout := oledBrightnessPct, autoDimEnabled, menuTimeoutIdx
+	origDemo, origHyper := demoMode, hyperdeckEnabled
+	origWifiEn, origSSID, origPwd := wifiEnabled, wifiSSID, wifiPassword
+	t.Cleanup(func() {
+		mutex.Lock()
+		ConfigPath = origPath
+		deviceName, sampleRateIdx, channelCount = origDev, origSR, origCh
+		tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx = origTag, origPrefix, origVU, origPeak
+		transportMode = origTM
+		themeSlug, displayMotion, displayContrast, displayDensityIdx = origTheme, origMotion, origContrast, origDensity
+		oledBrightnessPct, autoDimEnabled, menuTimeoutIdx = origBright, origDim, origTimeout
+		demoMode, hyperdeckEnabled = origDemo, origHyper
+		wifiEnabled, wifiSSID, wifiPassword = origWifiEn, origSSID, origPwd
+		mutex.Unlock()
+		applyLogLevel(origLog)
+	})
+
+	mutex.Lock()
+	ConfigPath = filepath.Join(dir, "config.json")
+	deviceName = "Unit-B"
+	sampleRateIdx, channelCount = 2, 8
+	tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx = 3, "Night", 1, 2
+	transportMode = "text"
+	themeSlug, displayMotion, displayContrast, displayDensityIdx = "lcars", "reduced", "high", 2
+	oledBrightnessPct, autoDimEnabled, menuTimeoutIdx = 42, false, 3
+	demoMode, hyperdeckEnabled = true, true
+	wifiEnabled, wifiSSID, wifiPassword = false, "TestNet", "pw123"
+	mutex.Unlock()
+	applyLogLevel(LogDebug)
+	persistConfig()
+
+	// Reset everything to defaults, then load and demand it all back.
+	mutex.Lock()
+	deviceName, sampleRateIdx, channelCount = "PI9696", 1, 2
+	tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx = 0, "", 3, 4
+	transportMode = "icon"
+	themeSlug, displayMotion, displayContrast, displayDensityIdx = "xbmc", "full", "standard", 0
+	oledBrightnessPct, autoDimEnabled, menuTimeoutIdx = 100, true, 2
+	demoMode, hyperdeckEnabled = false, false
+	wifiEnabled, wifiSSID, wifiPassword = true, "", ""
+	mutex.Unlock()
+	applyLogLevel(LogError)
+	loadPersistedConfig()
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	check := func(name string, got, want interface{}) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s round-tripped as %v, want %v", name, got, want)
+		}
+	}
+	check("deviceName", deviceName, "Unit-B")
+	check("sampleRateIdx", sampleRateIdx, 2)
+	check("channelCount", channelCount, 8)
+	check("tagPresetIdx", tagPresetIdx, 3)
+	check("filePrefix", filePrefix, "Night")
+	check("vuRangeIdx", vuRangeIdx, 1)
+	check("peakHoldIdx", peakHoldIdx, 2)
+	check("transportMode", transportMode, "text")
+	check("themeSlug", themeSlug, "lcars")
+	check("displayMotion", displayMotion, "reduced")
+	check("displayContrast", displayContrast, "high")
+	check("displayDensityIdx", displayDensityIdx, 2)
+	check("oledBrightnessPct", oledBrightnessPct, 42)
+	check("autoDimEnabled", autoDimEnabled, false)
+	check("menuTimeoutIdx", menuTimeoutIdx, 3)
+	check("demoMode", demoMode, true)
+	check("hyperdeckEnabled", hyperdeckEnabled, true)
+	check("wifiEnabled", wifiEnabled, false)
+	check("wifiSSID", wifiSSID, "TestNet")
+	check("wifiPassword", wifiPassword, "pw123")
+	if currentLogLevel() != LogDebug {
+		t.Errorf("log level round-tripped as %v, want debug", currentLogLevel())
+	}
+}
+
+// A missing Inferno binary must fail the start loudly (InfernoFailed) and
+// release the FIFO keeper it just opened - otherwise the fd leaks and a stale
+// reference to an unlinked pipe survives for the next start to orphan.
+func TestMissingInfernoBinaryFailsStart(t *testing.T) {
+	initTestHardware(t)
+	origBin, origState, origDemo := InfernoBinary, infernoState, demoMode
+	origKeeper, origPath := fifoKeeper, fifoPath
+	t.Cleanup(func() {
+		mutex.Lock()
+		InfernoBinary, infernoState, demoMode = origBin, origState, origDemo
+		fifoKeeper, fifoPath = origKeeper, origPath
+		mutex.Unlock()
+	})
+
+	if err := os.MkdirAll(RawPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	InfernoBinary = filepath.Join(t.TempDir(), "no-such-binary")
+	infernoState, demoMode = InfernoStopped, false
+	fifoKeeper, fifoPath = nil, ""
+	mutex.Unlock()
+
+	doStartInferno()
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if infernoState != InfernoFailed {
+		t.Errorf("state = %d after start with missing binary, want InfernoFailed", infernoState)
+	}
+	if fifoKeeper != nil {
+		t.Error("failed start left the FIFO keeper open")
+	}
+}
+
+// Stopping with no keeper held (a start that never got that far, or an
+// already-released one) must be a safe no-op, not a nil-pointer panic - and
+// it must still clear the path and remove the file.
+func TestStopInfernoNilKeeperSafe(t *testing.T) {
+	initTestHardware(t)
+	dir := t.TempDir()
+	dead := filepath.Join(dir, "dead.raw")
+	if err := os.WriteFile(dead, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	origCmd, origPath, origKeeper, origState := infernoCmd, fifoPath, fifoKeeper, infernoState
+	t.Cleanup(func() {
+		mutex.Lock()
+		infernoCmd, fifoPath, fifoKeeper, infernoState = origCmd, origPath, origKeeper, origState
+		mutex.Unlock()
+	})
+	mutex.Lock()
+	infernoCmd, fifoKeeper = nil, nil
+	fifoPath = dead
+	infernoState = InfernoStopped
+	mutex.Unlock()
+
+	doStopInferno()
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if fifoPath != "" {
+		t.Error("stop left a stale fifo path")
+	}
+	if _, err := os.Stat(dead); !os.IsNotExist(err) {
+		t.Error("stop did not remove the FIFO file")
+	}
+	if infernoState != InfernoStopped {
+		t.Errorf("state = %d after stop, want InfernoStopped", infernoState)
+	}
+}
+
+// Same-second takes must not truncate each other: the second colliding name
+// gets -1, the third -2, and a free stem is returned untouched.
+func TestUniqueRecordingFileCollision(t *testing.T) {
+	dir := t.TempDir()
+	stem := "Show_20260101_120000_ch2_48kHz"
+	if got, want := uniqueRecordingFile(dir, stem), filepath.Join(dir, stem+".wav"); got != want {
+		t.Errorf("free stem = %q, want %q", got, want)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stem+".wav"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := uniqueRecordingFile(dir, stem), filepath.Join(dir, stem+"-1.wav"); got != want {
+		t.Errorf("first collision = %q, want %q", got, want)
+	}
+	if err := os.WriteFile(filepath.Join(dir, stem+"-1.wav"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := uniqueRecordingFile(dir, stem), filepath.Join(dir, stem+"-2.wav"); got != want {
+		t.Errorf("second collision = %q, want %q", got, want)
 	}
 }
