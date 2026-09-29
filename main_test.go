@@ -3331,15 +3331,21 @@ func TestTerminateFfmpegKillsStubbornChild(t *testing.T) {
 	t.Cleanup(func() { ffmpegStopGrace = orig })
 
 	// Traps and ignores SIGTERM, like ffmpeg blocked on a FIFO does.
+	// NOTE: trap-then-background (trap '' TERM; sleep 300 & wait) does NOT
+	// reliably ignore SIGTERM under dash here; the exec form keeps the
+	// ignore across exec per POSIX and is what actually survives SIGTERM.
 	fakeExecutable(t, "stubborn", `#!/bin/sh
 trap '' TERM
-sleep 300 &
-wait $!
+exec sleep 300
 `)
 	cmd := exec.Command("stubborn")
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	// Let dash install the trap and exec sleep before signalling: a SIGTERM
+	// delivered during startup kills with default disposition and the test
+	// would pass without exercising escalation.
+	time.Sleep(500 * time.Millisecond)
 	exited := make(chan struct{})
 	go func() { cmd.Wait(); close(exited) }()
 
@@ -3733,20 +3739,39 @@ func TestStopInfernoNilKeeperSafe(t *testing.T) {
 func TestUniqueRecordingFileCollision(t *testing.T) {
 	dir := t.TempDir()
 	stem := "Show_20260101_120000_ch2_48kHz"
-	if got, want := uniqueRecordingFile(dir, stem), filepath.Join(dir, stem+".wav"); got != want {
-		t.Errorf("free stem = %q, want %q", got, want)
+	got, err := uniqueRecordingFile(dir, stem)
+	if err != nil || got != filepath.Join(dir, stem+".wav") {
+		t.Errorf("free stem = (%q, %v), want (%q, nil)", got, err, filepath.Join(dir, stem+".wav"))
 	}
 	if err := os.WriteFile(filepath.Join(dir, stem+".wav"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := uniqueRecordingFile(dir, stem), filepath.Join(dir, stem+"-1.wav"); got != want {
-		t.Errorf("first collision = %q, want %q", got, want)
+	if got, err := uniqueRecordingFile(dir, stem); err != nil || got != filepath.Join(dir, stem+"-1.wav") {
+		t.Errorf("first collision = (%q, %v), want (%q, nil)", got, err, filepath.Join(dir, stem+"-1.wav"))
 	}
 	if err := os.WriteFile(filepath.Join(dir, stem+"-1.wav"), []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := uniqueRecordingFile(dir, stem), filepath.Join(dir, stem+"-2.wav"); got != want {
-		t.Errorf("second collision = %q, want %q", got, want)
+	if got, err := uniqueRecordingFile(dir, stem); err != nil || got != filepath.Join(dir, stem+"-2.wav") {
+		t.Errorf("second collision = (%q, %v), want (%q, nil)", got, err, filepath.Join(dir, stem+"-2.wav"))
+	}
+}
+
+// A persistently unreadable directory must fail fast, not spin the UI mutex
+// forever treating every error as "exists, try next". (As root, chmod-based
+// EACCES doesn't apply, so force ENOTDIR by pointing dir at a file.)
+func TestUniqueRecordingFileUnrecoverable(t *testing.T) {
+	dir := t.TempDir()
+	notDir := filepath.Join(dir, "file")
+	if err := os.WriteFile(notDir, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if _, err := uniqueRecordingFile(notDir, "stem"); err == nil {
+		t.Error("unreadable directory returned no error")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("unrecoverable lookup took %s", elapsed)
 	}
 }
 
@@ -3883,5 +3908,278 @@ func TestCancelCopyAndWaitIdle(t *testing.T) {
 	cancelCopyAndWait()
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("idle cancel took %s", elapsed)
+	}
+}
+
+// stopProcessGroup must bound the wait even against a child that ignores
+// SIGTERM: previously the post-SIGKILL wait had no timeout, so a D-state
+// server wedged infernoWorker (and through it, shutdown) forever.
+func TestStopProcessGroupKillsStubbornChild(t *testing.T) {
+	initTestHardware(t)
+	origStop, origKill := infernoStopGrace, infernoKillGrace
+	infernoStopGrace, infernoKillGrace = 150*time.Millisecond, 150*time.Millisecond
+	t.Cleanup(func() { infernoStopGrace, infernoKillGrace = origStop, origKill })
+
+	// NOTE: trap-then-background (trap '' TERM; sleep 300 & wait) does NOT
+	// reliably ignore SIGTERM under dash here; the exec form keeps the
+	// ignore across exec per POSIX and is what actually survives SIGTERM.
+	fakeExecutable(t, "stubborn", `#!/bin/sh
+trap '' TERM
+exec sleep 300
+`)
+	cmd := exec.Command("stubborn")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// Same arming race as above: signal only once the trap is installed.
+	time.Sleep(500 * time.Millisecond)
+	start := time.Now()
+	stopProcessGroup(cmd, "stubborn-test")
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Fatalf("stop took %s against a SIGTERM-ignoring child", elapsed)
+	}
+	// The child must be gone: SIGKILL is async, so poll briefly rather than
+	// asserting on ProcessState (which reports Exited()==false for a
+	// signalled process even when correctly reaped).
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
+			break // ESRCH: no such process
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("stubborn child survived SIGTERM + SIGKILL escalation")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Nil and already-dead inputs must be safe no-ops.
+func TestStopProcessGroupNilSafe(t *testing.T) {
+	initTestHardware(t)
+	stopProcessGroup(nil, "nil-test")
+	cmd := exec.Command("true")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	stopProcessGroup(cmd, "exited-test")
+}
+
+// waitChannel is the bounded-wait primitive behind the seek handoff: true for
+// a closed channel, false after the timeout. The handoff itself can't be
+// driven to the abandon path from userspace (only D-state survives SIGKILL),
+// so this pins the primitive it depends on.
+func TestWaitChannel(t *testing.T) {
+	closed := make(chan struct{})
+	close(closed)
+	if !waitChannel(closed, time.Second) {
+		t.Error("waitChannel reported an already-closed channel as open")
+	}
+	if waitChannel(make(chan struct{}), 20*time.Millisecond) {
+		t.Error("waitChannel reported an open channel as closed")
+	}
+}
+
+// Closing the stdout read side must unblock a meterReader whose pipe is held
+// open by an orphaned grandchild: previously that reader (plus its fd) leaked
+// permanently, since gating Wait on it deadlocked and nothing else closed it.
+func TestMeterReaderUnblocksOnPipeClose(t *testing.T) {
+	initTestHardware(t)
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	gen := meterGen
+	mutex.Unlock()
+	done := make(chan struct{})
+	go func() { meterReader(r, gen); close(done) }()
+	// Let the reader block, with the write end held open as an orphaned
+	// grandchild would hold it. Then do what the reapers do: close our side.
+	time.Sleep(50 * time.Millisecond)
+	r.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("meterReader did not exit after its pipe was closed")
+	}
+	w.Close()
+}
+
+// A link flap during teardown must not start a fresh Inferno after everything
+// was stood down. The loop takes its stop channel as a parameter so this is
+// testable without touching the process-global one gracefulShutdown closes.
+func TestNetworkMonitorLoopStops(t *testing.T) {
+	initTestHardware(t)
+	origState, origWasUp, origDemo := infernoState, networkWasUp, demoMode
+	t.Cleanup(func() {
+		mutex.Lock()
+		infernoState, networkWasUp, demoMode = origState, origWasUp, origDemo
+		mutex.Unlock()
+	})
+	mutex.Lock()
+	// Running: the start branch is dead whatever the link does, so the tick
+	// can't poke the shared worker.
+	infernoState, demoMode = InfernoRunning, false
+	mutex.Unlock()
+
+	stop := make(chan struct{})
+	exited := make(chan struct{})
+	go func() { networkMonitorLoop(stop); close(exited) }()
+	close(stop)
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("network monitor did not exit on stop")
+	}
+}
+
+// A rapid demo off/on toggle must not let the exiting generator destroy its
+// successor: the old loop used to close whatever demoFifoKeeper pointed at,
+// which after a fast restart is the NEW keeper - leaking the old fd and
+// silently dropping the new FIFO back to 64KB. Generations (passed explicitly,
+// never re-read from the global) make each loop release only its own fd.
+func TestDemoRapidToggleKeepsNewKeeper(t *testing.T) {
+	initTestHardware(t)
+	demoTestCleanup(t)
+	origKeeper, origGen := demoFifoKeeper, demoFifoGen
+	t.Cleanup(func() {
+		mutex.Lock()
+		// demoTestCleanup stops the generator; restore only if it left one.
+		if demoFifoKeeper == nil {
+			demoFifoKeeper, demoFifoGen = origKeeper, origGen
+		}
+		mutex.Unlock()
+	})
+
+	mutex.Lock()
+	startDemoGeneratorLocked()
+	oldPath := demoFifoPath
+	// The old loop needs the mutex for its exit cleanup, which is held
+	// continuously through the stop+start below - so it cannot exit before
+	// the successor exists, and the aliasing window under test always opens
+	// (unless the loop errored on open, in which case there is no race and
+	// the assertions below still hold).
+	stopDemoGeneratorLocked()
+	startDemoGeneratorLocked()
+	newPath, newGen := demoFifoPath, demoFifoGen
+	mutex.Unlock()
+	if oldPath == "" || newPath == "" || oldPath == newPath {
+		t.Fatalf("generator did not produce two distinct FIFOs (%q, %q)", oldPath, newPath)
+	}
+
+	// Wait for the old loop to actually exit (it removes its own FIFO file
+	// on the way out) - only then has the aliasing window closed.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("old demo generator did not exit")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if demoFifoKeeper == nil {
+		t.Fatal("exiting old generator cleared the successor keeper")
+	}
+	if demoFifoGen != newGen {
+		t.Errorf("generation = %d, want %d", demoFifoGen, newGen)
+	}
+	if _, err := os.Stat(newPath); err != nil {
+		t.Errorf("new FIFO %s missing: %v", newPath, err)
+	}
+	// Leave no generator running: demoTestCleanup only stops it when demo
+	// mode itself was enabled, which this test bypasses to drive the
+	// start/stop pair directly.
+	stopDemoGeneratorLocked()
+	mutex.Unlock()
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(newPath); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("new demo generator did not stop")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mutex.Lock()
+}
+
+// A confirmed shutdown must not vanish into a full queue: enqueueSystemOp
+// waits bounded instead of dropping, so the UI's post-confirm state always
+// reflects an action that will run.
+func TestEnqueueSystemOpWaitsWhenFull(t *testing.T) {
+	initTestHardware(t)
+	origTimeout := systemOpEnqueueTimeout
+	systemOpEnqueueTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { systemOpEnqueueTimeout = origTimeout })
+	// No worker drains the channel in tests; fill it exactly (it must start
+	// empty - anything left would be a leak from another test), and drain
+	// whatever is left in cleanup so no other test can observe leftovers.
+	for i := 0; i < cap(systemOpCh); i++ {
+		select {
+		case systemOpCh <- opFormatUSB:
+		default:
+			t.Fatalf("systemOpCh already held %d items; leaking test?", i)
+		}
+	}
+	t.Cleanup(func() {
+		for {
+			select {
+			case <-systemOpCh:
+			default:
+				return
+			}
+		}
+	})
+	start := time.Now()
+	if enqueueSystemOp(opShutdown) {
+		t.Fatal("enqueue reported sent into a full queue")
+	}
+	if elapsed := time.Since(start); elapsed < 50*time.Millisecond {
+		t.Fatalf("enqueue returned after %s on a full queue; expected it to wait out the timeout", elapsed)
+	}
+	// With a free slot the same call must go through immediately.
+	<-systemOpCh
+	start = time.Now()
+	if !enqueueSystemOp(opShutdown) {
+		t.Fatal("enqueue failed despite a free slot")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("enqueue blocked %s despite a free slot", elapsed)
+	}
+	<-systemOpCh // the one just sent; the fill cleanup drains the other three
+}
+
+// Restart/start requests stay best-effort and coalescing: a full queue drops
+// with a warning and the next change re-fires. Stop never takes this path
+// (stopInfernoAndWait has its own bounded send); this pins that contract by
+// asserting drops only ever happen here, promptly.
+func TestEnqueueInfernoDropsPromptlyWhenFull(t *testing.T) {
+	initTestHardware(t)
+	for i := 0; i < cap(infernoReqCh); i++ {
+		select {
+		case infernoReqCh <- infernoRequest{cmd: infernoCmdRestart}:
+		default:
+			t.Fatalf("infernoReqCh already held %d items; leaking test?", i)
+		}
+	}
+	t.Cleanup(func() {
+		for i := 0; i < cap(infernoReqCh); i++ {
+			<-infernoReqCh
+		}
+	})
+	start := time.Now()
+	enqueueInferno(infernoCmdRestart)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("best-effort enqueue blocked %s on a full queue", elapsed)
 	}
 }

@@ -1038,7 +1038,7 @@ func main() {
 	go systemOpWorker()
 	go detectUSB()
 	go updateLoop()
-	go networkMonitorLoop()
+	go networkMonitorLoop(shutdownCh)
 	go peakHoldLoop()
 	go cpuUsageLoop()
 	go telemetryHistLoop()
@@ -1122,6 +1122,17 @@ const shutdownWaitMargin = 2 * time.Second
 
 func shutdownWaitTimeout() time.Duration { return ffmpegStopGrace + shutdownWaitMargin }
 
+// waitChannel waits for done up to d, reporting whether it closed in time.
+// waitDone is the shutdown flavor with the derived timeout.
+func waitChannel(done <-chan struct{}, d time.Duration) bool {
+	select {
+	case <-done:
+		return true
+	case <-time.After(d):
+		return false
+	}
+}
+
 // waitDone waits for a reaping goroutine with a shutdown-bounded timeout.
 func waitDone(done <-chan struct{}, what string) {
 	select {
@@ -1133,7 +1144,10 @@ func waitDone(done <-chan struct{}, what string) {
 
 func gracefulShutdown() {
 	// Stop accepting new work first: a record/play arriving mid-drain would
-	// start transport the drain below just stood down.
+	// start transport the drain below just stood down. Close the shutdown
+	// channel before anything else so the network monitor can't enqueue a
+	// fresh Inferno start mid-teardown.
+	shutdownOnce.Do(func() { close(shutdownCh) })
 	closeRemoteServer()
 	stopHyperdeckServer()
 	// Drop the mDNS advertisement: otherwise avahi-publish-service is
@@ -1929,6 +1943,11 @@ var infernoReqCh = make(chan infernoRequest, 8)
 // case dropping is preferable to blocking the caller - which typically
 // holds the app mutex.
 func enqueueInferno(cmd infernoCommand) {
+	// Best-effort by design, not by accident: start/restart are idempotent
+	// and re-fired on every relevant change (encoder spins, network flaps),
+	// so a dropped duplicate converges on the next one. Stop must never
+	// take this path - it goes exclusively through stopInfernoAndWait, whose
+	// bounded send refuses to drop it.
 	select {
 	case infernoReqCh <- infernoRequest{cmd: cmd}:
 	default:
@@ -2046,7 +2065,13 @@ func infernoWorker() {	for req := range infernoReqCh {
 	}
 }
 
-func networkMonitorLoop() {
+// shutdownCh is closed once by gracefulShutdown; long-lived loops select on
+// it so teardown can't race them. shutdownOnce because signals can arrive
+// twice; closing twice would panic.
+var shutdownCh = make(chan struct{})
+var shutdownOnce sync.Once
+
+func networkMonitorLoop(stop <-chan struct{}) {
 	for {
 		// Probe outside the lock: network I/O must never stall
 		// render()/input handling behind the app mutex.
@@ -2068,7 +2093,15 @@ func networkMonitorLoop() {
 		networkWasUp = networkUp
 		mutex.Unlock()
 
-		time.Sleep(5 * time.Second) // Check every 5 seconds
+		// Check every 5 seconds, but wake immediately for shutdown: without
+		// this a link flap in the teardown window enqueues a fresh Inferno
+		// start that the worker obediently runs during/after teardown,
+		// orphaning a server plus a stale FIFO after exit.
+		select {
+		case <-stop:
+			return
+		case <-time.After(5 * time.Second):
+		}
 	}
 }
 
@@ -2112,8 +2145,10 @@ var demoMode bool
 var demoFifoPath string
 
 // demoFifoKeeper is held for the demo FIFO's lifetime, same reason as
-// fifoKeeper - see enlargeFifo.
+// fifoKeeper - see enlargeFifo. demoFifoGen tags which generation owns it;
+// see demoGenLoop.
 var demoFifoKeeper *os.File
+var demoFifoGen uint64
 var demoGenQuit chan struct{}
 var demoGenRunning bool
 
@@ -2196,15 +2231,23 @@ func enlargeFifo(path string) *os.File {
 // uniqueRecordingFile returns a path in dir for stem that doesn't collide
 // with an existing take. Second-resolution timestamps collide when takes
 // start within the same second; without the -1, -2 suffix ffmpeg would
-// truncate the previous take.
-func uniqueRecordingFile(dir, stem string) string {
+// truncate the previous take. A persistent stat failure (e.g. an unreadable
+// directory) is an error, not a collision: treating every error as "exists"
+// would spin the UI mutex forever.
+func uniqueRecordingFile(dir, stem string) (string, error) {
 	path := filepath.Join(dir, stem+".wav")
-	for n := 1; ; n++ {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return path
+	for n := 1; n <= 1000; n++ {
+		_, err := os.Stat(path)
+		if err == nil {
+			path = filepath.Join(dir, fmt.Sprintf("%s-%d.wav", stem, n))
+			continue
 		}
-		path = filepath.Join(dir, fmt.Sprintf("%s-%d.wav", stem, n))
+		if os.IsNotExist(err) {
+			return path, nil
+		}
+		return "", err
 	}
+	return "", fmt.Errorf("too many colliding takes for %s", stem)
 }
 
 func demoFifoName() string {
@@ -2224,11 +2267,13 @@ func startDemoGeneratorLocked() {
 		return
 	}
 	demoFifoKeeper = enlargeFifo(path)
+	demoFifoGen++
+	gen := demoFifoGen
 	demoFifoPath = path
 	quit := make(chan struct{})
 	demoGenQuit = quit
 	demoGenRunning = true
-	go demoGenLoop(path, quit)
+	go demoGenLoop(path, quit, demoFifoKeeper, gen)
 	logInfof("demo: generator started on %s", path)
 }
 
@@ -2271,17 +2316,22 @@ func setDemoModeLocked(on bool) bool {
 // its poller instead of returning EAGAIN, which would wedge the loop with no
 // reader draining and ignore quit forever. Raw O_NONBLOCK writes give true
 // EAGAIN so every iteration stays responsive to quit.
-func demoGenLoop(path string, quit <-chan struct{}) {
-	// Registered before the open attempt so the keeper is released on every
-	// exit, including the early return below. This goroutine is the sole owner
-	// of demoFifoKeeper once started, so stopDemoGeneratorLocked only signals.
+func demoGenLoop(path string, quit <-chan struct{}, keeper *os.File, gen uint64) {
+	// The keeper is passed explicitly (not read back from the global) so a
+	// rapid off/on toggle can't alias generations: if a successor already
+	// took over (global generation moved on), this loop must neither close
+	// the successor's fd nor clear the global - but it must still close its
+	// OWN fd, or that leaks. Registered before the open attempt so every
+	// exit path, including the early return below, releases correctly.
 	defer func() {
 		mutex.Lock()
-		if demoFifoKeeper != nil {
-			demoFifoKeeper.Close()
+		if demoFifoGen == gen {
 			demoFifoKeeper = nil
 		}
 		mutex.Unlock()
+		if keeper != nil {
+			keeper.Close()
+		}
 	}()
 	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
 	if err != nil {
@@ -2484,6 +2534,46 @@ func doStartInferno() {
 // then releases it before signaling and waiting on the subprocess, which
 // can take an unbounded amount of time if it doesn't respond to SIGTERM
 // promptly.
+// infernoStopGrace/infernoKillGrace bound doStopInferno: SIGTERM, wait, then
+// SIGKILL, then give up and let systemd reap the cgroup rather than wedging
+// infernoWorker forever. Vars (like ffmpegStopGrace) so tests can shrink them.
+var infernoStopGrace = 5 * time.Second
+var infernoKillGrace = 3 * time.Second
+
+// stopProcessGroup terminates a Setpgid child and any grandchildren it
+// spawned: SIGTERM, bounded wait, SIGKILL, bounded wait, then abandon. Signals
+// go to the negative PID (the child's process group) so grandchildren die
+// instead of being orphaned; the PID itself can't have been recycled because
+// cmd.Wait hasn't returned (a zombie still holds it).
+func stopProcessGroup(cmd *exec.Cmd, what string) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	pid := cmd.Process.Pid
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		logWarnf("%s: SIGTERM failed: %v", what, err)
+	}
+	waitCh := make(chan struct{})
+	go func() {
+		cmd.Wait()
+		close(waitCh)
+	}()
+	select {
+	case <-waitCh:
+		return
+	case <-time.After(infernoStopGrace):
+	}
+	logWarnf("%s did not exit after SIGTERM, sending SIGKILL", what)
+	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		logWarnf("%s: SIGKILL failed: %v", what, err)
+	}
+	select {
+	case <-waitCh:
+	case <-time.After(infernoKillGrace):
+		logErrorf("%s did not exit after SIGKILL, abandoning (systemd will reap the cgroup)", what)
+	}
+}
+
 func doStopInferno() {
 	mutex.Lock()
 	cmd := infernoCmd
@@ -2496,33 +2586,18 @@ func doStopInferno() {
 	mutex.Unlock()
 
 	if cmd != nil && cmd.Process != nil {
-		// Signal the whole process group (see Setpgid comment in
-		// doStartInferno) so the inferno binary and any grandchild it
-		// spawned actually get SIGTERM instead of being orphaned, then wait
-		// with a timeout and escalate to SIGKILL if it won't die - a hung
-		// server must never stall infernoWorker (and through
-		// stopInfernoAndWait, gracefulShutdown) forever.
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-
-		waitCh := make(chan struct{})
-		go func() {
-			cmd.Wait()
-			close(waitCh)
-		}()
-		select {
-		case <-waitCh:
-		case <-time.After(5 * time.Second):
-			logWarnf("Inferno server did not exit after SIGTERM, sending SIGKILL")
-			syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			<-waitCh
-		}
+		stopProcessGroup(cmd, "Inferno server")
 	}
 
 	if path != "" {
 		if keeper != nil {
-			keeper.Close()
+			if err := keeper.Close(); err != nil {
+				logWarnf("Inferno FIFO keeper close failed: %v", err)
+			}
 		}
-		os.Remove(path)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			logWarnf("Inferno FIFO remove %s failed: %v", path, err)
+		}
 	}
 
 	logInfof("Inferno server stopped")
@@ -2553,11 +2628,19 @@ const (
 
 var systemOpCh = make(chan systemOp, 4)
 
-func enqueueSystemOp(op systemOp) {
+// systemOpEnqueueTimeout bounds a confirmed system-op enqueue. The worker
+// receives without holding the app mutex, so waiting here can stall the
+// caller but never deadlock the system; dropping a user-confirmed shutdown
+// silently would be worse than a brief stall.
+var systemOpEnqueueTimeout = 5 * time.Second
+
+func enqueueSystemOp(op systemOp) bool {
 	select {
 	case systemOpCh <- op:
-	default:
-		logWarnf("system op: channel full, dropping %d", op)
+		return true
+	case <-time.After(systemOpEnqueueTimeout):
+		logErrorf("system op queue stuck, dropping %d", op)
+		return false
 	}
 }
 
@@ -2607,7 +2690,12 @@ func startRecording() {
 	// list (Round 3 design: prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav); an
 	// unset prefix keeps the historical "recording_..." default.
 	stem := fmt.Sprintf("%s_%s_ch%d_%dkHz", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000)
-	recordingFile = uniqueRecordingFile(recordingSubdir(recordStart), stem)
+	path, err := uniqueRecordingFile(recordingSubdir(recordStart), stem)
+	if err != nil {
+		logErrorf("Cannot start recording: %v", err)
+		return
+	}
+	recordingFile = path
 
 	// Create recording directory
 	os.MkdirAll(filepath.Dir(recordingFile), 0755)
@@ -2708,6 +2796,12 @@ func startRecording() {
 	// render() and every button/encoder callback for as long as that took.
 	go func() {
 		cmd.Wait()
+		// Bound the meterReader goroutine (see the comment above): if an
+		// orphaned grandchild inherited stdout, the pipe never EOFs and the
+		// reader plus its fd would leak permanently. Closing our read side
+		// unblocks it; Wait has already reclaimed the process, so unlike
+		// gating Wait on the reader this cannot deadlock.
+		_ = stdout.Close()
 		var closedFile string
 		mutex.Lock()
 		if ffmpegCmd == cmd {
@@ -2923,6 +3017,8 @@ func startMonitor() {
 	// monitor was stopped explicitly or preempted by a real recording.
 	go func() {
 		cmd.Wait()
+		// Same orphan-stdout bound as the recording reaper above.
+		_ = stdout.Close()
 		mutex.Lock()
 		if monitorCmd == cmd {
 			monitorCmd = nil
@@ -3421,16 +3517,26 @@ func restartPlaybackAt(pos time.Duration) {
 		// Release the device before opening it again; never hold the app
 		// mutex while waiting on a subprocess.
 		mutex.Unlock()
-		select {
-		case <-oldDone:
-		case <-time.After(2 * time.Second):
+		exited := waitChannel(oldDone, 2*time.Second)
+		if !exited {
 			logWarnf("seek: old playback did not exit in 2s, killing")
 			if old != nil && old.Process != nil {
-				old.Process.Signal(syscall.SIGKILL)
+				if err := old.Process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+					logWarnf("seek: SIGKILL failed: %v", err)
+				}
 			}
-			<-oldDone
+			exited = waitChannel(oldDone, 2*time.Second)
 		}
 		mutex.Lock()
+		if !exited {
+			// SIGKILL-immune (D-state): starting a new playback would fail
+			// on the still-held ALSA device, so abandon the seek, leave the
+			// deck as it was, and let the old reaper clear state if the
+			// process ever exits.
+			logErrorf("seek: old playback survived SIGKILL, abandoning seek")
+			seekingPlayback = false
+			return
+		}
 	}
 	cancelled := !seekingPlayback
 	seekingPlayback = false
