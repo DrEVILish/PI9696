@@ -52,8 +52,9 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 source ~/.cargo/env
 ```
 
-`libasound2-dev` is only needed for the ALSA plugin target; the app itself needs
-no ALSA library.
+`libasound2-dev` is required twice over: for Inferno's ALSA plugin target, and for
+the app itself — `alsapcm/` uses cgo (`pkg-config alsa`), so any `go build ./...`
+or `go test ./...` needs the headers.
 
 ---
 
@@ -277,9 +278,11 @@ Generate the unit from the repo template rather than writing one by hand — the
 template carries the mount and hardening decisions that matter:
 
 ```bash
+mkdir -p /rec /var/log/pi9696 /etc/pi9696
 sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696.service \
     > /etc/systemd/system/pi9696.service
-cp deploy/pi9696-clock.service /etc/systemd/system/
+sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696-clock.service \
+    > /etc/systemd/system/pi9696-clock.service
 printf 'PI9696_REMOTE_PORT=80\n' > /opt/pi9696/.env   # optional; default 8080
 systemctl daemon-reload
 systemctl enable --now pi9696-clock pi9696
