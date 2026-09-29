@@ -3084,6 +3084,7 @@ var statusTmpl = template.Must(template.New("status").Parse(`
  {{else if .MonOutput}}<p class="idle">&#9654; Monitoring output - playing {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch {{.Elapsed}}</p>
  {{else if .Monitoring}}<p class="idle">&#128266; Monitoring input - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
 {{else}}<p class="idle">Idle - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
+{{if .Notice}}<p class="err">{{.Notice}}</p>{{end}}
 {{if not .InfernoUp}}<p>(Inferno not running &mdash; build the Inferno binary and restart)</p>{{end}}
 {{if .DemoMode}}<p>(Demo mode &mdash; simulated audio)</p>{{end}}
 {{end}}
@@ -3093,6 +3094,17 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 <p>Disk /rec: {{printf "%.0f" .DiskTotal}}GB / {{printf "%.0f" .DiskFree}}GB free &middot; record: {{.RecordTime}}</p>
 </div>`))
 
+// webNotice/webNoticeUntil is the dashboard counterpart of sysNotice: a
+// one-shot error line rendered into the status panel. startPlayback uses it
+// for the sample-rate/channel refusal, which previously only reached the log.
+var webNotice string
+var webNoticeUntil time.Time
+
+func showWebNotice(msg string) {
+	webNotice = msg
+	webNoticeUntil = time.Now().Add(6 * time.Second)
+}
+
 type statusView struct {
 	Recording   bool
 	Playing     bool
@@ -3101,6 +3113,7 @@ type statusView struct {
 	MonOutput   bool
 	Elapsed     string
 	Meter       string
+	Notice      string
 	Format      string
 	SampleRate  int
 	Channels    int
@@ -3127,6 +3140,7 @@ func currentStatusView() statusView {
 		Paused:     currentState == StatePaused,
 		Monitoring: monitoring,
 		MonOutput:  monitoringOutput,
+		Notice:     webNoticeIfLive(),
 		Format:     "WAV",
 		SampleRate: sampleRates[sampleRateIdx] / 1000,
 		Channels:   channelCount,
@@ -3149,6 +3163,17 @@ func currentStatusView() statusView {
 	v.RAMApp, v.RAMInferno, v.RAMSysUsed, v.RAMSysTotal = t.RAMApp, t.RAMInferno, t.RAMSysUsed, t.RAMSysTotal
 	v.CPUTemp, v.DiskTotal, v.DiskFree, v.RecordTime = t.CPUTemp, t.DiskTotal, t.DiskFree, t.RecordTime
 	return v
+}
+
+// webNoticeIfLive returns the pending dashboard notice, if any, and clears
+// it once expired. Must be called with the app mutex held, like the rest of
+// currentStatusView.
+func webNoticeIfLive() string {
+	if webNotice == "" || !time.Now().Before(webNoticeUntil) {
+		webNotice = ""
+		return ""
+	}
+	return webNotice
 }
 
 func renderStatusHTML() (string, error) {
