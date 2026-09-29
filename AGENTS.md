@@ -10,6 +10,8 @@ After each commit and build, restart the pi9696 service.
 - `test-unit.example` is a reverse proxy to the pi9696 **test** server, `192.0.2.69`, serving on port 80. The test server runs on the target hardware.
 - `dev-server.example` is a reverse proxy to the pi9696 **dev** server, `192.0.2.162`, serving on port 8080.
 - Both machines are reachable via `ssh root@<ip-address>`. The repo is installed under `/opt` on each.
+- **Dev only:** you may install extra tooling (npm, Playwright/Chromium or other browsers, etc.) for screenshots and UI testing.
+- **Test:** never install extra applications or packages on the test server. It runs on the target hardware and must stay limited to what the recorder itself needs. Do screenshots and browser-driven testing from the dev server instead.
 
 ## Conventions
 
