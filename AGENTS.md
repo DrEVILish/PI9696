@@ -5,6 +5,12 @@ Raspberry Pi digital audio recorder: records an Inferno (AES67/Dante) network st
 After each Bug fix or feature request, each must be commited as seperate items with notes and information so that any mistakes or issues can be easily reverted.
 After each commit and build, restart the pi9696 service.
 
+## Environments
+
+- `pi9696-test.drevilish.com` is a reverse proxy to the pi9696 **test** server, `192.168.10.69`, serving on port 80. The test server runs on the target hardware.
+- `pi9696-dev.drevilish.com` is a reverse proxy to the pi9696 **dev** server, `192.168.10.162`, serving on port 8080.
+- Both machines are reachable via `ssh root@<ip-address>`. The repo is installed under `/opt` on each.
+
 ## Conventions
 
 - Docs: `README.md` is the design guide (features/UX/UI/architecture), `WIRING.md` is GPIO/power, `PROJECT_STATUS.md` is the design record (decisions, status, feature history). Keep lamp/pin tables in sync with `hardware/lamps.go`.
