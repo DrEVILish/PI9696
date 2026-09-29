@@ -32,8 +32,12 @@ Restart=always
 RestartSec=5
 # Give a graceful stop window so an in-flight recording segment can be
 # finalized (verified: ffmpeg's WAV segment muxer writes valid RIFF/data chunk
-# sizes for the partial segment on SIGTERM).
-TimeoutStopSec=20
+# sizes for the partial segment on SIGTERM). Must cover the worst case in
+# series: one transport child through its full SIGTERM-then-SIGKILL grace
+# (ffmpegStopGrace + margin, currently 12s) plus the Inferno stop (10s), with
+# headroom - cutting it short SIGKILLs ffmpeg mid-WAV-header and corrupts the
+# take gracefulShutdown exists to save.
+TimeoutStopSec=30
 # Kill the whole cgroup, but allow processes a chance to clean up first.
 KillMode=mixed
 

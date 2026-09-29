@@ -3749,3 +3749,139 @@ func TestUniqueRecordingFileCollision(t *testing.T) {
 		t.Errorf("second collision = %q, want %q", got, want)
 	}
 }
+
+// shutdownWaitTimeout must cover the whole SIGTERM-then-SIGKILL sequence
+// terminateFfmpeg runs, or shutdown abandons takes ffmpeg is still finalizing
+// (the corruption gracefulShutdown exists to prevent). It must also fit the
+// unit's TimeoutStopSec=30 with the 10s Inferno stop still to come.
+func TestShutdownWaitCoversFfmpegGrace(t *testing.T) {
+	got := shutdownWaitTimeout()
+	if got < ffmpegStopGrace {
+		t.Fatalf("shutdown wait %s is shorter than the ffmpeg kill grace %s", got, ffmpegStopGrace)
+	}
+	if got > 20*time.Second {
+		t.Fatalf("shutdown wait %s leaves no room for the Inferno stop inside TimeoutStopSec=30", got)
+	}
+}
+
+// The fast path must not wait at all: an already-reaped child returns
+// immediately instead of burning the whole timeout.
+func TestWaitDoneReturnsOnClosedDone(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	start := time.Now()
+	waitDone(done, "test")
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("waitDone blocked %s on an already-closed channel", elapsed)
+	}
+}
+
+// formatBusyNow is the worker-side re-check that stops mkfs landing on a live
+// copy target: a take, playback or copy that started after the confirm screen
+// must abort the format.
+func TestFormatBusyNow(t *testing.T) {
+	initTestHardware(t)
+	origRec, origCmd, origCopy := isRecording, playbackCmd, isCopying
+	t.Cleanup(func() {
+		mutex.Lock()
+		isRecording, playbackCmd, isCopying = origRec, origCmd, origCopy
+		mutex.Unlock()
+	})
+	mutex.Lock()
+	isRecording, playbackCmd, isCopying = false, nil, false
+	mutex.Unlock()
+	if formatBusyNow() {
+		t.Fatal("idle transport reported busy")
+	}
+	for _, tc := range []struct {
+		name      string
+		recording bool
+		cmd       bool
+		copying   bool
+	}{
+		{"recording", true, false, false},
+		{"playback", false, true, false},
+		{"copy", false, false, true},
+		{"all", true, true, true},
+	} {
+		mutex.Lock()
+		isRecording = tc.recording
+		isCopying = tc.copying
+		if tc.cmd {
+			playbackCmd = exec.Command("true")
+		} else {
+			playbackCmd = nil
+		}
+		mutex.Unlock()
+		if !formatBusyNow() {
+			t.Errorf("busy transport (%s) reported idle", tc.name)
+		}
+	}
+}
+
+// Shutdown must cancel an active USB copy instead of abandoning a partial
+// dst.tmp: the worker sees the cleared flag at the next boundary, exits, and
+// the wait returns - all without touching the network, hardware, or server.
+func TestShutdownCancelsCopy(t *testing.T) {
+	initTestHardware(t)
+	origCopy, origDone := isCopying, copyDone
+	t.Cleanup(func() {
+		mutex.Lock()
+		isCopying, copyDone = origCopy, origDone
+		mutex.Unlock()
+	})
+	mutex.Lock()
+	isCopying = true
+	copyDone = make(chan struct{})
+	done := copyDone
+	mutex.Unlock()
+
+	// Stand in for the copy worker: exit when cancelled.
+	sawCancel := make(chan struct{})
+	go func() {
+		for {
+			mutex.Lock()
+			cancelled := !isCopying
+			mutex.Unlock()
+			if cancelled {
+				close(sawCancel)
+				mutex.Lock()
+				close(done)
+				mutex.Unlock()
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+
+	start := time.Now()
+	cancelCopyAndWait()
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("cancel took %s", elapsed)
+	}
+	select {
+	case <-sawCancel:
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker never observed the cancel")
+	}
+}
+
+// With no copy running, the shutdown path must be a no-op (and must not
+// block on a nil channel).
+func TestCancelCopyAndWaitIdle(t *testing.T) {
+	initTestHardware(t)
+	origCopy, origDone := isCopying, copyDone
+	t.Cleanup(func() {
+		mutex.Lock()
+		isCopying, copyDone = origCopy, origDone
+		mutex.Unlock()
+	})
+	mutex.Lock()
+	isCopying, copyDone = false, nil
+	mutex.Unlock()
+	start := time.Now()
+	cancelCopyAndWait()
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("idle cancel took %s", elapsed)
+	}
+}
