@@ -13,5 +13,5 @@ After each commit and build, restart the pi9696 service.
 
 ## Conventions
 
-- Docs: `README.md` is the design guide (features/UX/UI/architecture), `WIRING.md` is GPIO/power, `PROJECT_STATUS.md` is the design record (decisions, status, feature history). Keep lamp/pin tables in sync with `hardware/lamps.go`.
-- The OLED uses fixed 256×64 layout with specific font contexts (`statusbar`/`header`/`menu`/`selected`/`details`/`alert`); new menu text must fit one 256px line or it silently overflows.
+- Docs: `README.md` is the single design document (features/UX/UI/architecture/decisions/status); `WIRING.md` is GPIO/power. There is no separate design record. Keep lamp/pin tables in sync with `hardware/lamps.go`.
+- The OLED uses fixed 256×64 layout with specific font contexts (`statusbar`/`header`/`menu`/`selected`/`details`/`alert`/`recording`); new menu text must fit one 256px line or it silently overflows.

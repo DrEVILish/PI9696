@@ -555,8 +555,8 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		// No Secure flag: this server is plain HTTP (see PROJECT_STATUS.md's
-		// remote-control notes for why, and what that means for LAN
+		// No Secure flag: this server is plain HTTP (see README's Auth &
+		// Security notes for why, and what that means for LAN
 		// eavesdropping risk). The server-side lifetime is enforced by
 		// sessionStore.valid, not this client-side MaxAge.
 		MaxAge: int(sessionLifetime / time.Second),
