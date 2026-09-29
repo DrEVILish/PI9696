@@ -393,9 +393,9 @@ type loginPageData struct {
 	Logo              template.HTML
 	// Theme/ThemeCSS mirror the dashboard's opt-in theming so the login
 	// page is the same product, not a stranger: data-theme scopes the
-	// --ftl-* tokens (e.g. --ftl-font) the stylesheet reads. Unthemed
+	// design tokens (e.g. --font) the stylesheet reads. Unthemed
 	// renders exactly as before (no marker beyond "none", no href).
-	// CoreVersion cache-busts the always-linked ftl-core.css.
+	// CoreVersion cache-busts the always-linked core.css.
 	Theme, ThemeCSS, CoreVersion string
 	// HTMLTag is the prebuilt <html> open tag carrying data-theme and the
 	// library display options (motion/contrast/density).
@@ -428,44 +428,44 @@ var loginPageTmpl = template.Must(template.New("login").Parse(`<!DOCTYPE html>
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <!-- Core is always linked (reset + shared components, no tokens of its own);
-   the active theme bundle on top supplies the --ftl-* tokens. -->
-<link rel="stylesheet" href="/static/themes/ftl-core.css?v={{.CoreVersion}}">
+   the active theme bundle on top supplies the palette. -->
+<link rel="stylesheet" href="/static/themes/core.css?v={{.CoreVersion}}">
 <link rel="stylesheet" href="{{.ThemeCSS}}">
 <style>
-body{font-family:var(--ftl-font,"Consolas",monospace);background:radial-gradient(ellipse at center,var(--ftl-surface,#0a1a2e),var(--ftl-bg,#020509) 75%);color:var(--ftl-text,#cfeeff);display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
+body{font-family:var(--font,"Consolas",monospace);background:radial-gradient(ellipse at center,var(--surface,#0a1a2e),var(--bg,#020509) 75%);color:var(--text,#cfeeff);display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;gap:2em}
 .logo-svg{width:480px;max-width:85vw;display:block}
-/* Box geometry is the shared .ftl-panel; the centered layout is app-owned. */
-form.ftl-panel{text-align:center;min-width:20em}
-.token-row{display:flex;align-items:center;justify-content:center;gap:var(--ftl-space-2xs,0.4em);margin-bottom:var(--ftl-space-m,1em)}
-.token-row .ftl-input{font-size:1.3em;width:1.4em;padding:0.4em 0;text-align:center;text-transform:uppercase}
-.token-row .dash{color:var(--ftl-muted,#5b8aa8);font-size:1.3em}
-.err{color:var(--ftl-danger,#ff3355)}
-.hint{color:var(--ftl-muted,#5b8aa8);font-size:0.85em;margin-top:1em}
+/* Box geometry is the shared .panel; the centered layout is app-owned. */
+form.panel{text-align:center;min-width:20em}
+.token-row{display:flex;align-items:center;justify-content:center;gap:var(--space-2xs,0.4em);margin-bottom:var(--space-m,1em)}
+.token-row .input{font-size:1.3em;width:1.4em;padding:0.4em 0;text-align:center;text-transform:uppercase}
+.token-row .dash{color:var(--muted,#5b8aa8);font-size:1.3em}
+.err{color:var(--danger,#ff3355)}
+.hint{color:var(--muted,#5b8aa8);font-size:0.85em;margin-top:1em}
 
 @media (max-width: 480px) {
-  form.ftl-panel{padding:1.5em 1.2em}
+  form.panel{padding:1.5em 1.2em}
   .token-row{gap:0.25em}
-  .token-row .ftl-input{width:1.1em;font-size:1.1em}
+  .token-row .input{width:1.1em;font-size:1.1em}
 }
 </style></head>
 <body>
 {{.Logo}}
-<form method="POST" action="/login" id="loginForm" class="ftl-panel">
+<form method="POST" action="/login" id="loginForm" class="panel">
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 <div class="token-row" id="tokenRow">
-<input class="ftl-input" maxlength="1" autofocus autocomplete="off" value="{{index .Boxes 0}}">
-<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 1}}">
-<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 2}}">
-<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 3}}">
+<input class="input" maxlength="1" autofocus autocomplete="off" value="{{index .Boxes 0}}">
+<input class="input" maxlength="1" autocomplete="off" value="{{index .Boxes 1}}">
+<input class="input" maxlength="1" autocomplete="off" value="{{index .Boxes 2}}">
+<input class="input" maxlength="1" autocomplete="off" value="{{index .Boxes 3}}">
 <span class="dash">-</span>
-<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 4}}">
-<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 5}}">
-<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 6}}">
-<input class="ftl-input" maxlength="1" autocomplete="off" value="{{index .Boxes 7}}">
+<input class="input" maxlength="1" autocomplete="off" value="{{index .Boxes 4}}">
+<input class="input" maxlength="1" autocomplete="off" value="{{index .Boxes 5}}">
+<input class="input" maxlength="1" autocomplete="off" value="{{index .Boxes 6}}">
+<input class="input" maxlength="1" autocomplete="off" value="{{index .Boxes 7}}">
 </div>
 <input type="hidden" name="token" id="tokenValue">
 <noscript><p><input name="token" maxlength="9" autocomplete="off" placeholder="XXXXXXXX" style="text-transform:uppercase"></p></noscript>
-<button type="submit" class="ftl-btn ftl-btn-primary">Enter</button>
+<button type="submit" class="btn btn-primary">Enter</button>
 <p class="hint">8-character code shown on the OLED (Settings &rarr; Remote Access)</p>
 </form>
 <script>
@@ -592,16 +592,17 @@ func handleAPIRotateToken(w http.ResponseWriter, r *http.Request) {
 
 // --- Themes ---------------------------------------------------------------
 //
-// The dashboard ships with its own look baked into the inline stylesheet
-// below; a theme from the ftl-themes submodule is an OPT-IN overlay on top
-// of it. With no theme selected (the default, and every existing install
-// after upgrade) nothing extra is linked and the page renders exactly as it
-// did before: the inline :root block's var(--ftl-*, <original value>)
-// fallbacks resolve to the original values because no --ftl-* token exists.
+// The dashboard reads ftl-themes' tokens directly (--accent, --surface,
+// --text, --muted, --danger, --success, --warning, --space-*). Selecting a
+// theme links one self-contained bundle that defines them, so every rule
+// re-colours with no rule needing editing; the app also re-lays-out the page
+// through the library's app-shell hooks.
 //
-// Selecting a theme links one self-contained bundle, which defines the
-// --ftl-* tokens and so re-colours every existing rule through those same
-// fallbacks - plus the app shell, which re-lays-out the page.
+// v4 dropped the ftl- prefix from every token, so the app deliberately
+// declares none of them itself: core.css already supplies the baseline set,
+// and a same-named declaration would silently override the theme (or, for
+// --text/--border, become self-referential and resolve to nothing).
+// TestDefaultThemeIsFTL enforces that.
 
 // defaultThemeSlug is the ftl-themes bundle a fresh or upgraded unit links:
 // xbmc's blue-on-navy is the closest shipping palette to the old built-in
@@ -643,7 +644,7 @@ func displayHTMLTag(theme string) template.HTML {
 		b.WriteString(` data-contrast="high"`)
 	}
 	if density != "1" {
-		b.WriteString(` style="--ftl-density:` + density + `"`)
+		b.WriteString(` style="--density:` + density + `"`)
 	}
 	b.WriteString(">")
 	return template.HTML(b.String())
@@ -808,9 +809,9 @@ var displayOptions = []displayOption{
 		set:     func(i int) { if i < len(displayDensityValues) { displayDensityIdx = i } },
 		carrier: func(i int) string {
 			if d := displayDensityValues[i]; d != "1" {
-				return `document.documentElement.style.setProperty("--ftl-density","` + d + `")`
+				return `document.documentElement.style.setProperty("--density","` + d + `")`
 			}
-			return `document.documentElement.style.removeProperty("--ftl-density")`
+			return `document.documentElement.style.removeProperty("--density")`
 		},
 	},
 }
@@ -889,9 +890,9 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		// hx-swap-oob="true" marks this as out-of-band content to execute
 		// in place: a bare <script> after the OOB <link> relied on htmx
 		// executing in-swapped scripts, which multi-node responses don't
-		// guarantee. The sprite rewrite keeps every .ftl-icon <use> pointed
+		// guarantee. The sprite rewrite keeps every .icon <use> pointed
 		// at the new theme's icon set (same ids, theme-authored shapes).
-		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);SPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null;document.querySelectorAll('.ftl-icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, iconSpriteHref(active))
+		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);SPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null;document.querySelectorAll('.icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, iconSpriteHref(active))
 	}
 }
 
@@ -975,10 +976,10 @@ func tagSelect() selectView {
 }
 
 var transportFragmentTmpl = template.Must(template.New("transport").Parse(`<div id="transportmode" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="/api/settings/transport-mode" hx-target="#transportmode" hx-swap="outerHTML">
-<label class="ftl-label">Transport Buttons</label>
-<select name="idx" class="ftl-select" onchange="this.form.requestSubmit()">
+<label class="label">Transport Buttons</label>
+<select name="idx" class="select" onchange="this.form.requestSubmit()">
 <option value="0" {{if eq .Idx 0}}selected{{end}}>Icon</option>
 <option value="1" {{if eq .Idx 1}}selected{{end}}>Text</option>
 </select>
@@ -991,10 +992,10 @@ func logLevelSelect() selectView {
 }
 
 var selectFragmentTmpl = template.Must(template.New("setting-select").Parse(`<div id="{{.Id}}" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="{{.Post}}" hx-target="#{{.Id}}" hx-swap="outerHTML">
-<label class="ftl-label">{{.Label}}</label>
-<select name="idx" class="ftl-select" onchange="this.form.requestSubmit()">
+<label class="label">{{.Label}}</label>
+<select name="idx" class="select" onchange="this.form.requestSubmit()">
 {{range $i, $v := .Options}}<option value="{{$i}}" {{if eq $i $.Idx}}selected{{end}}>{{$v}}{{$.Suffix}}</option>{{end}}
 </select>
 </form>
@@ -1068,11 +1069,11 @@ func tagOptionsView() optionsView {
 // readout while dragging and submits on release, so the panel responds only
 // when the operator finishes moving it.
 var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<div id="brightness" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="/api/settings/brightness" hx-target="#brightness" hx-swap="outerHTML">
-<label class="ftl-label" for="brightnessRange">Brightness</label>
-<span class="hint ftl-field-hint" id="brightnessVal">{{.Pct}}%</span>
-<input id="brightnessRange" class="ftl-slider" type="range" name="pct" min="0" max="100" step="1" value="{{.Pct}}" oninput="document.getElementById('brightnessVal').textContent=this.value+'%'" onchange="this.form.requestSubmit()" title="Panel brightness 0-100%">
+<label class="label" for="brightnessRange">Brightness</label>
+<span class="hint field-hint" id="brightnessVal">{{.Pct}}%</span>
+<input id="brightnessRange" class="slider" type="range" name="pct" min="0" max="100" step="1" value="{{.Pct}}" oninput="document.getElementById('brightnessVal').textContent=this.value+'%'" onchange="this.form.requestSubmit()" title="Panel brightness 0-100%">
 </form>
 </div>
 </div>`))
@@ -1080,12 +1081,12 @@ var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<di
 // autoDimFragmentTmpl is the Display -> Auto Dim setting: an on/off switch
 // for the dim-then-off idle behavior. Mirrors the WiFi switch markup.
 var autoDimFragmentTmpl = template.Must(template.New("autodim").Parse(`<div id="autodim" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="/api/settings/dim" hx-target="#autodim" hx-swap="outerHTML">
-<label class="ftl-label" for="autoDimToggle">Auto Dim</label>
-<label class="ftl-switch" for="autoDimToggle">
+<label class="label" for="autoDimToggle">Auto Dim</label>
+<label class="switch" for="autoDimToggle">
 <input id="autoDimToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
+<span class="switch-track"><span class="switch-thumb"></span></span>
 <span class="switch-readout" data-on="AUTO" data-off="MANUAL"></span>
 </label>
 </form>
@@ -1148,17 +1149,17 @@ func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
 // Mirrors the Demo Mode switch; the hint states the no-auth caveat so the
 // toggle reads as an informed choice, not a footnote.
 var hyperdeckFragmentTmpl = template.Must(template.New("hyperdeck").Parse(`<div id="hyperdeck" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="/api/settings/hyperdeck" hx-target="#hyperdeck" hx-swap="outerHTML">
-<label class="ftl-label" for="hyperdeckToggle">HyperDeck Control</label>
-<label class="ftl-switch" for="hyperdeckToggle">
+<label class="label" for="hyperdeckToggle">HyperDeck Control</label>
+<label class="switch" for="hyperdeckToggle">
 <input id="hyperdeckToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
+<span class="switch-track"><span class="switch-thumb"></span></span>
 <span class="switch-readout" data-on="ON" data-off="OFF"></span>
 </label>
 </form>
 </div>
-<div class="ftl-field-row"><span class="hint ftl-field-hint">TCP 9993, Blackmagic protocol, no auth while on</span></div>
+<div class="field-row"><span class="hint field-hint">TCP 9993, Blackmagic protocol, no auth while on</span></div>
 </div>`))
 
 type hyperdeckView struct {
@@ -1184,12 +1185,12 @@ func handleAPISettingsHyperdeck(w http.ResponseWriter, r *http.Request) {
 // demoFragmentTmpl is the Demo -> Demo Mode setting: an on/off switch for
 // the simulated-audio demonstration mode. Mirrors the Auto Dim switch.
 var demoFragmentTmpl = template.Must(template.New("demo").Parse(`<div id="demo" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="/api/settings/demo" hx-target="#demo" hx-swap="outerHTML">
-<label class="ftl-label" for="demoToggle">Demo Mode</label>
-<label class="ftl-switch" for="demoToggle">
+<label class="label" for="demoToggle">Demo Mode</label>
+<label class="switch" for="demoToggle">
 <input id="demoToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
+<span class="switch-track"><span class="switch-thumb"></span></span>
 <span class="switch-readout" data-on="DEMO" data-off="LIVE"></span>
 </label>
 </form>
@@ -1226,12 +1227,12 @@ func handleAPISettingsDemoMode(w http.ResponseWriter, r *http.Request) {
 // monitorFragmentTmpl is the Audio -> Monitoring setting: an on/off switch
 // for the input monitor. Mirrors the Demo Mode switch.
 var monitorFragmentTmpl = template.Must(template.New("monitor").Parse(`<div id="monitor" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="/api/settings/monitor" hx-target="#monitor" hx-swap="outerHTML">
-<label class="ftl-label" for="monitorToggle">Monitoring</label>
-<label class="ftl-switch" for="monitorToggle">
+<label class="label" for="monitorToggle">Monitoring</label>
+<label class="switch" for="monitorToggle">
 <input id="monitorToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
+<span class="switch-track"><span class="switch-thumb"></span></span>
 <span class="switch-readout" data-on="ON" data-off="OFF"></span>
 </label>
 </form>
@@ -1280,11 +1281,11 @@ func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
 }
 
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="/api/settings/channels" hx-target="#channelcount" hx-swap="outerHTML">
-<label class="ftl-label" for="channelsInput">Channels</label>
-<input id="channelsInput" class="ftl-input" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
-<span class="hint ftl-field-hint">1–{{.Max}}</span>
+<label class="label" for="channelsInput">Channels</label>
+<input id="channelsInput" class="input" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
+<span class="hint field-hint">1–{{.Max}}</span>
 </form>
 </div>
 </div>`))
@@ -1301,14 +1302,14 @@ type prefixView struct {
 // text field + OLED presets). It posts the literal prefix, validated to a
 // filename-safe charset server-side.
 var filePrefixFragmentTmpl = template.Must(template.New("fileprefix").Parse(`<div id="fileprefix" class="setting-cell">
-<div class="ftl-field-row">
+<div class="field-row">
 <form hx-post="/api/settings/prefix" hx-target="#fileprefix" hx-swap="outerHTML" hx-status:400="target:#prefix-error">
-<label class="ftl-label" for="filePrefixInput">Prefix</label>
-<div class="ftl-input-group">
-<input id="filePrefixInput" class="ftl-input" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
-<button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
+<label class="label" for="filePrefixInput">Prefix</label>
+<div class="input-group">
+<input id="filePrefixInput" class="input" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
+<button type="submit" class="btn btn-secondary">Save</button>
 </div>
-<span class="hint ftl-field-hint">file_YYYYMMDD…</span>
+<span class="hint field-hint">file_YYYYMMDD…</span>
 </form>
 <div id="prefix-error"></div>
 </div>
@@ -1603,12 +1604,12 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 <link rel="manifest" href="/manifest.json">
 <link rel="icon" href="/icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/icon.svg">
-<!-- Core is always linked (reset + shared components, no tokens of its
-   own); the active theme bundle on top supplies the --ftl-* tokens. Both
-   links precede the app <style>: per CONTRACT.md the app stylesheet loads
-   after the theme so its equal-specificity rules (e.g. the modal
-   backdrop's closed display:none) win the cascade. -->
-<link rel="stylesheet" href="/static/themes/ftl-core.css?v={{.CoreVersion}}">
+<!-- Core is always linked (reset + shared components, plus the baseline
+   token set); the active theme bundle on top supplies the palette. Both
+   links precede the app <style>: the app stylesheet loads after the theme
+   so its equal-specificity rules (e.g. the modal backdrop's closed
+   display:none) win the cascade. -->
+<link rel="stylesheet" href="/static/themes/core.css?v={{.CoreVersion}}">
 <link id="themecss" rel="stylesheet" href="{{.ThemeCSS}}">
 <meta name="theme-color" content="#00d9ff">
 <meta name="apple-mobile-web-app-capable" content="yes">
@@ -1617,43 +1618,43 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 <link rel="stylesheet" href="/static/uPlot.min.css">
 <script src="/static/uPlot.iife.min.js"></script>
 <style>
-/* Theme bridge: each built-in variable reads its ftl-themes token and
-   falls back to the value it has always had. With no theme linked no
-   --ftl-* token exists, every fallback applies, and the dashboard is
-   byte-identical to before. With a theme linked, every rule below
-   re-colours through these same names - no rule needed editing.
-   --meter-h and the JS-set --vu-* stay app-owned: they are geometry
-   and live signal data, not theming. */
-:root{--glow:var(--ftl-accent,#00d9ff);--panel:var(--ftl-surface,#0a1526);--border:var(--ftl-border,#0f3a5c);--text:var(--ftl-text,#cfeeff);--dim:var(--ftl-muted,#5b8aa8);--rec:var(--ftl-danger,#ff3355);--idle:var(--ftl-success,#2bffb0);--orange:var(--ftl-warning,#ff8c1a);--meter-h:120px;--ftl-meter-low:var(--ftl-success,#0aff9d);--ftl-meter-mid:var(--ftl-warning,#ffe400);--ftl-meter-high:var(--ftl-danger,#ff2a2a)}
+/* The only custom properties the app declares are the meter's geometry and
+   its green/yellow/red bands, which ftl-themes' .meter-fill consumes; every
+   other colour comes straight from the library. Since v4 removed the ftl-
+   prefix, declaring --text/--border here would shadow the theme and
+   declaring --accent/--surface/--muted/--danger/--success/--warning would
+   do the same - the old --glow/--panel/--dim/--rec/--idle/--orange bridge
+   is deliberately gone. See TestDefaultThemeIsFTL. */
+:root{--meter-h:120px;--meter-low:var(--success,#0aff9d);--meter-mid:var(--warning,#ffe400);--meter-high:var(--danger,#ff2a2a)}
 *{box-sizing:border-box}
-body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--ftl-surface,#0a1a2e),var(--ftl-bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
-h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--dim);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 var(--ftl-space-s,0.8em)}
-a{color:var(--glow)}
-input{font-family:inherit;background:var(--ftl-input-bg,#08192b);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
-button{font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--ftl-surface-2,#08192b);color:var(--glow);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
-button:hover{border-color:var(--glow);box-shadow:0 0 8px var(--glow)}
-button:active{background:var(--ftl-surface-2,#0f2a44)}
+body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--surface,#0a1a2e),var(--bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
+h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 var(--space-s,0.8em)}
+a{color:var(--accent)}
+input{font-family:inherit;background:var(--input-bg,#08192b);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
+button{font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
+button:hover{border-color:var(--accent);box-shadow:0 0 8px var(--accent)}
+button:active{background:var(--surface-2,#0f2a44)}
 button:disabled{opacity:0.35;cursor:default;box-shadow:none}
-button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--glow);outline-offset:2px}
-.ok{color:var(--idle)}
-.err{color:var(--rec)}
-.rec{color:var(--rec);font-weight:bold;text-shadow:0 0 8px var(--rec)}
-.idle{color:var(--idle)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
+.ok{color:var(--success)}
+.err{color:var(--danger)}
+.rec{color:var(--danger);font-weight:bold;text-shadow:0 0 8px var(--danger)}
+.idle{color:var(--success)}
 table{border-collapse:collapse;width:100%;font-size:0.82em}
 td,th{padding:0.3em 0.5em;border-bottom:1px solid var(--border)}
-th{color:var(--dim);text-transform:uppercase;font-size:0.72em;letter-spacing:0.08em;text-align:left}
+th{color:var(--muted);text-transform:uppercase;font-size:0.72em;letter-spacing:0.08em;text-align:left}
 
 /* Panels get HUD corner brackets - the recurring "sci-fi readout" motif
    tying the three columns together. */
-.panel{position:relative;background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:var(--ftl-space-m,1em) var(--ftl-space-l,1.2em);box-shadow:var(--ftl-panel-shadow,0 0 20px rgba(0,180,255,0.08),inset 0 0 30px rgba(0,180,255,0.03))}
-.panel::before,.panel::after{content:'';position:absolute;width:14px;height:14px;border:2px solid var(--glow);opacity:0.55}
+.panel{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:var(--space-m,1em) var(--space-l,1.2em);box-shadow:var(--panel-shadow,0 0 20px rgba(0,180,255,0.08),inset 0 0 30px rgba(0,180,255,0.03))}
+.panel::before,.panel::after{content:'';position:absolute;width:14px;height:14px;border:2px solid var(--accent);opacity:0.55}
 .panel::before{top:-1px;left:-1px;border-right:none;border-bottom:none}
 .panel::after{bottom:-1px;right:-1px;border-left:none;border-top:none}
 .left{text-align:left}
 .center{text-align:center}
 .right{text-align:right}
 .right table{text-align:right}
-.right td:first-child{text-align:left;color:var(--dim)}
+.right td:first-child{text-align:left;color:var(--muted)}
 
 /* Header deck: [logo] [OLED] [rotary] [transport], matching the physical
    front panel's left-to-right layout. Settings/logout sit apart, top right,
@@ -1664,7 +1665,7 @@ th{color:var(--dim);text-transform:uppercase;font-size:0.72em;letter-spacing:0.0
    small size at one fixed breakpoint. */
 header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row);align-items:center;justify-content:center;gap:clamp(0.3em,1.2vw,1.6em);flex-wrap:nowrap;padding:clamp(0.6em,1.2vw,1.2em) clamp(0.5em,2.5vw,5.5em);border-bottom:1px solid var(--border);margin-bottom:1.5em}
 .deck-logo .logo-svg{width:clamp(0px,11vw,255px)}
-.oled-frame{background:#000;border:2px solid var(--border);border-radius:6px;padding:clamp(3px,0.6vw,8px);display:inline-block;box-shadow:var(--ftl-panel-shadow,0 0 25px rgba(0,180,255,0.15))}
+.oled-frame{background:#000;border:2px solid var(--border);border-radius:6px;padding:clamp(3px,0.6vw,8px);display:inline-block;box-shadow:var(--panel-shadow,0 0 25px rgba(0,180,255,0.15))}
 .oled-frame img{width:clamp(170px,32vw,440px);height:auto;aspect-ratio:4/1;image-rendering:pixelated;display:block}
 .encoder-row{display:flex;align-items:center;gap:clamp(0.2em,0.5vw,0.5em)}
 .encoder-row button{font-size:clamp(0.7em,1.5vw,1.3em);width:clamp(1.3em,2.6vw,2.3em);padding:0.2em 0}
@@ -1673,40 +1674,40 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
    110px rendered height (see .oled-frame img above). Both dimensions shrink
    with the viewport so the row always fits. Icons come from the theme's
    ftl-themes sprite: stroke inherits each key's color via currentColor. */
-.transport-row{--ftl-icon-size:clamp(14px,2.2vw,30px);display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
+.transport-row{--icon-size:clamp(14px,2.2vw,30px);display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
 .transport-row button{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;display:flex;align-items:center;justify-content:center}
-.transport-row .record{border-color:var(--rec);color:var(--rec)}
-.transport-row .stop{color:var(--glow)}
-.transport-row .play{border-color:var(--idle);color:var(--idle)}
+.transport-row .record{border-color:var(--danger);color:var(--danger)}
+.transport-row .stop{color:var(--accent)}
+.transport-row .play{border-color:var(--success);color:var(--success)}
 /* The PLAY transport doubles as PAUSE while a track is running (see
    renderTransportRow) - the pause glyph in the accent color instead. */
-.transport-row .play.pause{border-color:var(--orange);color:var(--orange)}
+.transport-row .play.pause{border-color:var(--warning);color:var(--warning)}
 /* Text mode: the same transport keys but labelled instead of icon glyphs.
    Buttons stretch to fit and the label takes the accent colour the icon had. */
 .transport-row.text button{width:auto;min-width:clamp(2em,3.2vw,3.4em);font-size:clamp(0.55em,0.95vw,0.85em);letter-spacing:0.08em;padding:0 0.3em}
-.transport-row.text .record{color:var(--rec)}
-.transport-row.text .stop{color:var(--glow)}
-.transport-row.text .play{color:var(--idle)}
-.transport-row.text .play.pause{color:var(--orange)}
+.transport-row.text .record{color:var(--danger)}
+.transport-row.text .stop{color:var(--accent)}
+.transport-row.text .play{color:var(--success)}
+.transport-row.text .play.pause{color:var(--warning)}
 .header-actions{position:absolute;top:0.8em;right:clamp(0.5em,2vw,1.5em);display:flex;gap:0.5em}
 /* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
    - the base button{} rule above only targets <button>, so colors/border
    are repeated here rather than relied on from that selector. Icons are
-   .ftl-icon strokes inheriting currentColor; the lamp colors the span. */
-.icon-btn{--ftl-icon-size:clamp(14px,1.8vw,18px);width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:var(--ftl-surface-2,#08192b);color:var(--glow);border:1px solid var(--border);cursor:pointer;text-decoration:none}
-.icon-btn:hover{border-color:var(--orange);color:var(--orange)}
+   .icon strokes inheriting currentColor; the lamp colors the span. */
+.icon-btn{--icon-size:clamp(14px,1.8vw,18px);width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);cursor:pointer;text-decoration:none}
+.icon-btn:hover{border-color:var(--warning);color:var(--warning)}
 /* Conn lamp: broadcast glyph showing the telemetry socket state - glow blue
    while the server pushes, error red while disconnected. A span, not a
    button: no pointer affordance, and no hover recolor (it must never read
-   as a control). The ftl-icon stroke inherits the span's color. */
+   as a control). The icon stroke inherits the span's color. */
 .icon-btn.conn{cursor:default}
-.icon-btn.conn:hover{border-color:var(--border);color:var(--glow)}
-.icon-btn.conn.on{filter:drop-shadow(var(--ftl-lamp-glow,0 0 3px rgba(0,217,255,0.8)))}
-.icon-btn.conn.off{color:var(--rec)}
+.icon-btn.conn:hover{border-color:var(--border);color:var(--accent)}
+.icon-btn.conn.on{filter:drop-shadow(var(--lamp-glow,0 0 3px rgba(0,217,255,0.8)))}
+.icon-btn.conn.off{color:var(--danger)}
 /* Download ALL: a small labeled action in the Recordings heading - text,
    not just an icon, so its function reads at a glance. */
-.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--glow);background:var(--ftl-surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em;--ftl-icon-size:1em}
-.dl-all:hover{border-color:var(--glow)}
+.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--accent);background:var(--surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em;--icon-size:1em}
+.dl-all:hover{border-color:var(--accent)}
 
 .grid{display:grid;grid-template-columns:var(--pi-columns,1fr 1.6fr 1fr);gap:var(--pi-gap,1.2em)}
 /* Layout bridge (companion to the :root color bridge above): the structural
@@ -1717,19 +1718,19 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
    meter footer and modal sheets stay app-owned (see blue-future's
    stays-app-side section); regions themselves are shell-arranged. */
 
-/* ftl-app shell none-case (ftl-themes#3): with no theme linked these hooks
+/* app shell none-case (ftl-themes#3): with no theme linked these hooks
    must generate zero boxes: display:contents dissolves the wrapper (children lay
    out against body as they always did); the decorative rail is always empty
    in this app, so it never displays. Linked themes override both. */
-main.ftl-app-main{display:contents}
-.ftl-app-rail:empty{display:none}
+main.app-main{display:contents}
+.app-rail:empty{display:none}
 
 .recordings-section{padding:0 1.2em 1.2em}
-.recordings-section h2{margin:var(--ftl-space-l,1.2em) 0 var(--ftl-space-xs,0.6em);font-size:1.1em;letter-spacing:0.05em}
-/* The table is the shared .ftl-table.is-sticky (sticky head + themed rows);
+.recordings-section h2{margin:var(--space-l,1.2em) 0 var(--space-xs,0.6em);font-size:1.1em;letter-spacing:0.05em}
+/* The table is the shared .table.is-sticky (sticky head + themed rows);
    only the download cell's right alignment stays app-owned. */
 .recs-dl{text-align:right}
-.recs-note{font-size:0.75em;color:var(--dim);margin:0.6em 0 0}
+.recs-note{font-size:0.75em;color:var(--muted);margin:0.6em 0 0}
 
 /* Scrollable table wrapper for narrow viewports */
 .recordings-wrap{overflow-x:auto;max-width:100%}
@@ -1744,27 +1745,27 @@ main.ftl-app-main{display:contents}
 }
 
 /* Modals: the settings sheet and the stop-recording confirmation. The box,
-   overlay and close button are the shared ftl-modal family; this app keeps
+   overlay and close button are the shared modal family; this app keeps
    only the open/close toggle (the overlay is always display:flex) and the
    two sheets' own sizing. */
 .modal-backdrop{display:none;z-index:200}
 .modal-backdrop.open{display:flex}
 .modal--confirm{position:relative}
-.stop-prompt{color:var(--dim);margin:var(--ftl-space-l,1.2em) 0}
-.stop-actions{display:flex;gap:var(--ftl-space-s,0.8em);justify-content:flex-end}
+.stop-prompt{color:var(--muted);margin:var(--space-l,1.2em) 0}
+.stop-actions{display:flex;gap:var(--space-s,0.8em);justify-content:flex-end}
 .stop-actions button{min-width:7em;padding:0.8em 1em}
-.modal--confirm .ftl-btn-close{position:absolute;top:0.9em;right:0.9em}
+.modal--confirm .btn-close{position:absolute;top:0.9em;right:0.9em}
 
 /* Settings modal: a sheet with a fixed header bar and a scrollable body, so
    a long setting list never runs past the viewport edge. Setting families are
    grouped under section titles and laid out on a responsive 2-column grid. */
 .modal--settings{width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column;padding:0}
-.modal--settings .modal-head{display:flex;align-items:center;justify-content:space-between;gap:var(--ftl-space-m,1em);padding:var(--ftl-space-m,1.1em) var(--ftl-space-l,1.4em);border-bottom:1px solid var(--border)}
+.modal--settings .modal-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-m,1em);padding:var(--space-m,1.1em) var(--space-l,1.4em);border-bottom:1px solid var(--border)}
 .modal--settings .modal-head h2{margin:0;border:0;padding:0}
 /* Settings sheet: the library's vertical tab rail beside scrolling panes.
    The rail is fixed-width, the active pane fills the rest; panes are plain
    group grids, shown one at a time (see selectSettingsTab). */
-.modal--settings .modal-body{display:flex;gap:var(--ftl-space-s,0.75rem);min-height:0;overflow:hidden;padding:var(--ftl-space-s,0.9em) var(--ftl-space-l,1.4em) var(--ftl-space-l,1.4em)}
+.modal--settings .modal-body{display:flex;gap:var(--space-s,0.75rem);min-height:0;overflow:hidden;padding:var(--space-s,0.9em) var(--space-l,1.4em) var(--space-l,1.4em)}
 .settings-tabs{flex:none;min-width:9.5em;overflow-y:auto}
 .settings-panes{flex:1;min-width:0;overflow-y:auto}
 .settings-pane{display:none}
@@ -1773,40 +1774,40 @@ main.ftl-app-main{display:contents}
 @media (max-width:800px){
   .modal--settings .modal-body{flex-direction:column;overflow-y:auto}
   .settings-tabs[aria-orientation="vertical"]{flex-direction:row;flex-wrap:nowrap;overflow-x:auto;overflow-y:hidden;min-width:0;border-inline-end:0;border-bottom:1px solid var(--border);padding-inline-end:0}
-  .settings-tabs[aria-orientation="vertical"] > .ftl-tab{flex:none;border-bottom-color:transparent}
-  .settings-tabs[aria-orientation="vertical"] > .ftl-tab.is-active{border-bottom:2px solid var(--ftl-tab-underline-active,var(--ftl-accent));border-inline-end-width:0}
+  .settings-tabs[aria-orientation="vertical"] > .tab{flex:none;border-bottom-color:transparent}
+  .settings-tabs[aria-orientation="vertical"] > .tab.is-active{border-bottom:2px solid var(--tab-underline-active,var(--accent));border-inline-end-width:0}
   .settings-panes{overflow:visible}
 }
-.settings-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--ftl-space-s,0.7em);padding:1em 0 0.4em}
-/* Rows/labels/hints/selects/inputs are the shared ftl-field-row family; the
+.settings-group{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:var(--space-s,0.7em);padding:1em 0 0.4em}
+/* Rows/labels/hints/selects/inputs are the shared field-row family; the
    only app-owned pieces are the pieces the library doesn't know: the form
    layout inside a row and the paired SSID/password fields. */
-.ftl-field-row form{display:flex;align-items:center;gap:var(--ftl-space-s,0.8em);flex:1;width:100%}
-.ftl-field-row form .ftl-input-group{flex:1 1 auto;min-width:0;width:auto}
-.ftl-field-row .ftl-select{min-width:9em}
-.ftl-field-row .ftl-input[type="number"]{flex:none;width:6em}
+.field-row form{display:flex;align-items:center;gap:var(--space-s,0.8em);flex:1;width:100%}
+.field-row form .input-group{flex:1 1 auto;min-width:0;width:auto}
+.field-row .select{min-width:9em}
+.field-row .input[type="number"]{flex:none;width:6em}
 #config-msg:empty{display:none}
-.ftl-field-row--pair{gap:0.8em 1.2em;flex-wrap:wrap}
-.ftl-field-row--pair .field{flex:1 1 42%;display:flex;align-items:center;gap:0.6em;min-width:0}
-.ftl-field-row--pair .field label{flex:none;width:auto;max-width:8em}
-.ftl-field-row--pair .field input{flex:1;min-width:0}
-/* The control itself is the shared .ftl-switch. Two small overrides let
+.field-row--pair{gap:0.8em 1.2em;flex-wrap:wrap}
+.field-row--pair .field{flex:1 1 42%;display:flex;align-items:center;gap:0.6em;min-width:0}
+.field-row--pair .field label{flex:none;width:auto;max-width:8em}
+.field-row--pair .field input{flex:1;min-width:0}
+/* The control itself is the shared .switch. Two small overrides let
    this app's status readout ride inside the same <label>: the switch
    reverts to content width and the track regains a relative box, so the
    readout sits beside the pill instead of under the absolute track. */
-.ftl-switch:has(.switch-readout){width:auto;gap:0.7em}
-.ftl-switch:has(.switch-readout) .ftl-switch-track{position:relative;inset:auto;width:calc(2.6em*var(--ftl-density,1));height:calc(1.4em*var(--ftl-density,1))}
-.switch-readout{font-size:0.82em;letter-spacing:0.08em;position:relative;min-width:5em;text-align:center;color:var(--ftl-muted,#2c4a66)}
+.switch:has(.switch-readout){width:auto;gap:0.7em}
+.switch:has(.switch-readout) .switch-track{position:relative;inset:auto;width:calc(2.6em*var(--density,1));height:calc(1.4em*var(--density,1))}
+.switch-readout{font-size:0.82em;letter-spacing:0.08em;position:relative;min-width:5em;text-align:center;color:var(--muted,#2c4a66)}
 .switch-readout::after{content:attr(data-off)}
-.ftl-switch input:checked ~ .switch-readout{color:var(--glow);text-shadow:0 0 6px rgba(0,217,255,0.6)}
-.ftl-switch input:checked ~ .switch-readout::after{content:attr(data-on)}
+.switch input:checked ~ .switch-readout{color:var(--accent);text-shadow:0 0 6px rgba(0,217,255,0.6)}
+.switch input:checked ~ .switch-readout::after{content:attr(data-on)}
 
 /* Continuous OLED brightness slider: a wide Sci-Fi range control with a
    glowing track and thumb, sized so a single row holds label + live % readout
    + slider (the readout is updated inline by the fragment's oninput). */
-/* The brightness slider is the shared .ftl-slider; only its flex sizing
+/* The brightness slider is the shared .slider; only its flex sizing
    (one row holds label + live % readout + slider) stays app-owned. */
-.ftl-slider{flex:1 1 auto;min-width:0}
+.slider{flex:1 1 auto;min-width:0}
 
 /* The rack-mount reel-to-reel transport lives in the normal document flow
    right below the three-column grid and scrolls with the page. The level
@@ -1827,24 +1828,24 @@ main.ftl-app-main{display:contents}
 .r2r{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
 .r2r .plate{fill:url(#deckBg)}
 .r2r .plate-bezel{fill:none;stroke:rgba(0,217,255,0.28);stroke-width:1.5}
-.r2r .plate-screw{fill:var(--ftl-deck-well,#0d1c31);stroke:rgba(0,217,255,0.35);stroke-width:1}
+.r2r .plate-screw{fill:var(--deck-well,#0d1c31);stroke:rgba(0,217,255,0.35);stroke-width:1}
 .r2r .deck-grid{fill:none;stroke:rgba(15,58,92,0.55);stroke-width:1}
-.r2r .deck-corner{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.45}
+.r2r .deck-corner{fill:none;stroke:var(--accent);stroke-width:2;opacity:0.45}
 /* Reels: a near-black engineering-grade flange disc (gradient so the face
    reads as machined metal rather than flat), with a thin trim ring that
    lights up as the reel spins, faint tape windings and a bright hub. Only
    the inner spindle group (.reel-spin) rotates so the winding looks like
    it's turning while the plate and take-off point stay put. Flat fills go
-   through --ftl-deck-* (fallbacks = the reference values) so layout themes
+   through --deck-* (fallbacks = the reference values) so layout themes
    can reskin the metalwork; glow accents stay on --glow. */
-.r2r .reel-disc{fill:var(--ftl-deck-face,#112842);stroke:var(--ftl-deck-trim,#1d5c8f);stroke-width:2}
-.r2r .reel-ring{fill:none;stroke:var(--ftl-deck-trim,#1d5c8f);stroke-width:1.5}
+.r2r .reel-disc{fill:var(--deck-face,#112842);stroke:var(--deck-trim,#1d5c8f);stroke-width:2}
+.r2r .reel-ring{fill:none;stroke:var(--deck-trim,#1d5c8f);stroke-width:1.5}
 .r2r .reel-g.spinning .reel-ring{stroke:rgba(0,217,255,0.5);filter:drop-shadow(0 0 4px rgba(0,217,255,0.6))}
-.r2r .reel-wind{fill:none;stroke:var(--glow);stroke-width:2;opacity:0.35}
-.r2r .reel-hub{fill:var(--ftl-deck-hub,#11304a);stroke:var(--glow);stroke-width:1.5;opacity:0.85}
-.r2r .reel-g.spinning .reel-hub{fill:var(--glow);filter:drop-shadow(0 0 5px rgba(0,217,255,0.6))}
-.r2r .reel-center{fill:var(--ftl-deck-well,#071729)}
-.r2r .reel-spoke{fill:var(--ftl-deck-spoke,#16345c);stroke:rgba(0,217,255,0.5);stroke-width:1.2}
+.r2r .reel-wind{fill:none;stroke:var(--accent);stroke-width:2;opacity:0.35}
+.r2r .reel-hub{fill:var(--deck-hub,#11304a);stroke:var(--accent);stroke-width:1.5;opacity:0.85}
+.r2r .reel-g.spinning .reel-hub{fill:var(--accent);filter:drop-shadow(0 0 5px rgba(0,217,255,0.6))}
+.r2r .reel-center{fill:var(--deck-well,#071729)}
+.r2r .reel-spoke{fill:var(--deck-spoke,#16345c);stroke:rgba(0,217,255,0.5);stroke-width:1.2}
 .r2r .reel-g.spinning .reel-spoke{stroke:rgba(0,217,255,0.75)}
 .r2r .reel-spin{transform-box:fill-box;transform-origin:center}
 .r2r .reel-g.spinning .reel-spin{animation:spin 2.2s linear infinite}
@@ -1855,12 +1856,12 @@ main.ftl-app-main{display:contents}
    tape depth; one stroked path carries the travelling pulse (dash animation)
    from supply reel, over the head, to the take-up reel exactly like real
    tape. */
-.r2r .tape-shadow{fill:none;stroke:var(--ftl-deck-shadow,#04121f);stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.9}
-.r2r .tape{fill:none;stroke:var(--ftl-deck-tape,#14507e);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.8}
-.r2r .tape.active{stroke:var(--glow);stroke-width:3;opacity:0.85;stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite;filter:drop-shadow(0 0 5px rgba(0,217,255,0.45))}
+.r2r .tape-shadow{fill:none;stroke:var(--deck-shadow,#04121f);stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.9}
+.r2r .tape{fill:none;stroke:var(--deck-tape,#14507e);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.8}
+.r2r .tape.active{stroke:var(--accent);stroke-width:3;opacity:0.85;stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite;filter:drop-shadow(0 0 5px rgba(0,217,255,0.45))}
 @keyframes tapeflow{to{stroke-dashoffset:-36}}
 /* Guide idlers: lit rims so the tape path reads at a glance. */
-.r2r .guide{fill:var(--ftl-deck-well,#0a1830);stroke:rgba(0,217,255,0.55);stroke-width:1.5}
+.r2r .guide{fill:var(--deck-well,#0a1830);stroke:rgba(0,217,255,0.55);stroke-width:1.5}
 /* The read/write head block: a chamfered angular castle rising out of the
    tape gap, with glowing trim rails on its mounting cheeks, the red centre
    gap line and the large 7-segment digital time counter in its display
@@ -1868,70 +1869,70 @@ main.ftl-app-main{display:contents}
    (.r2r.rec). */
 .r2r .head-plate{fill:url(#headFace);stroke:var(--border);stroke-width:1.5}
 .r2r .head-edge{fill:none;stroke:rgba(0,217,255,0.25);stroke-width:1}
-.r2r .head-gap{fill:none;stroke:var(--glow);stroke-width:3;stroke-linecap:round;opacity:0.55}
+.r2r .head-gap{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;opacity:0.55}
 .r2r.run .head-gap{opacity:0.75}
-.r2r.rec .head-gap{stroke:var(--rec);opacity:0.95;filter:drop-shadow(0 0 5px rgba(255,51,85,0.8))}
+.r2r.rec .head-gap{stroke:var(--danger);opacity:0.95;filter:drop-shadow(0 0 5px rgba(255,51,85,0.8))}
 .r2r .head-window{fill:#050d1a;stroke:#16456e;stroke-width:1.5}
 .r2r .head-win-grid{fill:none;stroke:rgba(0,217,255,0.07);stroke-width:1}
 /* Bottom HUD band: a thin status rail with system lamps and micro labels,
    matching the larger panel HUD motif (corner brackets + glow). */
 .r2r .hud-band{fill:none;stroke:var(--border);stroke-width:1}
 .r2r .hud-lamp{fill:#11304a}
-.r2r .hud-lamp.on{fill:var(--idle);filter:drop-shadow(0 0 3px var(--idle))}
-.r2r .hud-lamp.rec{fill:var(--rec);filter:drop-shadow(0 0 3px var(--rec))}
+.r2r .hud-lamp.on{fill:var(--success);filter:drop-shadow(0 0 3px var(--success))}
+.r2r .hud-lamp.rec{fill:var(--danger);filter:drop-shadow(0 0 3px var(--danger))}
 .r2r #linkLamp{fill:#15324a}
 .r2r #linkLamp.on{fill:rgba(0,217,255,0.9);filter:drop-shadow(0 0 3px rgba(0,217,255,0.8))}
-.r2r .hud-text{fill:var(--dim);font-size:9px;letter-spacing:0.22em;font-family:"Consolas",monospace}
+.r2r .hud-text{fill:var(--muted);font-size:9px;letter-spacing:0.22em;font-family:"Consolas",monospace}
 /* The lit 7-segment time display. Every segment is an SVG line (see the
    buildSeg7 JS); the dim .s7 shows all segments faintly so the display
    reads as a proper 7-segment counter even for unlit digits. The whole display
    is skewed to the right for an italic, forward-leaning readout. */
 #seg7{font-style:italic}
 #seg7 .s7{stroke:rgba(0,180,255,0.16);stroke-width:2.5;stroke-linecap:round}
-#seg7 .s7.on{stroke:var(--glow);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
+#seg7 .s7.on{stroke:var(--accent);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
 #seg7 .s7-dot{fill:rgba(0,180,255,0.16)}
-#seg7 .s7-dot.on{fill:var(--glow);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
+#seg7 .s7-dot.on{fill:var(--accent);filter:drop-shadow(0 0 4px rgba(0,217,255,0.75))}
 
 /* Pinned meter footer: always visible at the bottom of the viewport so the
    VU levels stay on screen while you operate the transport, with a slim
    header bar that collapses/expands the meter bank on demand. */
 .meter-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);backdrop-filter:blur(2px)}
-.meter-bar{display:flex;align-items:center;gap:var(--ftl-space-m,1em);padding:0.3em 1.2em;border-bottom:1px solid var(--border)}
-.meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--dim);text-transform:uppercase}
-.meter-badge{font-size:0.62em;letter-spacing:0.12em;color:var(--glow);border:1px solid var(--border);border-radius:10px;padding:0.05em 0.6em}
+.meter-bar{display:flex;align-items:center;gap:var(--space-m,1em);padding:0.3em 1.2em;border-bottom:1px solid var(--border)}
+.meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--muted);text-transform:uppercase}
+.meter-badge{font-size:0.62em;letter-spacing:0.12em;color:var(--accent);border:1px solid var(--border);border-radius:10px;padding:0.05em 0.6em}
 .meter-caret{width:1.9em;height:1.9em;border-radius:50%;margin-left:auto}
-.meter-body{padding:var(--ftl-space-s,0.7em) var(--ftl-space-m,1em);transition:max-height 0.25s ease,opacity 0.25s ease,padding 0.25s ease;max-height:220px;overflow:hidden}
+.meter-body{padding:var(--space-s,0.7em) var(--space-m,1em);transition:max-height 0.25s ease,opacity 0.25s ease,padding 0.25s ease;max-height:220px;overflow:hidden}
 .meter-footer.collapsed .meter-body{max-height:0;padding-top:0;padding-bottom:0;opacity:0}
 /* The meter bank itself - a shared dB-FS scale (standard audio-meter log
    taper, see VU_CURVE/vuPct in the script) beside one meter per channel. */
-.meter-bridge{display:flex;align-items:stretch;justify-content:center;gap:var(--ftl-space-s,0.8em);max-width:1300px;margin:0 auto;background:#050c16;border:1px solid var(--border);border-radius:10px;padding:var(--ftl-space-s,0.7em) var(--ftl-space-m,1em);box-shadow:inset 0 0 24px rgba(0,180,255,0.06)}
+.meter-bridge{display:flex;align-items:stretch;justify-content:center;gap:var(--space-s,0.8em);max-width:1300px;margin:0 auto;background:#050c16;border:1px solid var(--border);border-radius:10px;padding:var(--space-s,0.7em) var(--space-m,1em);box-shadow:inset 0 0 24px rgba(0,180,255,0.06)}
 /* The dB scale column and every meter track share the exact same inner
    height so a given dB reading lands on the same pixel row in each. The
    scale uses a transparent 1px border (see below) so its content box equals
    the tracks' full height. */
 .db-scale{position:relative;height:var(--meter-h);width:2.6em;flex:none;border:1px solid transparent}
-.db-scale span{position:absolute;left:0;right:0.3em;text-align:right;transform:translateY(50%);font-size:0.6em;color:var(--dim);font-weight:bold}
+.db-scale span{position:absolute;left:0;right:0.3em;text-align:right;transform:translateY(50%);font-size:0.6em;color:var(--muted);font-weight:bold}
 .db-scale span::after{content:'';position:absolute;right:0;top:50%;width:100%;height:1px;background:rgba(0,217,255,0.25);transform:translateY(50%)}
-.ch-meters{display:flex;justify-content:center;gap:var(--ftl-space-xs,0.6em);overflow-x:auto;padding-bottom:2px}
+.ch-meters{display:flex;justify-content:center;gap:var(--space-xs,0.6em);overflow-x:auto;padding-bottom:2px}
 .ch-meter{display:flex;flex-direction:column;align-items:center;gap:0.25em;flex:none}
-/* Each strip is the shared .ftl-meter.ftl-meter-v; the app keeps only the
+/* Each strip is the shared .meter.meter-v; the app keeps only the
    strip's geometry (14px wide, exactly --meter-h tall so the dB scale's
    ticks line up row-for-row with the fill) and the darker well background.
-   Band colors come from the :root bridge (--ftl-meter-low/mid/high);
+   Band colors come from the :root bridge (--meter-low/mid/high);
    thresholds and levels are JS-set tokens (see buildDbScale/applyMeter). */
 .vu-track{width:14px;height:var(--meter-h);background:#020509;border-color:var(--border);border-radius:2px}
-.ch-label{font-size:0.6em;color:var(--dim);letter-spacing:0.04em}
+.ch-label{font-size:0.6em;color:var(--muted);letter-spacing:0.04em}
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
-.sys-readout{margin-top:.5em;font-size:.72em;color:var(--dim)}
+.sys-readout{margin-top:.5em;font-size:.72em;color:var(--muted)}
 .sys-readout p{margin:.25em 0}
 .sys-graphs{margin-top:.6em}
-.sys-graphs h3{font-size:.68em;letter-spacing:.18em;text-transform:uppercase;color:var(--dim);margin:.7em 0 .2em}
+.sys-graphs h3{font-size:.68em;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin:.7em 0 .2em}
 .sys-graphs .uplot{width:100%}
-.sys-graphs .u-legend{font-size:.68em;color:var(--dim);background:transparent;border:none;padding-left:0}
+.sys-graphs .u-legend{font-size:.68em;color:var(--muted);background:transparent;border:none;padding-left:0}
 .sys-graphs .u-legend th{font-weight:normal}
 .sys-graphs .u-legend .u-value{color:var(--text)}
-.sys-wait{font-size:.72em;color:var(--dim)}
+.sys-wait{font-size:.72em;color:var(--muted)}
 
 /* Mobile: stack the three-column grid, let the fixed OLED frame shrink to
     the viewport instead of overflowing it, and give the header/footer more
@@ -1967,11 +1968,11 @@ body.meters-collapsed{padding-bottom:4em}
   .r2r .reel-g.spinning .reel-spin,
   .r2r .tape.active,
   .meter-body{animation:none;transition:none}
-  .ftl-switch-track,.ftl-switch-thumb{transition:none}
+  .switch-track,.switch-thumb{transition:none}
 }
 
 /* WiFi settings panel */
-.wifi-qr-row{display:flex;align-items:center;gap:var(--ftl-space-m,1em);flex-wrap:wrap}
+.wifi-qr-row{display:flex;align-items:center;gap:var(--space-m,1em);flex-wrap:wrap}
 .wifi-qr-info p{margin:0.2em 0;font-size:0.85em}
 .wifi-qr-img img{width:180px;height:180px;image-rendering:pixelated;border:1px solid var(--border);border-radius:4px}
 /* The theme owns the page background; the built-in gradient underneath is
@@ -1979,47 +1980,47 @@ body.meters-collapsed{padding-bottom:4em}
 html[data-theme] body{background:transparent}
 </style>
 </head>
-<body class="ftl-app">
+<body class="app">
 
-<!-- ftl-app shell (ftl-themes#3): dual-classed regions so layout themes can
+<!-- app shell (ftl-themes#3): dual-classed regions so layout themes can
      arrange the page while the built-in look (no theme linked) renders
      exactly as before - the app's own selectors keep matching, and the
      none-case rules below neutralize the new hooks. -->
-<header class="deck ftl-app-bar">
+<header class="deck app-bar">
   <div class="deck-logo">{{.Logo}}</div>
   <div class="oled-frame"><img id="oled" src="/api/display.png" alt="OLED display" onerror="if(!this.dataset.r){this.dataset.r=1;location.reload()}"></div>
   <div class="encoder-row">
-    <button hx-post="/api/input/encoder/left" aria-label="Encoder left" title="Encoder left"><svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-left"/></svg></button>
+    <button hx-post="/api/input/encoder/left" aria-label="Encoder left" title="Encoder left"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-left"/></svg></button>
     <button class="click" hx-post="/api/input/encoder/click" aria-label="Encoder click" title="Encoder click">&#9679;</button>
-    <button hx-post="/api/input/encoder/right" aria-label="Encoder right" title="Encoder right"><svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-right"/></svg></button>
+    <button hx-post="/api/input/encoder/right" aria-label="Encoder right" title="Encoder right"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-right"/></svg></button>
   </div>
   <div class="transport-row" id="transportRow"></div>
   <div class="header-actions">
     <span class="icon-btn conn off" id="connLamp" title="Server disconnected">
-      <svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-broadcast"/></svg>
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-broadcast"/></svg>
     </span>
-    <button class="icon-btn ftl-btn ftl-btn-icon" id="settingsBtn" type="button" title="Settings">
-      <svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-settings"/></svg>
+    <button class="icon-btn btn btn-icon" id="settingsBtn" type="button" title="Settings">
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-settings"/></svg>
     </button>
     <form action="/logout" method="POST" style="display:inline;margin:0">
-      <button class="icon-btn ftl-btn ftl-btn-icon" title="Log out" aria-label="Log out">
-      <svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-logout"/></svg>
+      <button class="icon-btn btn btn-icon" title="Log out" aria-label="Log out">
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-logout"/></svg>
       </button>
     </form>
     <form action="/api/settings/rotate-token" method="POST" style="display:inline;margin:0" onsubmit="return confirm('Rotate the access token? Every session (including this one) is logged out.')">
-      <button class="icon-btn ftl-btn ftl-btn-icon" title="Rotate access token" aria-label="Rotate access token">
-      <svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-refresh"/></svg>
+      <button class="icon-btn btn btn-icon" title="Rotate access token" aria-label="Rotate access token">
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-refresh"/></svg>
       </button>
     </form>
   </div>
 </header>
 
-<aside class="ftl-app-rail" aria-hidden="true"></aside>
+<aside class="app-rail" aria-hidden="true"></aside>
 
-<main class="ftl-app-main">
+<main class="app-main">
 <div class="grid">
 
-  <div class="panel left ftl-panel">
+  <div class="panel left panel">
     <h2>System</h2>
     <div class="sys-graphs">
       <h3>CPU %</h3>
@@ -2034,7 +2035,7 @@ html[data-theme] body{background:transparent}
     </div>
   </div>
 
-  <div class="panel center ftl-panel">
+  <div class="panel center panel">
     <h2>Transport Status</h2>
     <div class="transport-deck">
       <svg class="r2r" viewBox="0 0 820 265" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="transportTitle transportDesc">
@@ -2137,7 +2138,7 @@ html[data-theme] body{background:transparent}
     <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#status" hx-swap="innerHTML" hidden></div>
   </div>
 
-  <div class="panel right ftl-panel">
+  <div class="panel right panel">
     <h2>Status</h2>
     <div id="config" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
   </div>
@@ -2145,17 +2146,17 @@ html[data-theme] body{background:transparent}
 </div>
 
 <div class="recordings-section">
-  <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)"><svg class="ftl-icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-download"/></svg> Download ALL (.zip)</a></h2>
-  <div id="recordings" class="ftl-scroll" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
+  <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-download"/></svg> Download ALL (.zip)</a></h2>
+  <div id="recordings" class="scroll" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
 </div>
 </main>
 
-<footer class="meter-footer ftl-app-status" id="meterFooter">
+<footer class="meter-footer app-status" id="meterFooter">
   <div class="meter-bar">
     <span class="meter-title">Level meters</span>
     <span class="meter-badge" id="meterBadge">--</span>
     <button class="icon-btn meter-caret" id="meterToggle" type="button" title="Collapse/expand meters" aria-label="Collapse or expand level meters" aria-controls="meterBody" aria-expanded="true">
-      <svg class="ftl-icon" id="meterCaretSvg" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
+      <svg class="icon" id="meterCaretSvg" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
     </button>
   </div>
   <div class="meter-body" id="meterBody">
@@ -2166,34 +2167,34 @@ html[data-theme] body{background:transparent}
   </div>
 </footer>
 
-<div class="modal-backdrop ftl-modal-overlay" id="settingsModal">
-  <div class="ftl-modal ftl-modal-lg modal--settings">
+<div class="modal-backdrop modal-overlay" id="settingsModal">
+  <div class="modal modal-lg modal--settings">
     <div class="modal-head">
       <h2>Unit Settings</h2>
-      <button class="ftl-btn-close" id="settingsClose" type="button" aria-label="Close settings"></button>
+      <button class="btn-close" id="settingsClose" type="button" aria-label="Close settings"></button>
     </div>
     <div class="modal-body">
-      <div class="ftl-tabs settings-tabs" role="tablist" aria-orientation="vertical" aria-label="Settings groups">
-        <button type="button" class="ftl-tab is-active" role="tab" aria-selected="true" data-pane="pane-device" id="tab-device">Device</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-audio" id="tab-audio">Audio</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-metering" id="tab-metering">Metering</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-metadata" id="tab-metadata">Metadata</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-transport" id="tab-transport">Transport</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-display" id="tab-display">Display</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-demo" id="tab-demo">Demo</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-logging" id="tab-logging">Logging</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-config" id="tab-config">Config</button>
-        <button type="button" class="ftl-tab" role="tab" aria-selected="false" data-pane="pane-network" id="tab-network">Network</button>
+      <div class="tabs settings-tabs" role="tablist" aria-orientation="vertical" aria-label="Settings groups">
+        <button type="button" class="tab is-active" role="tab" aria-selected="true" data-pane="pane-device" id="tab-device">Device</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-audio" id="tab-audio">Audio</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-metering" id="tab-metering">Metering</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-metadata" id="tab-metadata">Metadata</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-transport" id="tab-transport">Transport</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-display" id="tab-display">Display</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-demo" id="tab-demo">Demo</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-logging" id="tab-logging">Logging</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-config" id="tab-config">Config</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-network" id="tab-network">Network</button>
       </div>
-      <div class="settings-panes ftl-scroll">
-      <section class="settings-group ftl-field-group settings-pane is-active" role="tabpanel" aria-labelledby="tab-device" id="pane-device">
+      <div class="settings-panes scroll">
+      <section class="settings-group field-group settings-pane is-active" role="tabpanel" aria-labelledby="tab-device" id="pane-device">
         <div id="devicename" class="setting-cell">
-          <div class="ftl-field-row">
+          <div class="field-row">
             <form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
-              <label class="ftl-label" for="deviceNameInput">Unit Name</label>
-              <div class="ftl-input-group">
-                <input id="deviceNameInput" class="ftl-input" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-                <button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
+              <label class="label" for="deviceNameInput">Unit Name</label>
+              <div class="input-group">
+                <input id="deviceNameInput" class="input" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
+                <button type="submit" class="btn btn-secondary">Save</button>
               </div>
             </form>
           </div>
@@ -2201,28 +2202,28 @@ html[data-theme] body{background:transparent}
         </div>
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-audio" id="pane-audio">
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-audio" id="pane-audio">
         {{.SampleRateFragment}}
         {{.ChannelCountFragment}}
         {{.MonitorFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-metering" id="pane-metering">
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-metering" id="pane-metering">
         {{.VURangeFragment}}
         {{.PeakHoldFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-metadata" id="pane-metadata">
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-metadata" id="pane-metadata">
         {{.PrefixFragment}}
         {{.TagFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-transport" id="pane-transport">
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-transport" id="pane-transport">
         {{.TransportFragment}}
         {{.HyperdeckFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-display" id="pane-display">
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-display" id="pane-display">
         {{.ThemeFragment}}
         {{.MotionFragment}}
         {{.ContrastFragment}}
@@ -2231,45 +2232,45 @@ html[data-theme] body{background:transparent}
         {{.AutoDimFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-demo" id="pane-demo">
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-demo" id="pane-demo">
         {{.DemoFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-logging" id="pane-logging">
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-logging" id="pane-logging">
         {{.LogLevelFragment}}
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-config" id="pane-config">
-        <div class="ftl-field-row ftl-field-row--pair">
-          <button hx-post="/api/config/export" hx-target="#config-msg" class="ftl-btn ftl-btn-secondary">Export to USB</button>
-          <button hx-post="/api/config/import" hx-target="#config-msg" class="ftl-btn ftl-btn-secondary">Import from USB</button>
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-config" id="pane-config">
+        <div class="field-row field-row--pair">
+          <button hx-post="/api/config/export" hx-target="#config-msg" class="btn btn-secondary">Export to USB</button>
+          <button hx-post="/api/config/import" hx-target="#config-msg" class="btn btn-secondary">Import from USB</button>
         </div>
-        <div class="ftl-field-row" id="config-msg"></div>
+        <div class="field-row" id="config-msg"></div>
       </section>
 
-      <section class="settings-group ftl-field-group settings-pane" role="tabpanel" aria-labelledby="tab-network" id="pane-network">
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-network" id="pane-network">
         <div id="wifi-settings">
           {{.WifiQRFragment}}
           <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML" hx-status:400="target:#wifi-error">
-            <div class="ftl-field-row ftl-field-row--pair">
+            <div class="field-row field-row--pair">
               <span class="field">
                 <label for="wifiSsid">SSID</label>
-                <input id="wifiSsid" class="ftl-input" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
+                <input id="wifiSsid" class="input" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
               </span>
               <span class="field">
                 <label for="wifiPass">Password</label>
-                <input id="wifiPass" class="ftl-input" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
+                <input id="wifiPass" class="input" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
               </span>
             </div>
-            <div class="ftl-field-row">
-              <label class="ftl-label" for="wifiEnabled">Access Point</label>
-              <label class="ftl-switch" for="wifiEnabled">
+            <div class="field-row">
+              <label class="label" for="wifiEnabled">Access Point</label>
+              <label class="switch" for="wifiEnabled">
                 <input id="wifiEnabled" name="enabled" type="checkbox" {{if .WifiEnabled}}checked{{end}}>
-                <span class="ftl-switch-track"><span class="ftl-switch-thumb"></span></span>
+                <span class="switch-track"><span class="switch-thumb"></span></span>
                 <span class="switch-readout" data-on="ONLINE" data-off="OFFLINE"></span>
               </label>
             </div>
-            <button type="submit" class="ftl-btn ftl-btn-secondary">Save WiFi</button>
+            <button type="submit" class="btn btn-secondary">Save WiFi</button>
           </form>
           <div id="wifi-error"></div>
         </div>
@@ -2279,9 +2280,9 @@ html[data-theme] body{background:transparent}
   </div>
 </div>
 
-<div class="modal-backdrop ftl-modal-overlay" id="stopModal">
-  <div class="ftl-modal modal--confirm">
-    <button class="ftl-btn-close modal-close" id="stopModalClose" type="button" aria-label="Close"></button>
+<div class="modal-backdrop modal-overlay" id="stopModal">
+  <div class="modal modal--confirm">
+    <button class="btn-close modal-close" id="stopModalClose" type="button" aria-label="Close"></button>
     <h2>Stop Recording?</h2>
     <p class="stop-prompt">The current take is still being written. Stop it now?</p>
     <div class="stop-actions">
@@ -2303,11 +2304,11 @@ settingsBtn.addEventListener('click', function() { settingsModal.classList.add('
 document.getElementById('settingsClose').addEventListener('click', function() { settingsModal.classList.remove('open'); });
 settingsModal.addEventListener('click', function(e) { if (e.target === settingsModal) settingsModal.classList.remove('open'); });
 
-// Settings sheet tabs: the vertical .ftl-tabs rail switches the group pane
+// Settings sheet tabs: the vertical .tabs rail switches the group pane
 // shown beside it (one group at a time instead of a ten-group scroll).
 // Fragments keep their ids, so htmx posts re-render into hidden panes fine.
 // The last open tab persists per browser like the meter collapse below.
-var settingsTabs = Array.prototype.slice.call(document.querySelectorAll('.settings-tabs .ftl-tab'));
+var settingsTabs = Array.prototype.slice.call(document.querySelectorAll('.settings-tabs .tab'));
 function selectSettingsTab(name, save) {
   if (!document.getElementById(name)) name = 'pane-device';
   settingsTabs.forEach(function(t) {
@@ -2333,9 +2334,9 @@ var transportState = { playing: false, paused: false };
 // the theme-swap OOB script); icons inherit currentColor, so the transport
 // row's per-key colors apply to the stroke with no fill overrides.
 var SPRITE = {{.IconSprite}};
-function iconGlyph(name) { return '<svg class="ftl-icon" aria-hidden="true"><use href="' + SPRITE + '#' + name + '"/></svg>'; }
+function iconGlyph(name) { return '<svg class="icon" aria-hidden="true"><use href="' + SPRITE + '#' + name + '"/></svg>'; }
 function transportBtn(cls, post, title, label) {
-  return '<button class="ftl-btn ' + cls + '" hx-post="' + post + '" title="' + title + '">' + label + '</button>';
+  return '<button class="btn ' + cls + '" hx-post="' + post + '" title="' + title + '">' + label + '</button>';
 }
 function renderTransportRow() {
   var row = document.getElementById('transportRow');
@@ -2344,14 +2345,14 @@ function renderTransportRow() {
   var html = '';
   if (ICON_MODE) {
     html += transportBtn('record', '/api/input/button/record', 'Record', iconGlyph('icon-player-record'));
-    html += '<button class="ftl-btn stop" data-stop title="Stop">' + iconGlyph('icon-player-stop') + '</button>';
+    html += '<button class="btn stop" data-stop title="Stop">' + iconGlyph('icon-player-stop') + '</button>';
     html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, iconGlyph(pause ? 'icon-player-pause' : 'icon-player-play'));
   } else {
     html += transportBtn('record', '/api/input/button/record', 'Record', 'REC');
-    html += '<button class="ftl-btn stop" data-stop title="Stop">STOP</button>';
+    html += '<button class="btn stop" data-stop title="Stop">STOP</button>';
     html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? 'II' : '>');
   }
-  row.className = 'transport-row ftl-transport' + (ICON_MODE ? '' : ' text') + (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : ''));
+  row.className = 'transport-row transport' + (ICON_MODE ? '' : ' text') + (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : ''));
   row.innerHTML = html;
   // These controls are recreated after htmx's initial DOM scan whenever the
   // play/pause state or button style changes, so explicitly process the new
@@ -2454,11 +2455,11 @@ function rebuildDbScale(floor) {
   });
   // Position the green->yellow and yellow->red meter bands at the design's
   // absolute thresholds (-18 / -6 dBFS) mapped through the current floor.
-  // The shared .ftl-meter reads these as --ftl-meter-warn-at/-peak-at; the
+  // The shared .meter reads these as --meter-warn-at/-peak-at; the
   // gradient spans the track by default (fixed upstream in ftl-themes#43).
   var root = document.documentElement;
-  root.style.setProperty('--ftl-meter-warn-at', vuPct(-18) + '%');
-  root.style.setProperty('--ftl-meter-peak-at', vuPct(-6) + '%');
+  root.style.setProperty('--meter-warn-at', vuPct(-18) + '%');
+  root.style.setProperty('--meter-peak-at', vuPct(-6) + '%');
 }
 
 // ---- 7-segment time display (inline SVG segments, italic via skewX) ----
@@ -2584,7 +2585,7 @@ function ensureChannels(n) {
   for (var i = 1; i <= n; i++) {
     var el = document.createElement('div');
     el.className = 'ch-meter';
-    el.innerHTML = '<div class="ftl-meter ftl-meter-v vu-track"><div class="ftl-meter-peak" data-i="' + i + '"></div><div class="ftl-meter-fill" data-i="' + i + '"></div></div><div class="ch-label">' + i + '</div>';
+    el.innerHTML = '<div class="meter meter-v vu-track"><div class="meter-peak" data-i="' + i + '"></div><div class="meter-fill" data-i="' + i + '"></div></div><div class="ch-label">' + i + '</div>';
     chMeters.appendChild(el);
   }
   chCount = n;
@@ -2636,8 +2637,8 @@ function applyMeter(m) {
     var i = idx + 1;
     var fill = chMeters.querySelector('.vu-fill[data-i="' + i + '"]');
     var peak = chMeters.querySelector('.vu-peak[data-i="' + i + '"]');
-    if (fill) fill.style.setProperty('--ftl-meter-level', vuPct(c.rmsDB) + '%');
-    if (peak) peak.style.setProperty('--ftl-meter-peak', vuPct(c.peakDB) + '%');
+    if (fill) fill.style.setProperty('--meter-level', vuPct(c.rmsDB) + '%');
+    if (peak) peak.style.setProperty('--meter-peak', vuPct(c.peakDB) + '%');
   });
 
   // Meter footer badge: stereo/dual-mono indicator
@@ -2683,12 +2684,12 @@ function teleCSS(name, fallback) {
 var telePalette = null; // built lazily at chart init, after styles resolve
 function telePaletteInit() {
   if (!telePalette) telePalette = [
-    teleCSS('--ftl-chart-series-1', teleCSS('--glow', '#00d9ff')),
-    teleCSS('--ftl-chart-series-2', teleCSS('--idle', '#2bffb0')),
-    teleCSS('--ftl-chart-series-3', teleCSS('--orange', '#ff8c1a')),
-    teleCSS('--ftl-chart-series-4', teleCSS('--rec', '#ff3355')),
-    teleCSS('--ftl-chart-series-5', teleCSS('--dim', '#5b8aa8')),
-    teleCSS('--ftl-chart-series-6', teleCSS('--text', '#cfeeff'))
+    teleCSS('--chart-series-1', teleCSS('--glow', '#00d9ff')),
+    teleCSS('--chart-series-2', teleCSS('--idle', '#2bffb0')),
+    teleCSS('--chart-series-3', teleCSS('--orange', '#ff8c1a')),
+    teleCSS('--chart-series-4', teleCSS('--rec', '#ff3355')),
+    teleCSS('--chart-series-5', teleCSS('--dim', '#5b8aa8')),
+    teleCSS('--chart-series-6', teleCSS('--text', '#cfeeff'))
   ];
   return telePalette;
 }
@@ -2702,7 +2703,7 @@ function teleTimeValues(self, ticks) {
 }
 function teleOpts(extraSeries, ymin, ymax, h) {
   var dim = teleCSS('--dim', '#5b8aa8');
-  var font = '9px ' + teleCSS('--ftl-font', 'Consolas,monospace');
+  var font = '9px ' + teleCSS('--font', 'Consolas,monospace');
   var o = {
     width: 300, height: h || 90,
     series: [{}].concat(extraSeries),
@@ -2951,10 +2952,10 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	// the name is editable exactly once per page load. Markup mirrors the
 	// dashboard row exactly (label/id/button), plus the error target and
 	// an OOB clear of any stale validation error on success.
-	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="ftl-field-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
+	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="field-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
 <label for="deviceNameInput">Unit Name</label>
 <input id="deviceNameInput" name="name" value="%s" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-<button type="submit" class="ftl-btn ftl-btn-secondary">Save</button>
+<button type="submit" class="btn btn-secondary">Save</button>
 </form></div><div id="devicename-error"></div></div>
 <div id="devicename-error" hx-swap-oob="innerHTML"></div>`, template.HTMLEscapeString(current))
 }
@@ -3488,11 +3489,11 @@ func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
 }
 
 var recordingsTmpl = template.Must(template.New("recordings").Parse(`
-<div class="recordings-wrap ftl-scroll">
-<table class="ftl-table is-sticky">
+<div class="recordings-wrap scroll">
+<table class="table is-sticky">
 <thead><tr><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
 <tbody>
-{{if not .Rows}}<tr><td colspan="7"><div class="ftl-empty-state"><span class="ftl-empty-state-icon">&#8709;</span><span class="ftl-empty-state-title">None yet.</span><span class="ftl-empty-state-hint">Takes appear here as they finalize.</span></div></td></tr>{{else}}
+{{if not .Rows}}<tr><td colspan="7"><div class="empty-state"><span class="empty-state-icon">&#8709;</span><span class="empty-state-title">None yet.</span><span class="empty-state-hint">Takes appear here as they finalize.</span></div></td></tr>{{else}}
 {{range .Rows}}<tr>
 <td>{{.Name}}</td>
 <td>{{.Channels}}</td>
@@ -3500,7 +3501,7 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <td>{{.StartStr}}</td>
 <td>{{.EndStr}}</td>
 <td>{{.DurationStr}}</td>
-<td class="recs-dl"><a class="ftl-btn ftl-btn-sm ftl-btn-secondary" href="/download/{{.RelPath}}"><svg class="ftl-icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-download"/></svg> download</a></td>
+<td class="recs-dl"><a class="btn btn-sm btn-secondary" href="/download/{{.RelPath}}"><svg class="icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-download"/></svg> download</a></td>
 </tr>{{end}}
 {{end}}
 </tbody>
@@ -3911,9 +3912,9 @@ func newRemoteMux() *http.ServeMux {
 	// matched here rather than in the pattern.
 	mux.HandleFunc("GET /static/themes/{file}", func(w http.ResponseWriter, r *http.Request) {
 		slug, ok := strings.CutSuffix(r.PathValue("file"), ".css")
-		// ftl-core.css is the always-linked reset+components file, not a
+		// core.css is the always-linked reset+components file, not a
 		// theme bundle; it serves alongside the themes it lacks.
-		if !ok || (slug != "ftl-core" && !isKnownTheme(slug)) {
+		if !ok || (slug != "core" && !isKnownTheme(slug)) {
 			http.NotFound(w, r)
 			return
 		}

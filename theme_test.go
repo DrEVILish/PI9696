@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -47,25 +48,53 @@ func TestDefaultThemeIsFTL(t *testing.T) {
 	if !strings.Contains(body, `href="/static/themes/`+defaultThemeSlug+`.css?v=`) {
 		t.Errorf("expected the %s bundle to be linked", defaultThemeSlug)
 	}
-	// The bridge must keep every original literal as its fallback.
+	// App-owned custom properties are the meter's geometry and its
+	// green/yellow/red bands. v4's .meter-fill consumes them.
 	for _, want := range []string{
-		"--glow:var(--ftl-accent,#00d9ff)",
-		"--panel:var(--ftl-surface,#0a1526)",
-		"--border:var(--ftl-border,#0f3a5c)",
-		"--text:var(--ftl-text,#cfeeff)",
-		"--dim:var(--ftl-muted,#5b8aa8)",
-		"--rec:var(--ftl-danger,#ff3355)",
-		"--idle:var(--ftl-success,#2bffb0)",
-		"--orange:var(--ftl-warning,#ff8c1a)",
 		"--meter-h:120px",
-		"background:var(--ftl-surface-2,#08192b)",
-		"background:var(--ftl-input-bg,#08192b)",
-		"box-shadow:var(--ftl-panel-shadow,0 0 20px rgba(0,180,255,0.08)",
+		"--meter-low:var(--success,#0aff9d)",
+		"--meter-mid:var(--warning,#ffe400)",
+		"--meter-high:var(--danger,#ff2a2a)",
+		"background:var(--surface-2,#08192b)",
+		"background:var(--input-bg,#08192b)",
+		"box-shadow:var(--panel-shadow,0 0 20px rgba(0,180,255,0.08)",
 	} {
 		if !strings.Contains(body, want) {
-			t.Errorf("bridge lost %q", want)
+			t.Errorf("lost %q", want)
 		}
 	}
+
+	// The dashboard must not re-declare any custom property that ftl-themes
+	// itself declares. v4 dropped the ftl- prefix, so the app's old bridge
+	// aliases (--glow, --panel, --dim, --rec, --idle, --orange) became
+	// --accent, --surface, --muted, --danger, --success, --warning and
+	// silently overrode the theme; its --text and --border aliases became
+	// self-referential and resolved to nothing. Reading the theme's tokens
+	// directly is the fix, and this is what keeps it fixed.
+	core := embeddedThemeCSS(t)
+	themeOwned := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(--[a-z0-9-]+)\s*:`).FindAllStringSubmatch(core, -1) {
+		themeOwned[m[1]] = true
+	}
+	if len(themeOwned) == 0 {
+		t.Fatal("parsed no custom properties out of the ftl-themes core bundle")
+	}
+	for _, m := range regexp.MustCompile(`(--[a-z0-9-]+)\s*:`).FindAllStringSubmatch(body, -1) {
+		if themeOwned[m[1]] {
+			t.Errorf("dashboard declares %s, which ftl-themes also declares - it will override the theme", m[1])
+		}
+	}
+}
+
+// embeddedThemeCSS returns the ftl-themes core bundle the app embeds, so a
+// test can compare the app's own declarations against what the library ships.
+func embeddedThemeCSS(t *testing.T) string {
+	t.Helper()
+	data, err := embeddedThemes.ReadFile("third_party/ftl-themes/dist/core.css")
+	if err != nil {
+		t.Fatalf("read embedded core.css: %v", err)
+	}
+	return string(data)
 }
 
 func TestThemeBundleServedAndUnknownRejected(t *testing.T) {
@@ -77,7 +106,7 @@ func TestThemeBundleServedAndUnknownRejected(t *testing.T) {
 	}{
 		{"/static/themes/lcars.css", http.StatusOK},
 		{"/static/themes/matrix.css", http.StatusOK},
-		{"/static/themes/ftl-core.css", http.StatusOK},
+		{"/static/themes/core.css", http.StatusOK},
 		{"/static/themes/icons/generic.svg", http.StatusOK},
 		{"/static/themes/icons/xbmc.svg", http.StatusOK},
 		{"/static/themes/icons/windows95.svg", http.StatusOK},
@@ -234,13 +263,13 @@ func TestDashboardCarriesAppShell(t *testing.T) {
 	// Shell slots (ftl-themes#3): dual-classed so the built-in look keeps
 	// matching its own selectors while layout themes gain regions.
 	for _, want := range []string{
-		`<body class="ftl-app">`,
-		`class="deck ftl-app-bar"`,
-		`<aside class="ftl-app-rail" aria-hidden="true"></aside>`,
-		`<main class="ftl-app-main">`,
-		`class="meter-footer ftl-app-status"`,
-		`main.ftl-app-main{display:contents}`,
-		`.ftl-app-rail:empty{display:none}`,
+		`<body class="app">`,
+		`class="deck app-bar"`,
+		`<aside class="app-rail" aria-hidden="true"></aside>`,
+		`<main class="app-main">`,
+		`class="meter-footer app-status"`,
+		`main.app-main{display:contents}`,
+		`.app-rail:empty{display:none}`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard missing shell hook %q", want)
@@ -337,17 +366,17 @@ func TestDualClassMarkupPresent(t *testing.T) {
 	// the theme bundle whenever one is active. If a hook is dropped from
 	// the markup, that surface silently stops theming.
 	for _, want := range []string{
-		`class="ftl-field-row"`,
-		`class="ftl-switch"`,
-		`class="panel left ftl-panel"`,
-		`class="icon-btn ftl-btn ftl-btn-icon"`,
-		`'transport-row ftl-transport'`,
+		`class="field-row"`,
+		`class="switch"`,
+		`class="panel left panel"`,
+		`class="icon-btn btn btn-icon"`,
+		`'transport-row transport'`,
 		`is-pause`,
 		`is-play`,
-		`class="ftl-tabs settings-tabs"`,
+		`class="tabs settings-tabs"`,
 		`data-pane="pane-display"`,
 		`settings-pane`,
-		`class="ftl-input-group"`,
+		`class="input-group"`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lost dual-class hook %q", want)

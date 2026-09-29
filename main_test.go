@@ -2913,7 +2913,7 @@ func TestMeterDeckFlagsDriveReelAnimation(t *testing.T) {
 		t.Fatalf("dashboard render: %v", err)
 	}
 	page := buf.String()
-	for _, want := range []string{`class="reel-g"`, `id="tapePath"`, `classList.toggle('spinning'`, `classList.toggle('active'`, `@keyframes spin`, `--ftl-deck-face`, `--ftl-deck-trim`} {
+	for _, want := range []string{`class="reel-g"`, `id="tapePath"`, `classList.toggle('spinning'`, `classList.toggle('active'`, `@keyframes spin`, `--deck-face`, `--deck-trim`} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("dashboard missing deck-animation hook %q", want)
 		}
