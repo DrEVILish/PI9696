@@ -17,7 +17,7 @@ Documentation=https://github.com/teodly/inferno
 #   git clone --recurse-submodules -b inferno-dev https://github.com/teodly/statime
 #   cd statime && cargo build --release
 #   # edit inferno-ptpv1.toml: set interface, leave the rest as shipped
-#   ExecStart=/opt/pi9696/statime/target/release/statime -c inferno-ptpv1.toml
+#   ExecStart=__PI9696_DIR__/statime/target/release/statime -c inferno-ptpv1.toml
 #
 # Measured here: with protocol-version = PTPv2 that does become a working
 # master, but with no Dante device on the network it never publishes the
@@ -29,7 +29,7 @@ Before=pi9696.service
 [Service]
 Type=simple
 Environment=USRVCLOCK_SOCKET=/tmp/ptp-usrvclock
-ExecStart=/opt/pi9696/fake_usrvclock_server
+ExecStart=__PI9696_DIR__/fake_usrvclock_server
 Restart=always
 RestartSec=2
 
