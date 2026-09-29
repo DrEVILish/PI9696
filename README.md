@@ -3,7 +3,7 @@
 A 1U rack-mounted multichannel audio recorder: AES67/Dante over Ethernet, uncompressed
 WAV to SD card, operated from a 256×64 OLED front panel or a token-auth web dashboard.
 
-**Docs:** [WIRING.md](WIRING.md) · [PROJECT_STATUS.md](PROJECT_STATUS.md) · [AGENTS.md](AGENTS.md)
+**Docs:** [WIRING.md](WIRING.md) · [AGENTS.md](AGENTS.md) · [DEPLOYMENT.md](DEPLOYMENT.md)
 
 ---
 
@@ -30,7 +30,7 @@ go build -o pi9696 . && sudo ./pi9696
 | Remote | HTTP on port 8080 (token + session auth, no HTTPS); `PI9696_REMOTE_PORT` overrides |
 | Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport toggle, default off, no auth) |
 | Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log |
-| File size | ~8.3 MB/min at 48 kHz stereo 24-bit |
+| File size | ~17.3 MB/min at 48 kHz stereo 24-bit |
 
 ---
 
@@ -62,8 +62,9 @@ go build -o pi9696 . && sudo ./pi9696
               │  VU meters + meters     │
               └─────────────────────────┘
 
-Playback path:
+Playback path (interim):
   ffmpeg -f alsa default ← pause via SIGSTOP, seek via -ss restart
+  Target: the app's Inferno ALSA client (TX), closing the local-ALSA gap
 ```
 
 **Key design decisions:**
@@ -71,6 +72,7 @@ Playback path:
 - Inferno lifecycle is `infernoWorker`-owned (the only goroutine that mutates inferno state)
 - Recording starts only from idle, never over an active take
 - Playback and recording are mutually exclusive in both directions
+- Inferno is bidirectional (sends + receives); the app currently drives receive (recording) while transmit/playback-out moves to the app's ALSA client (`alsapcm/`, one process holding capture + playback so a single instance does both)
 
 ---
 
@@ -86,7 +88,7 @@ Playback path:
 
 ### Playback
 
-- Plays to Inferno ALSA (pause/resume via SIGSTOP/SIGCONT preserves position without gaps)
+- Target: plays out through Inferno ALSA (pause/resume via SIGSTOP/SIGCONT preserves position without gaps). Currently plays to local ALSA (`default`) until the app drives Inferno's ALSA device directly (see `alsapcm/`); sample rate/channel mismatches are refused with a log + UI error
 - Encoder: click = play/pause, rotate while paused = 5 s scrub, hold = exit
 - Progress bar + elapsed/total with [PAUSED] marker
 
@@ -101,7 +103,7 @@ Playback path:
 
 - Copy selected/all takes to USB (per-day structure preserved)
 - Delete with confirmation
-- Format USB drive (FAT32 or exFAT)
+  - Format USB drive: exFAT or FAT32, user-selectable (currently exFAT-first with FAT32 fallback; explicit choice in progress — exFAT has no 4 GB file ceiling, which matters at high channel counts)
 - WebUI: per-file download + Download-ALL as streaming ZIP with manifest
 
 ### Button Lamps
@@ -123,12 +125,12 @@ Playback path:
 - Settings modal (all persisted settings)
 - Per-channel VU meters over 100 ms WebSocket push
 - INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
-- Theming: ftl-themes bundles (22 themes, `third_party/ftl-themes` submodule) —
+- Theming: ftl-themes bundles (32 themes, `third_party/ftl-themes` submodule @ `03ebb1e`, v4.0.0 — always track latest upstream; `html[data-theme]` slugs unchanged) —
   one linked stylesheet + `html[data-theme]`; the `third_party/ftl-themes/CONTRACT.md`
-  is the integration spec. Markup uses the library's own components (`.ftl-*`),
+  is the integration spec. Markup uses the library's own components (`.btn`, `.table`, `.modal`, `.meter`, `.scroll` — v4 dropped the `ftl-` prefix everywhere),
   the shared icon sprite (`/static/themes/icons/<slug>.svg`, per-theme art with a
   generic fallback) and the app-shell hooks. Density/Motion/Contrast display
-  options persist device-wide beside the theme choice.
+  options persist device-wide beside the theme choice. The app reads the library's tokens directly and declares none of them itself (see `TestDefaultThemeIsFTL`).
 
 ### Auth & Security
 
@@ -138,7 +140,7 @@ Playback path:
 
 **⚠ Known security limitation:** Plain HTTP only — treat as unencrypted admin page. Anyone sniffing the LAN can see the token and hijack the session. Do not expose beyond a trusted network without adding HTTPS.
 
-**⚠ CSRF:** The WebUI relies on same-origin cookie scoping; there is no explicit CSRF token. Any site a logged-in browser visits could POST to `:8080` (e.g. `logger` on the recorder) and trigger state changes. Acceptable on a trusted LAN with a token that is never exposed in browser JS.
+**⚠ CSRF:** The WebUI relies on same-origin cookie scoping; there is no explicit CSRF token. Any site a logged-in browser visits could POST to the control port (default `:8080`, `PI9696_REMOTE_PORT` overrides; e.g. `logger` on the recorder) and trigger state changes. Acceptable on a trusted LAN with a token that is never exposed in browser JS.
 
 ---
 
@@ -162,7 +164,7 @@ Fixed 256×64 layout with FiraCode TTF rendering in named contexts:
 ### Prerequisites
 
 - Raspberry Pi 5, Raspberry Pi OS 64-bit (Trixie or newer)
-- Go 1.26+ (build), Rust/Cargo (Inferno AoIP server)
+- Go 1.26+ (build), Rust/Cargo (Inferno AoIP server), libasound2-dev (`pkg-config alsa` — required: `alsapcm/` uses cgo, so any `go build ./...` / `go test ./...` needs the headers)
 - Root access for GPIO/SPI/ALSA/USB mounting
 
 ### On the Pi
@@ -185,9 +187,10 @@ cargo build --release && cd ..
 #    but never transmits (deploy/pi9696-clock.service)
 
 # 4. Unit files, generated from the repo template rather than hand-written
-sudo sed -e 's|__PI9696_DIR__|/opt/PI9696|g' deploy/pi9696.service \
+sudo sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696.service \
     | sudo tee /etc/systemd/system/pi9696.service > /dev/null
-sudo cp deploy/pi9696-clock.service /etc/systemd/system/
+sudo sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696-clock.service \
+    | sudo tee /etc/systemd/system/pi9696-clock.service > /dev/null
 sudo systemctl daemon-reload && sudo systemctl enable --now pi9696-clock pi9696
 sudo systemctl status pi9696 && sudo journalctl -u pi9696 -f
 ```
@@ -232,7 +235,7 @@ go test ./...        # run all tests
 
 ### Testing
 
-- 45 tests in `main_test.go` (1 in `logging_test.go`)
+- 78 tests in `main_test.go` (+ 10 `theme_test.go`, 7 `hyperdeck_test.go`, 5 `alsapcm/`, 2 `hardware/`, 1 `logging_test.go`)
 - Tests run the real HTTP handlers over `httptest` (auth, recordings API, ZIP download, settings)
 - Playback/seek tested against a fake `ffmpeg` via PATH shim
 - Inferno worker concurrency tested against a stub server
@@ -256,7 +259,7 @@ go test ./...        # run all tests
 | Display blank | SPI enabled? Wiring per WIRING.md? Running as root? |
 | `[INF]` never lights | Ethernet up? `ip addr show eth0`? Inferno binary built? |
 | Recording fails | Low disk (<30 min)? Already recording? OLED flashes warning |
-| WebUI unreachable | Any interface with IP? `ss -tlnp \| grep 8080` |
+| WebUI unreachable | Any interface with IP? `ss -tlnp \| grep ${PI9696_REMOTE_PORT:-8080}` |
 | USB not detected | `mount -t tmpfs none /media/usb` for testing; real USB: `lsblk` |
 | Logs | `sudo journalctl -u pi9696 -f` + `/var/log/pi9696/app.log` |
 
@@ -264,16 +267,16 @@ go test ./...        # run all tests
 
 ## Known Limitations & Design Debt
 
-These are documented in PROJECT_STATUS.md but worth flagging here:
+Design debt worth flagging here:
 
-1. **Playback via Inferno/AoIP** — Inferno's *transmit* works (verified: tone → ALSA virtual device → Dante → received), so the output path is a matter of pointing ffmpeg at the `inferno` ALSA device. Still local ALSA, because a second Dante receiver is needed to confirm it and a single host cannot provide one.
+1. **Playback via Inferno/AoIP** — target: out through Inferno's ALSA device (`alsapcm/`: one process, one instance, RX + TX). Verified so far: Inferno's transmit works (tone → ALSA virtual device → Dante → received by a subscriber). Currently still local ALSA (`default`).
 2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
 3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
-4. **FIFO handoff window** — monitor→recording transition has an unbounded window where both processes read the FIFO. Acceptance documented in code comments.
+4. **FIFO handoff window** — monitor→recording transition has a brief sub-100 ms window where the outgoing monitor's read can still race the new recording reader. Accepted as a startup blip; documented in code comments.
 5. **Config persistence** — atomic rename, but temp file not fsync'd before rename (power loss can truncate config).
-6. **Meter race on monitor→record** — stale monitor goroutine can clear recording's meter slices if it completes after startRecording reallocates them. Meters may show dead for the take.
+6. **Meter race on monitor→record** — fixed via the `meterGen` generation counter (stale reapers can't touch the new session); kept here as history of the hazard.
 7. **No analog/USB audio I/O** — Ethernet only (product decision).
-8. **Sim config path** — `PI9696_SIM=1` writes to `/tmp/pi9696-config.json`; real Pi writes to `/etc/pi9696/config.json`. Per-test env override is ignored (ConfigPath resolved once in init).
+8. **Sim config path** — `PI9696_SIM=1` writes to `/tmp/pi9696-config.json`; real Pi writes to `/etc/pi9696/config.json`. Resolved once in `init()`: set `PI9696_CONFIG` before startup to override (tests reassign `ConfigPath` directly).
 9. **FIFO buffer needs `CAP_SYS_RESOURCE`** — the 4 MB raw FIFO needs the capability to grow; a `CapabilityBoundingSet` on the unit silently costs it, and the recorder keeps working at the 64 KB default. See DEPLOYMENT.md.
 
 ---
@@ -283,15 +286,18 @@ These are documented in PROJECT_STATUS.md but worth flagging here:
 ```
 main.go            app: state machine, menus, recording/playback, Inferno lifecycle
 remote.go          web server: auth, dashboard, settings, downloads, meter push
+hyperdeck.go       Blackmagic HyperDeck control server (TCP 9993)
 logging.go         log/slog (stderr + app.log, default Error-only)
 hardware/          SSD1322 display, encoder, buttons, lamps, network detection
+alsapcm/           cgo ALSA wrapper so the app can be the single Inferno client (RX + TX)
 cmd/simcheck/      renders OLED screens to PNG via PI9696_SIM
-inferno/           Inferno AoIP server (Rust) — prebuilt with `cargo build --release`
-deploy/            systemd unit
-rec/               recordings (per-day folders), raw FIFO scratch
-fonts/             FiraCode TTFs
+deploy/            systemd units (pi9696, pi9696-clock)
+inferno-loopback.sh  proves Dante TX→RX with no Dante hardware (tone in, tone out)
+DEPLOYMENT.md      install record (this file defers to it); WIRING.md is hardware
+inferno/           Inferno AoIP server (Rust) — install-time checkout, NOT tracked
+fonts/ rec/ web assets  install-time/runtime paths, NOT tracked (see .gitignore)
 ```
 
 ---
 
-**Version:** 1.17.1 · **Status:** feature-complete per Round 3 design; deployment blocked on hardware bring-up.
+**Version:** 1.20.0 · **Status:** recording/playback/WebUI live; Inferno RX live, TX via app ALSA client in progress; OLED seen only in sim.
