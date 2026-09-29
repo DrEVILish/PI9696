@@ -877,6 +877,7 @@ var (
 	filePrefix             = "" // "" means defaultFilePrefix; see effectiveFilePrefix
 	isRecording            = false
 	isCopying              = false
+	copyDone               chan struct{} // closed when the copy worker exits
 	recordStart            time.Time
 	recordingFile          string
 	playbackCmd            *exec.Cmd
@@ -1111,11 +1112,21 @@ func main() {
 	gracefulShutdown()
 }
 
+// shutdownWaitMargin is slack on top of ffmpegStopGrace for scheduling and
+// reaping. shutdownWaitTimeout must cover the whole SIGTERM-then-SIGKILL
+// sequence terminateFfmpeg runs; cutting it short would abandon a take ffmpeg
+// is still finalizing (or orphan it pre-SIGKILL) and corrupt exactly the file
+// gracefulShutdown exists to save. The total still fits the unit's
+// TimeoutStopSec=30 (see deploy/pi9696.service).
+const shutdownWaitMargin = 2 * time.Second
+
+func shutdownWaitTimeout() time.Duration { return ffmpegStopGrace + shutdownWaitMargin }
+
 // waitDone waits for a reaping goroutine with a shutdown-bounded timeout.
 func waitDone(done <-chan struct{}, what string) {
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
+	case <-time.After(shutdownWaitTimeout()):
 		logWarnf("Shutdown: %s did not exit in time, continuing", what)
 	}
 }
@@ -1139,6 +1150,7 @@ func gracefulShutdown() {
 	recording := isRecording
 	playing := currentState == StatePlaying || currentState == StatePaused
 	mon := monitoring
+	copying := isCopying
 	var recDone, playDone, monDone chan struct{}
 	if recording {
 		log.Println("Stopping active recording before shutdown")
@@ -1155,7 +1167,12 @@ func gracefulShutdown() {
 		monDone = monitorDone
 		stopMonitor()
 	}
-	mutex.Unlock()
+	if copying {
+		mutex.Unlock()
+		cancelCopyAndWait()
+	} else {
+		mutex.Unlock()
+	}
 
 	// Wait for the owning goroutines (see startRecording/startPlayback/
 	// startMonitor) to actually reap their processes before the app exits,
@@ -3520,6 +3537,7 @@ func startCopyOperation() {
 
 	currentState = StateCopying
 	isCopying = true
+	copyDone = make(chan struct{})
 	copyProgress = 0
 	copyStarted = time.Now()
 	// Snapshot the selection while held: the goroutine below reads this
@@ -3537,6 +3555,7 @@ func startCopyOperation() {
 			mutex.Lock()
 			isCopying = false
 			currentState = StateIdle
+			close(copyDone)
 			mutex.Unlock()
 			return
 		}
@@ -3578,8 +3597,26 @@ func startCopyOperation() {
 		mutex.Lock()
 		isCopying = false
 		currentState = StateIdle
+		close(copyDone)
 		mutex.Unlock()
 	}()
+}
+
+// cancelCopyAndWait signals a running USB copy to stop at the next file or
+// 1MB-chunk boundary and waits (bounded) for the worker to exit, so shutdown
+// never abandons a partial dst.tmp or lets the worker's terminal state write
+// land after teardown. The hold-to-cancel UI path only clears the flag and
+// returns immediately; this is the shutdown variant that also waits.
+func cancelCopyAndWait() {
+	mutex.Lock()
+	if !isCopying || copyDone == nil {
+		mutex.Unlock()
+		return
+	}
+	done := copyDone
+	isCopying = false
+	mutex.Unlock()
+	waitDone(done, "copy")
 }
 
 // copyFile streams src to dst rather than reading it fully into memory:
@@ -3613,14 +3650,18 @@ func copyFile(src, dst string, cancelled func() bool) error {
 	for {
 		if cancelled() {
 			out.Close()
-			os.Remove(tmp)
+			if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+				logWarnf("copy: removing partial %s: %v", tmp, err)
+			}
 			return errCopyCancelled
 		}
 		n, rerr := in.Read(buf)
 		if n > 0 {
 			if _, werr := out.Write(buf[:n]); werr != nil {
 				out.Close()
-				os.Remove(tmp)
+				if err := os.Remove(tmp); err != nil && !os.IsNotExist(err) {
+					logWarnf("copy: removing partial %s: %v", tmp, err)
+				}
 				return werr
 			}
 		}
@@ -3691,6 +3732,16 @@ func formatUSB() {
 		logErrorf("format USB: device changed during umount (was %s), aborting", device)
 		return
 	}
+	// Re-check the transport-busy guard from the confirm screen: a take,
+	// playback or copy started after the user confirmed (this runs on
+	// systemOpWorker, seconds or minutes later) must abort the format, or
+	// mkfs lands on a live copy target and the copy's writes fall into the
+	// empty mountpoint on the SD card.
+	if formatBusyNow() {
+		logErrorf("format USB: transport busy since confirm, aborting (stop first)")
+		showSysNotice("BUSY - STOP FIRST")
+		return
+	}
 	formatted := "exFAT"
 	if out, err := exec.Command("sudo", "mkfs.exfat", device).CombinedOutput(); err != nil {
 		logWarnf("format USB: mkfs.exfat failed (%v: %s) - falling back to FAT32", err, out)
@@ -3717,6 +3768,15 @@ func formatUSB() {
 	logInfof("USB drive formatted (%s) and remounted", formatted)
 }
 
+// formatBusyNow reports whether a take, playback or copy is currently active.
+// formatUSB calls it on the worker just before mkfs (it takes the mutex
+// itself, so it must NOT be used from handleConfirmClick, which already holds
+// it - that path keeps its inline check).
+func formatBusyNow() bool {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return isRecording || playbackCmd != nil || isCopying
+}
 // usbDevicePath looks up the block device currently mounted at USBMountPoint.
 // formatUSB previously hardcoded /dev/sda1, which would format the wrong
 // disk (or even a boot/root drive) on any system where the USB stick isn't
