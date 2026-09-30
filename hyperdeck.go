@@ -102,6 +102,17 @@ func stopHyperdeckServer() {
 	}
 }
 
+// hyperdeckMaxSessions bounds concurrent controller sessions. Each session
+// is a command goroutine plus a 500ms notify goroutine/ticker, and the port
+// is unauthenticated by design - without a cap, a connection flood exhausts
+// goroutines and timers. Eight is generous for legitimate use (Dante
+// Controller plus a script or two); excess connections are refused outright
+// rather than queued, since queuing only moves the exhaustion to memory.
+const hyperdeckMaxSessions = 8
+
+// hyperdeckSessions is the live session count, guarded by hyperdeckMu.
+var hyperdeckSessions int
+
 func hyperdeckAcceptLoop(l net.Listener) {
 	for {
 		c, err := l.Accept()
@@ -115,7 +126,23 @@ func hyperdeckAcceptLoop(l net.Listener) {
 			}
 			return // listener closed
 		}
-		go handleHyperdeckConn(c)
+		hyperdeckMu.Lock()
+		if hyperdeckSessions >= hyperdeckMaxSessions {
+			hyperdeckMu.Unlock()
+			// Refused at debug: a flood would turn a louder log into
+			// disk-amplified DoS of its own.
+			logDebugf("hyperdeck: refusing connection past %d sessions", hyperdeckMaxSessions)
+			c.Close()
+			continue
+		}
+		hyperdeckSessions++
+		hyperdeckMu.Unlock()
+		go func() {
+			handleHyperdeckConn(c)
+			hyperdeckMu.Lock()
+			hyperdeckSessions--
+			hyperdeckMu.Unlock()
+		}()
 	}
 }
 

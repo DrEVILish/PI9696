@@ -355,3 +355,55 @@ func TestHyperdeckLongLineGetsError(t *testing.T) {
 		t.Fatalf("overlong line response = %q, want a 100-level error", first)
 	}
 }
+
+// Sessions are capped: past hyperdeckMaxSessions the server must refuse
+// immediately (close, no greeting) instead of spawning unbounded goroutines
+// and tickers for a connection flood on the unauthenticated port.
+func TestHyperdeckSessionCapRefuses(t *testing.T) {
+	_, c, cleanup := hyperdeckDial(t)
+	defer cleanup()
+	defer c.Close()
+
+	// Hold maxSessions-1 more (the dial above holds one), then prove the
+	// next connection is refused rather than served.
+	extra := make([]net.Conn, 0, hyperdeckMaxSessions)
+	defer func() {
+		for _, x := range extra {
+			x.Close()
+		}
+	}()
+	hyperdeckMu.Lock()
+	addr := hyperdeckListener.Addr().String()
+	hyperdeckMu.Unlock()
+	for i := 1; i < hyperdeckMaxSessions; i++ {
+		x, err := net.DialTimeout("tcp", addr, 3*time.Second)
+		if err != nil {
+			t.Fatalf("filling session %d: %v", i, err)
+		}
+		extra = append(extra, x)
+	}
+	// Give the server a moment to register them all.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		hyperdeckMu.Lock()
+		n := hyperdeckSessions
+		hyperdeckMu.Unlock()
+		if n >= hyperdeckMaxSessions || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	victim, err := net.DialTimeout("tcp", addr, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial past cap: %v", err)
+	}
+	defer victim.Close()
+	victim.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 256)
+	n, rerr := victim.Read(buf)
+	// Refused means EOF/closed without the 500-greeting other sessions get.
+	if rerr == nil {
+		t.Fatalf("past-cap connection served %d bytes: %q", n, buf[:n])
+	}
+}

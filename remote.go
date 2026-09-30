@@ -3267,23 +3267,33 @@ func broadcastTelemetry() {
 	if err != nil {
 		return
 	}
+	// Snapshot the client set under lock, then send without it: holding
+	// teleWSMu across blocking socket writes lets one slow/vanished
+	// dashboard stall every connect/disconnect plus the panel render's wait
+	// on the app mutex. A client that connects mid-tick simply joins the
+	// next one 2s later; one that disconnects mid-tick gets a harmless
+	// redundant Close+delete (both idempotent).
 	teleWSMu.Lock()
-	defer teleWSMu.Unlock()
 	config, recs, configChanged, recsChanged := panelWSMessages()
+	clients := make([]*websocket.Conn, 0, len(teleWSHub))
 	for ws := range teleWSHub {
+		clients = append(clients, ws)
+	}
+	teleWSMu.Unlock()
+	for _, ws := range clients {
+		alive := true
 		if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
-			ws.Close()
-			delete(teleWSHub, ws)
-			continue
+			alive = false
+		} else if configChanged && !teleWSSend(ws, "#config", config) {
+			alive = false
+		} else if recsChanged && !teleWSSend(ws, "#recordings", recs) {
+			alive = false
 		}
-		if configChanged && !teleWSSend(ws, "#config", config) {
+		if !alive {
+			teleWSMu.Lock()
 			ws.Close()
 			delete(teleWSHub, ws)
-			continue
-		}
-		if recsChanged && !teleWSSend(ws, "#recordings", recs) {
-			ws.Close()
-			delete(teleWSHub, ws)
+			teleWSMu.Unlock()
 		}
 	}
 }
@@ -3295,6 +3305,10 @@ func broadcastTelemetry() {
 // never call it with the app mutex already held.
 var lastPanelConfig, lastPanelRecs string
 
+// lastPanelRecsKey is the take-set fingerprint the stored recordings body was
+// rendered from. Empty until the first successful render.
+var lastPanelRecsKey string
+
 // panelWSMessages renders both panels, stores the new bodies, and reports
 // whether each changed since the last push. Call with teleWSMu held.
 func panelWSMessages() (config, recs string, configChanged, recsChanged bool) {
@@ -3302,9 +3316,22 @@ func panelWSMessages() (config, recs string, configChanged, recsChanged bool) {
 		config, configChanged = c, c != lastPanelConfig
 		lastPanelConfig = c
 	}
+	// The row render opens and reads every WAV for its duration, so skip it
+	// when the take set hasn't changed. recordingFilesKey fingerprints the
+	// set from directory mtimes - the same key recordingFiles() itself
+	// trusts for cache invalidation, so this is exactly as fresh as the
+	// data source (and shares its documented blind spot: in-place content
+	// edits without mtime change). An active take grows its file, which
+	// bumps the day-dir mtime, so live durations keep flowing.
+	if recKey, ok := recordingFilesKey(); ok && recKey == lastPanelRecsKey && lastPanelRecsKey != "" {
+		return config, lastPanelRecs, configChanged, false
+	}
 	if r, err := renderRecordingsHTMLLimit(latestRecsPushCap); err == nil {
 		recs, recsChanged = r, r != lastPanelRecs
 		lastPanelRecs = r
+		if key, ok := recordingFilesKey(); ok {
+			lastPanelRecsKey = key
+		}
 	}
 	return config, recs, configChanged, recsChanged
 }
@@ -3444,6 +3471,35 @@ func currentMeterResponse() meterResponse {
 	return resp
 }
 
+// meterCache shares one marshaled snapshot across meter sockets: without it
+// N dashboards each build (up to 128 channels) and marshal identical payloads
+// at 10Hz. The payload is time-quantized to the tick anyway (Elapsed), so a
+// 100ms TTL loses nothing. Guarded by its own small mutex, never the app
+// mutex, so a slow snapshot build can't stall render/input. On marshal
+// failure (unreachable for this struct, but cheap to honor) the last good
+// frame keeps serving rather than pushing an empty one clients would choke on.
+var meterCacheMu sync.Mutex
+var meterCacheAt time.Time
+var meterCachePayload []byte
+
+const meterCacheTTL = 100 * time.Millisecond
+
+func cachedMeterPayload() []byte {
+	meterCacheMu.Lock()
+	defer meterCacheMu.Unlock()
+	if meterCachePayload != nil && time.Since(meterCacheAt) < meterCacheTTL {
+		return meterCachePayload
+	}
+	data, err := json.Marshal(currentMeterResponse())
+	if err != nil {
+		logDebugf("meter marshal: %v", err)
+		return meterCachePayload
+	}
+	meterCachePayload = data
+	meterCacheAt = time.Now()
+	return data
+}
+
 func handleAPIMeter(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(currentMeterResponse()); err != nil {
@@ -3474,7 +3530,7 @@ func wsMeterSend(ws *websocket.Conn) bool {
 	if err := ws.SetWriteDeadline(time.Now().Add(wsWriteTimeout)); err != nil {
 		return false
 	}
-	return websocket.JSON.Send(ws, currentMeterResponse()) == nil
+	return websocket.JSON.Send(ws, json.RawMessage(cachedMeterPayload())) == nil
 }
 
 func handleWSMeter(ws *websocket.Conn) {

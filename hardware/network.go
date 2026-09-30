@@ -207,6 +207,10 @@ func hexToIP(hexStr string) string {
 	return net.IP([]byte{raw[3], raw[2], raw[1], raw[0]}).String()
 }
 
+// nameserverRe is compiled once: getDNSServers runs on the per-tick info
+// page path, and compiling per call wastes a parse plus allocs every frame.
+var nameserverRe = regexp.MustCompile(`^nameserver\s+(\S+)`)
+
 // getDNSServers attempts to get DNS server information
 func (nd *NetworkDetector) getDNSServers() []string {
 	var dnsServers []string
@@ -218,12 +222,11 @@ func (nd *NetworkDetector) getDNSServers() []string {
 	}
 	defer file.Close()
 
-	nameserverRegex := regexp.MustCompile(`^nameserver\s+(\S+)`)
 	scanner := bufio.NewScanner(file)
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
-		if matches := nameserverRegex.FindStringSubmatch(line); matches != nil {
+		if matches := nameserverRe.FindStringSubmatch(line); matches != nil {
 			dnsServer := matches[1]
 			// Filter out IPv6 and localhost
 			if net.ParseIP(dnsServer) != nil && !strings.Contains(dnsServer, ":") && dnsServer != "127.0.0.1" {

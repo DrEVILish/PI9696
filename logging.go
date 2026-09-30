@@ -113,7 +113,27 @@ func applyLogLevel(l LogLevel) {
 	slogLevel.Set(slogLevels[l])
 }
 
-func logDebugf(format string, args ...any) { slog.Debug(fmt.Sprintf(format, args...)) }
-func logInfof(format string, args ...any)  { slog.Info(fmt.Sprintf(format, args...)) }
-func logWarnf(format string, args ...any)  { slog.Warn(fmt.Sprintf(format, args...)) }
-func logErrorf(format string, args ...any) { slog.Error(fmt.Sprintf(format, args...)) }
+func logDebugf(format string, args ...any) {
+	if slogLevel.Level() > slog.LevelDebug {
+		return
+	}
+	slog.Debug(fmt.Sprintf(format, args...))
+}
+func logInfof(format string, args ...any) {
+	if slogLevel.Level() > slog.LevelInfo {
+		return
+	}
+	slog.Info(fmt.Sprintf(format, args...))
+}
+func logWarnf(format string, args ...any) {
+	if slogLevel.Level() > slog.LevelWarn {
+		return
+	}
+	slog.Warn(fmt.Sprintf(format, args...))
+}
+func logErrorf(format string, args ...any) {
+	if slogLevel.Level() > slog.LevelError {
+		return
+	}
+	slog.Error(fmt.Sprintf(format, args...))
+}

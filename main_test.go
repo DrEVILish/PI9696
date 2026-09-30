@@ -795,13 +795,13 @@ func TestTelemetryWSRoundtrip(t *testing.T) {
 func TestTelemetryWSPanelsPush(t *testing.T) {
 	initTestHardware(t) // renderConfigHTML reads hwManager.Network
 	origHub := teleWSHub
-	origCfg, origRecs := lastPanelConfig, lastPanelRecs
+	origCfg, origRecs, origKey := lastPanelConfig, lastPanelRecs, lastPanelRecsKey
 	teleWSHub = map[*websocket.Conn]bool{}
-	lastPanelConfig, lastPanelRecs = "", ""
+	lastPanelConfig, lastPanelRecs, lastPanelRecsKey = "", "", ""
 	t.Cleanup(func() {
 		teleWSMu.Lock()
 		teleWSHub = origHub
-		lastPanelConfig, lastPanelRecs = origCfg, origRecs
+		lastPanelConfig, lastPanelRecs, lastPanelRecsKey = origCfg, origRecs, origKey
 		teleWSMu.Unlock()
 	})
 
@@ -4490,4 +4490,176 @@ func TestRenderEncodeFailuresLoggedNotPanics(t *testing.T) {
 	handleAPITelemetry(w, r)
 	// Meter snapshots encode the same way; drive the encoder path directly.
 	_ = json.NewEncoder(w).Encode(currentMeterResponse())
+}
+
+// The info page must not re-probe the network and re-encode the QR bitmap on
+// every 100ms render tick: interface enumeration, gateway/DNS reads and QR
+// encoding dwarf the frame budget, while the facts change on DHCP/link
+// timescales.
+func TestInfoPageCachesNetworkProbe(t *testing.T) {
+	initTestHardware(t)
+	origToken := remoteToken
+	origCache := infoCache
+	t.Cleanup(func() {
+		mutex.Lock()
+		remoteToken = origToken
+		infoCache = origCache
+		mutex.Unlock()
+	})
+	mutex.Lock()
+	infoCache.at = time.Time{} // force cold
+	remoteToken = "AAAAAAAA"
+	renderIdleInfoPage()
+	firstAt, firstQR := infoCache.at, infoCache.qrFor
+	mutex.Unlock()
+	if firstAt.IsZero() {
+		t.Fatal("first render did not populate the cache")
+	}
+	if len(infoCache.details) == 0 {
+		t.Error("cache holds no network details")
+	}
+	mutex.Lock()
+	renderIdleInfoPage()
+	mutex.Unlock()
+	mutex.Lock()
+	secondAt := infoCache.at
+	mutex.Unlock()
+	if !secondAt.Equal(firstAt) {
+		t.Error("second render within TTL re-probed instead of using the cache")
+	}
+	// A token change must re-encode the QR (its content embeds the token).
+	mutex.Lock()
+	remoteToken = "BBBBBBBB"
+	renderIdleInfoPage()
+	mutex.Unlock()
+	mutex.Lock()
+	afterQR := infoCache.qrFor
+	mutex.Unlock()
+	if afterQR == firstQR {
+		t.Error("QR not re-encoded after the token changed")
+	}
+	if !strings.Contains(afterQR, "BBBBBBBB") {
+		t.Errorf("QR key %q does not embed the new token", afterQR)
+	}
+}
+
+// Rapid meter polls must share one marshaled snapshot instead of rebuilding
+// (up to 128 channels) and remarshaling identical payloads per socket at
+// 10Hz. Invalidating the cache with an observable state change must rebuild.
+func TestMeterSnapshotShared(t *testing.T) {
+	initTestHardware(t)
+	meterCacheMu.Lock()
+	meterCacheAt, meterCachePayload = time.Time{}, nil
+	meterCacheMu.Unlock()
+	t.Cleanup(func() {
+		meterCacheMu.Lock()
+		meterCacheAt, meterCachePayload = time.Time{}, nil
+		meterCacheMu.Unlock()
+	})
+
+	a := cachedMeterPayload()
+	if len(a) == 0 {
+		t.Fatal("empty meter payload")
+	}
+	if b := cachedMeterPayload(); string(a) != string(b) {
+		t.Fatal("rapid polls rebuilt instead of sharing the snapshot")
+	}
+	// Flip observable state, invalidate, and demand a rebuilt payload.
+	mutex.Lock()
+	origOut := monitoringOutput
+	monitoringOutput = !origOut
+	meterCacheMu.Lock()
+	meterCacheAt = time.Time{}
+	meterCacheMu.Unlock()
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		monitoringOutput = origOut
+		mutex.Unlock()
+	})
+	if c := cachedMeterPayload(); string(c) == string(a) {
+		t.Error("rebuild after invalidate produced identical bytes despite a state change")
+	}
+}
+
+// The recordings push must skip its expensive row render (a WAV open+read
+// per take) when the take set hasn't changed: the mtime fingerprint is the
+// same key recordingFiles() trusts, so the skip is exactly as fresh as the
+// data source. Proved by changing content with pinned mtimes and observing
+// the stale body served with changed=false.
+func TestPanelSkipsRecordingsRenderWhenSetUnchanged(t *testing.T) {
+	initTestHardware(t)
+	origRecs, origKey := lastPanelRecs, lastPanelRecsKey
+	origCfg := lastPanelConfig
+	t.Cleanup(func() {
+		teleWSMu.Lock()
+		lastPanelRecs, lastPanelRecsKey, lastPanelConfig = origRecs, origKey, origCfg
+		teleWSMu.Unlock()
+	})
+	teleWSMu.Lock()
+	lastPanelRecs, lastPanelRecsKey, lastPanelConfig = "", "", ""
+	teleWSMu.Unlock()
+
+	take := filepath.Join(RecordPath, "skip_20260101_120000_ch2_48kHz.wav")
+	if err := os.WriteFile(take, []byte("fake-one"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(take) })
+
+	teleWSMu.Lock()
+	_, recsA, _, changedA := panelWSMessages()
+	teleWSMu.Unlock()
+	if !changedA || recsA == "" {
+		t.Fatal("cold render reported nothing changed")
+	}
+	if !strings.Contains(recsA, "skip_20260101_120000") {
+		t.Fatal("rendered recordings omit the staged take")
+	}
+
+	// Change the content but pin every mtime the fingerprint reads, so the
+	// take set looks unchanged while the bytes differ.
+	stFile, err := os.Stat(take)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stDir, err := os.Stat(RecordPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(take, []byte("fake-two-larger-content"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	os.Chtimes(take, stFile.ModTime(), stFile.ModTime())
+	os.Chtimes(RecordPath, stDir.ModTime(), stDir.ModTime())
+
+	teleWSMu.Lock()
+	_, recsB, _, changedB := panelWSMessages()
+	teleWSMu.Unlock()
+	if changedB {
+		t.Error("recordings re-rendered with an unchanged take set")
+	}
+	if recsB != recsA {
+		t.Error("skip served different content than the stored body")
+	}
+}
+
+// A broadcast round with no clients must be a fast no-op: it exercises the
+// snapshot-then-send restructure (client-set snapshot under lock, sends
+// outside it) without needing any sockets.
+func TestBroadcastTelemetryNoClients(t *testing.T) {
+	initTestHardware(t)
+	teleWSMu.Lock()
+	saved := teleWSHub
+	teleWSHub = map[*websocket.Conn]bool{}
+	teleWSMu.Unlock()
+	t.Cleanup(func() {
+		teleWSMu.Lock()
+		teleWSHub = saved
+		teleWSMu.Unlock()
+	})
+	start := time.Now()
+	broadcastTelemetry()
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("clientless broadcast took %s", elapsed)
+	}
 }
