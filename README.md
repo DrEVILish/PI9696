@@ -20,6 +20,7 @@ go build -o pi9696 . && sudo ./pi9696
 
 | Parameter | Value |
 |-----------|-------|
+| Target | Raspberry Pi 5 deployment (`/dev/ptp0` hardware timestamping); must also run error-free on Pi 4 (software-timestamping fallback) |
 | Input | AES67/Dante via Inferno (Ethernet only; no analog/USB audio) |
 | Rates | 44.1 / 48 / 96 / 192 kHz |
 | Channels | 1–128 (Pi 5 throughput at top end) |
