@@ -336,3 +336,22 @@ func TestHyperdeckClipIDMatchesActiveTake(t *testing.T) {
 		t.Fatalf("clip id = %s, want index %d", id, want)
 	}
 }
+
+// A command line longer than the scanner buffer must get an explicit error,
+// not a silent session drop that leaves the controller hanging.
+func TestHyperdeckLongLineGetsError(t *testing.T) {
+	sc, c, cleanup := hyperdeckDial(t)
+	defer cleanup()
+	c.SetDeadline(time.Now().Add(3 * time.Second))
+	long := "transport info " + strings.Repeat("x", 5000) + "\n"
+	if _, err := c.Write([]byte(long)); err != nil {
+		t.Fatal(err)
+	}
+	if !sc.Scan() {
+		t.Fatal("no response to an overlong line")
+	}
+	first := strings.TrimSpace(sc.Text())
+	if !strings.HasPrefix(first, "100 ") {
+		t.Fatalf("overlong line response = %q, want a 100-level error", first)
+	}
+}

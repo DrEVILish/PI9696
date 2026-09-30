@@ -28,6 +28,7 @@ type Button struct {
 type ButtonManager struct {
 	buttons []*Button
 	quit    chan struct{}
+	wg      sync.WaitGroup
 	mutex   sync.Mutex
 }
 
@@ -90,6 +91,7 @@ func NewButtonManager() (*ButtonManager, error) {
 	// that moved. 500ms timeout keeps quit responsive and covers drivers
 	// that miss edges; debounce still gates repeats (see readButton).
 	for _, b := range bm.buttons {
+		bm.wg.Add(1)
 		go bm.watch(b)
 	}
 
@@ -99,6 +101,7 @@ func NewButtonManager() (*ButtonManager, error) {
 // watch services one button: immediate wake on either edge (pins are
 // BothEdges), timeout poll otherwise. Decode/debounce unchanged.
 func (bm *ButtonManager) watch(b *Button) {
+	defer bm.wg.Done()
 	var spins int
 	for {
 		select {
@@ -111,15 +114,18 @@ func (bm *ButtonManager) watch(b *Button) {
 	}
 }
 
-// Close stops the monitor goroutine.
+// Close stops the monitor goroutines and releases the pins. Joined outside
+// the mutex like Encoder.Close: watchers take bm.mutex, and the 500ms edge
+// timeout bounds the worst case.
 func (bm *ButtonManager) Close() {
 	bm.mutex.Lock()
-	defer bm.mutex.Unlock()
 	select {
 	case <-bm.quit:
 	default:
 		close(bm.quit)
 	}
+	bm.mutex.Unlock()
+	bm.wg.Wait()
 }
 
 func (bm *ButtonManager) readButton(button *Button) {

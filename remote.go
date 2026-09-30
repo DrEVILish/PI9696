@@ -385,7 +385,9 @@ func handleManifest(w http.ResponseWriter, r *http.Request) {
 	// start_url ("/") requires auth like every other route - opening the
 	// installed app when the session cookie has expired just lands on
 	// /login, same as any bookmark would.
-	json.NewEncoder(w).Encode(manifest)
+	if err := json.NewEncoder(w).Encode(manifest); err != nil {
+		logDebugf("manifest encode: %v", err)
+	}
 }
 
 type loginPageData struct {
@@ -527,7 +529,9 @@ func writeLoginPage(w http.ResponseWriter, d loginPageData) {
 	d.Theme, d.ThemeCSS = loginPageTheme()
 	d.CoreVersion = themeBuildVersion()
 	d.HTMLTag = displayHTMLTag(currentTheme())
-	loginPageTmpl.Execute(w, d)
+	if err := loginPageTmpl.Execute(w, d); err != nil {
+		logDebugf("login render: %v", err)
+	}
 }
 
 func handleLoginPost(w http.ResponseWriter, r *http.Request) {
@@ -3185,7 +3189,11 @@ func renderStatusHTML() (string, error) {
 }
 
 func handleAPIStatus(w http.ResponseWriter, r *http.Request) {
-	statusTmpl.Execute(w, currentStatusView())
+	// Unchecked Execute hides truncated pages on client disconnect; debug,
+	// not warn, since a gone client is not an app fault.
+	if err := statusTmpl.Execute(w, currentStatusView()); err != nil {
+		logDebugf("status render: %v", err)
+	}
 }
 
 // telemetryHistView is the dashboard graphs' feed: parallel arrays, newest
@@ -3216,7 +3224,9 @@ func currentTelemetryHist() telemetryHistView {
 
 func handleAPITelemetry(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(currentTelemetryHist())
+	if err := json.NewEncoder(w).Encode(currentTelemetryHist()); err != nil {
+		logDebugf("telemetry encode: %v", err)
+	}
 }
 
 // teleWSHub tracks dashboard telemetry sockets; guarded by teleWSMu (never
@@ -3436,7 +3446,9 @@ func currentMeterResponse() meterResponse {
 
 func handleAPIMeter(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(currentMeterResponse())
+	if err := json.NewEncoder(w).Encode(currentMeterResponse()); err != nil {
+		logDebugf("meter encode: %v", err)
+	}
 }
 
 // handleWSMeter pushes a meter snapshot every 100ms over a WebSocket rather
