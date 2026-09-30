@@ -1,6 +1,6 @@
 # PI9696 — Design Guide
 
-A 1U rack-mounted multichannel audio recorder: AES67/Dante over Ethernet, uncompressed
+A 1U rack-mounted multichannel audio recorder: AES67 over Ethernet via inferno, uncompressed
 WAV to SD card, operated from a 256×64 OLED front panel or a token-auth web dashboard.
 
 **Docs:** [WIRING.md](WIRING.md) · [AGENTS.md](AGENTS.md) · [DEPLOYMENT.md](DEPLOYMENT.md)
@@ -21,7 +21,7 @@ go build -o pi9696 . && sudo ./pi9696
 | Parameter | Value |
 |-----------|-------|
 | Target | Raspberry Pi 5 deployment (`/dev/ptp0` hardware timestamping); must also run error-free on Pi 4 (software-timestamping fallback) |
-| Input | AES67/Dante via Inferno (Ethernet only; no analog/USB audio) |
+| Input | AES67 via Inferno (Ethernet only; no analog/USB audio) |
 | Rates | 44.1 / 48 / 96 / 192 kHz |
 | Channels | 1–128 (Pi 5 throughput at top end) |
 | Format | WAV PCM 24-bit on disk (32-bit internal) |
@@ -38,7 +38,7 @@ go build -o pi9696 . && sudo ./pi9696
 ## System Architecture
 
 ```
-                    Inferno (AES67/Dante)
+                    Inferno (AES67)
                            │
                     ┌──────▼──────┐
                     │    FIFO     │
@@ -64,7 +64,7 @@ go build -o pi9696 . && sudo ./pi9696
               └─────────────────────────┘
 
 Playback path:
-  ffmpeg -f s32le → pump → TX holder (`inferno` ALSA, Dante out); pause writes
+  ffmpeg -f s32le → pump → TX holder (`inferno` ALSA, inferno TX out); pause writes
   silence, seek via -ss restart. Local `-f alsa default` only where no
   inferno device exists (dev/sim fallback).
 ```
@@ -75,7 +75,7 @@ Playback path:
 - Recording starts only from idle, never over an active take
 - Playback and recording are mutually exclusive in both directions
 - Inferno is bidirectional (sends + receives); the app currently drives receive (recording) while transmit/playback-out moves to the app's ALSA client (`alsapcm/`, one process holding capture + playback so a single instance does both)
-- TX is real scope, not a stretch goal: the unit has two modes, RECORDING and PLAYBACK, and its TX and RX channels stay visible on the Dante/Inferno/AES67 network in both modes. TX and RX channel counts are always equal (one `channelCount` drives both). The clock source is a hard TX gate — Inferno aborts transmit without the usrvclock overlay — so statime (PTPv1, locked to the Dante leader) replaces the stub the moment Dante hardware is on the LAN
+- TX is real scope, not a stretch goal: the unit has two modes, RECORDING and PLAYBACK, and its TX and RX channels stay visible on the inferno/AES67 network in both modes. TX and RX channel counts are always equal (one `channelCount` drives both). The clock source is a hard TX gate — Inferno aborts transmit without the usrvclock overlay — so statime (PTPv1, locked to the network's PTP leader) replaces the stub the moment a hardware inferno-network device is on the LAN
 - ffmpeg is the capture/playback converter (tried and tested); no native rewrite planned
 
 ---
@@ -92,7 +92,7 @@ Playback path:
 
 ### Playback
 
-- Target: plays out through Inferno ALSA (pause writes silence to Dante TX so the playhead holds without gaps or SIGSTOP choreography). The app holds the `inferno` device persistently (`txholder.go`: TX-only, own NAME/PROCESS_ID/ALT_PORT), pumping ffmpeg-decoded s32le through it; local ALSA (`default`) remains the fallback where no inferno device exists (dev/sim). Sample rate/channel mismatches are refused with a log + UI error; a present-but-clockless holder refuses Dante playback with a notice instead of misrouting locally
+- Target: plays out through Inferno ALSA (pause writes silence to inferno TX so the playhead holds without gaps or SIGSTOP choreography). The app holds the `inferno` device persistently (`txholder.go`: TX-only, own NAME/PROCESS_ID/ALT_PORT), pumping ffmpeg-decoded s32le through it; local ALSA (`default`) remains the fallback where no inferno device exists (dev/sim). Sample rate/channel mismatches are refused with a log + UI error; a present-but-clockless holder refuses inferno playback with a notice instead of misrouting locally
 - Encoder: click = play/pause, rotate while paused = 5 s scrub, hold = exit
 - Progress bar + elapsed/total with [PAUSED] marker
 
@@ -199,9 +199,9 @@ sudo systemctl daemon-reload && sudo systemctl enable --now pi9696-clock pi9696
 sudo systemctl status pi9696 && sudo journalctl -u pi9696 -f
 ```
 
-Audio only flows once a Dante controller (netaudio) subscribes the app's device
+Audio only flows once an inferno controller (netaudio) subscribes the app's device
 to a transmitter — Inferno never auto-connects. `./inferno-loopback.sh` proves
-the path end to end without any Dante hardware present.
+the path end to end without any hardware inferno-network device present.
 
 ### Without a Pi (simulator)
 
@@ -273,7 +273,7 @@ go test ./...        # run all tests
 
 Design debt worth flagging here:
 
-1. **Playback via Inferno/AoIP** — done for TX (persistent holder + pump, `txholder.go`), local ALSA kept as fallback. Interim: two Dante devices on the wire (`<name>` RX-only via inferno2pipe, `<name>-TX` TX-only via the holder) until the RX side moves in-process and unifies them. Still to verify on hardware: TX audibility at a subscribed receiver, always-visible TX in both modes, high channel counts.
+1. **Playback via Inferno/AoIP** — done for TX (persistent holder + pump, `txholder.go`), local ALSA kept as fallback. Interim: two inferno devices on the wire (`<name>` RX-only via inferno2pipe, `<name>-TX` TX-only via the holder) until the RX side moves in-process and unifies them. Still to verify on hardware: TX audibility at a subscribed receiver, always-visible TX in both modes, high channel counts.
 2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
 3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
 4. **FIFO handoff window** — monitor→recording transition has a brief sub-100 ms window where the outgoing monitor's read can still race the new recording reader. Accepted as a startup blip; documented in code comments.
@@ -297,7 +297,7 @@ hardware/          SSD1322 display, encoder, buttons, lamps, network detection
 alsapcm/           cgo ALSA wrapper so the app can be the single Inferno client (RX + TX)
 cmd/simcheck/      renders OLED screens to PNG via PI9696_SIM
 deploy/            systemd units (pi9696, pi9696-clock)
-inferno-loopback.sh  proves Dante TX→RX with no Dante hardware (tone in, tone out)
+inferno-loopback.sh  proves inferno TX→RX on one host (tone in, tone out)
 DEPLOYMENT.md      install record (this file defers to it); WIRING.md is hardware
 inferno/           Inferno AoIP server (Rust) — install-time checkout, NOT tracked
 fonts/ rec/ web assets  install-time/runtime paths, NOT tracked (see .gitignore)
