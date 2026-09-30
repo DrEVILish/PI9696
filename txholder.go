@@ -19,6 +19,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -47,7 +48,7 @@ type txFrameWriter interface {
 
 var (
 	txHolder         txFrameWriter
-	txHolderDevice   string // device string the holder was opened with; empty when closed
+	txHolderDevice   string // settings identity the holder was opened with; empty when closed
 	txHolderReady    bool   // warmed up against the clock overlay; open-but-unready refuses Dante playback
 	txReopenPending  bool   // audio settings moved while playing; reconcile once idle
 	playbackViaDante bool   // current/last take plays through the holder, not local ALSA
@@ -83,15 +84,52 @@ func sanitizeDanteName(s string) string {
 	return strings.TrimRight(out, "-")
 }
 
-// txAlsaDevice builds the ALSA device string for the TX holder. Only numeric
-// channel/rate args plus the name travel in the string: the plugin fixes TX
-// channels from its config at define time and the app cannot renegotiate
-// them after open, so the string pins TX_CHANNELS to the current
-// channelCount (TX==RX by construction) while the deployed /etc/asound.conf
-// keeps its @args indirection for everything else.
-func txAlsaDevice(name string, rate, channels int) string {
-	return fmt.Sprintf("inferno:NAME=%s-TX,SAMPLE_RATE=%d,TX_CHANNELS=%d,RX_CHANNELS=0,PROCESS_ID=%d,ALT_PORT=%d",
-		sanitizeDanteName(name), rate, channels, txProcessID, txAltPort)
+// txInfernoEnv returns the INFERNO_* environment for the TX holder open.
+// The deployed /etc/asound.conf is deliberately minimal (no @args): ALSA
+// device-string arguments are rejected with "Unknown parameters", so every
+// setting travels via the environment, which inferno_aoip merges as gaps
+// behind the ALSA config. These are process-global, so doStartInferno
+// scrubs the instance-separating keys back out of its child's environment.
+func txInfernoEnv(name string, rate, channels int) map[string]string {
+	return map[string]string{
+		"INFERNO_NAME":        sanitizeDanteName(name) + "-TX",
+		"INFERNO_SAMPLE_RATE": fmt.Sprintf("%d", rate),
+		"INFERNO_TX_CHANNELS": fmt.Sprintf("%d", channels),
+		"INFERNO_RX_CHANNELS": "0",
+		"INFERNO_PROCESS_ID":  fmt.Sprintf("%d", txProcessID),
+		"INFERNO_ALT_PORT":    fmt.Sprintf("%d", txAltPort),
+	}
+}
+
+// applyTxInfernoEnv presses the TX settings into the process environment
+// ahead of the holder open (the plugin reads them per open at define time).
+// Callers hold no locks; os.Setenv is process-global but the only other
+// consumer is the inferno2pipe child, whose environment is scrubbed.
+func applyTxInfernoEnv(env map[string]string) {
+	for k, v := range env {
+		os.Setenv(k, v)
+	}
+}
+
+// scrubbedInfernoEnv returns the environment for the inferno2pipe child:
+// the TX holder's instance-separating keys must not leak into it, or the
+// pipe server would move off the default ports (ALT_PORT), collide IDs
+// (PROCESS_ID), or misread its channel counts. RATE/NAME travel as explicit
+// per-child values appended by the caller, never inherited.
+func scrubbedInfernoEnv() []string {
+	out := make([]string, 0, len(os.Environ()))
+	for _, kv := range os.Environ() {
+		key := kv
+		if i := strings.IndexByte(kv, '='); i >= 0 {
+			key = kv[:i]
+		}
+		switch key {
+		case "INFERNO_ALT_PORT", "INFERNO_PROCESS_ID", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS":
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
 }
 
 // ensureTxHolder reconciles the persistent TX holder with the current audio
@@ -116,7 +154,9 @@ func ensureTxHolder() {
 	rate := sampleRates[sampleRateIdx]
 	channels := channelCount
 	name := deviceName
-	want := txAlsaDevice(name, rate, channels)
+	// Identity is settings-derived (the device itself is always bare
+	// "inferno"; the per-instance values travel via INFERNO_* env).
+	want := fmt.Sprintf("inferno:%s:%d:%d", sanitizeDanteName(name), rate, channels)
 	if txHolder != nil && txHolderDevice == want {
 		if txHolderReady {
 			mutex.Unlock()
@@ -136,7 +176,8 @@ func ensureTxHolder() {
 	}
 	mutex.Unlock()
 
-	holder, err := openTxDevice(want, rate, channels)
+	applyTxInfernoEnv(txInfernoEnv(name, rate, channels))
+	holder, err := openTxDevice("inferno", rate, channels)
 	if err != nil {
 		// No inferno ALSA device (dev box, sim, plugin not installed):
 		// Dante playback is unavailable and takes fall back to local ALSA.

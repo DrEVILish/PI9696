@@ -2570,7 +2570,11 @@ func doStartInferno() {
 
 	cmd := exec.Command(binary, "-c", fmt.Sprintf("%d", channels), "-o", path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Env = append(os.Environ(),
+	// Scrubbed base environment (see scrubbedInfernoEnv): the TX holder's
+	// INFERNO_* instance keys live in this process's env and must not leak
+	// into the pipe server. RATE/NAME are appended explicitly below, and -c
+	// pins the RX channels, so the child is fully specified regardless.
+	cmd.Env = append(scrubbedInfernoEnv(),
 		fmt.Sprintf("INFERNO_SAMPLE_RATE=%d", sampleRate),
 		"INFERNO_NAME="+name,
 	)

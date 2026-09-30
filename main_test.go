@@ -4716,6 +4716,11 @@ func saveTxGlobals(t *testing.T) {
 	oHolder, oDev, oReady, oPending := txHolder, txHolderDevice, txHolderReady, txReopenPending
 	oOpener, oVia := openTxDevice, playbackViaDante
 	oCmd := playbackCmd
+	oEnv := make(map[string]string)
+	oEnvSet := make(map[string]bool)
+	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT"} {
+		oEnv[k], oEnvSet[k] = os.LookupEnv(k)
+	}
 	t.Cleanup(func() {
 		mutex.Lock()
 		demoMode, currentState = oDemo, oState
@@ -4724,6 +4729,13 @@ func saveTxGlobals(t *testing.T) {
 		openTxDevice, playbackViaDante = oOpener, oVia
 		playbackCmd = oCmd
 		mutex.Unlock()
+		for k := range oEnv {
+			if oEnvSet[k] {
+				os.Setenv(k, oEnv[k])
+			} else {
+				os.Unsetenv(k)
+			}
+		}
 	})
 }
 
@@ -4742,16 +4754,49 @@ func TestSanitizeDanteName(t *testing.T) {
 	}
 }
 
-func TestTxAlsaDevice(t *testing.T) {
-	got := txAlsaDevice("PI9696", 48000, 2)
-	want := "inferno:NAME=PI9696-TX,SAMPLE_RATE=48000,TX_CHANNELS=2,RX_CHANNELS=0,PROCESS_ID=1,ALT_PORT=10300"
-	if got != want {
-		t.Errorf("txAlsaDevice = %q, want %q", got, want)
+func TestTxInfernoEnv(t *testing.T) {
+	env := txInfernoEnv("PI9696", 48000, 2)
+	want := map[string]string{
+		"INFERNO_NAME": "PI9696-TX", "INFERNO_SAMPLE_RATE": "48000",
+		"INFERNO_TX_CHANNELS": "2", "INFERNO_RX_CHANNELS": "0",
+		"INFERNO_PROCESS_ID": "1", "INFERNO_ALT_PORT": "10300",
 	}
-	// TX and RX stay equal: the string pins TX_CHANNELS to the single
-	// channelCount, never a second knob.
-	if got := txAlsaDevice("PI 9696", 96000, 8); !strings.Contains(got, "TX_CHANNELS=8") || !strings.Contains(got, "NAME=PI-9696-TX") {
-		t.Errorf("txAlsaDevice(8ch, spaced name) = %q, want TX_CHANNELS=8 and sanitized NAME", got)
+	for k, w := range want {
+		if env[k] != w {
+			t.Errorf("env[%s] = %q, want %q", k, env[k], w)
+		}
+	}
+	// TX and RX stay equal: TX_CHANNELS pins to the single channelCount,
+	// never a second knob; the spaced name is sanitized like the device.
+	env = txInfernoEnv("PI 9696", 96000, 8)
+	if env["INFERNO_TX_CHANNELS"] != "8" || env["INFERNO_NAME"] != "PI-9696-TX" {
+		t.Errorf("env(8ch, spaced name) = %v, want TX_CHANNELS=8 NAME=PI-9696-TX", env)
+	}
+}
+
+// The pipe child must never inherit the holder's instance keys, or it
+// would move off the default ports and vanish from discovery.
+func TestScrubbedInfernoEnv(t *testing.T) {
+	for _, k := range []string{"INFERNO_ALT_PORT", "INFERNO_PROCESS_ID", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS"} {
+		t.Setenv(k, "should-be-scrubbed")
+	}
+	t.Setenv("INFERNO_SAMPLE_RATE", "48000")
+	got := scrubbedInfernoEnv()
+	for _, kv := range got {
+		key := kv[:strings.IndexByte(kv, '=')]
+		switch key {
+		case "INFERNO_ALT_PORT", "INFERNO_PROCESS_ID", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS":
+			t.Errorf("scrubbed env still carries %q", kv)
+		}
+	}
+	found := false
+	for _, kv := range got {
+		if kv == "INFERNO_SAMPLE_RATE=48000" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("scrubbed env dropped an unrelated key")
 	}
 }
 
@@ -4950,7 +4995,7 @@ func TestEnsureTxHolderLifecycle(t *testing.T) {
 	if len(calls) != 1 {
 		t.Fatalf("opener called %d times, want 1", len(calls))
 	}
-	want := txAlsaDevice("PI9696", 48000, 2)
+	want := "inferno"
 	if calls[0].device != want || calls[0].rate != 48000 || calls[0].ch != 2 {
 		t.Errorf("open(%+v), want device %q rate 48000 ch 2", calls[0], want)
 	}
