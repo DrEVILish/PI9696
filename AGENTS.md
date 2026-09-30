@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Raspberry Pi digital audio recorder: records an Inferno (AES67/Dante) network stream via a FIFO into ffmpeg → WAV on `/rec/<date>/`, with an SSD1322 OLED + buttons/encoder front panel and a token-auth WebUI. No hardware is present dev environment.
+Raspberry Pi digital audio recorder: records an Inferno (AES67) network stream via a FIFO into ffmpeg → WAV on `/rec/<date>/`, with an SSD1322 OLED + buttons/encoder front panel and a token-auth WebUI. No hardware is present dev environment.
 
 After each Bug fix or feature request, each must be commited as seperate items with notes and information so that any mistakes or issues can be easily reverted.
 After each commit and build, restart the pi9696 service.

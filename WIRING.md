@@ -76,7 +76,7 @@ Pin layouts, component wiring, and testing for the Raspberry Pi 5 audio recorder
 
 ### 5. Audio (Ethernet Only)
 
-No analog or USB audio I/O — audio is AES67/Dante over Ethernet via Inferno.
+No analog or USB audio I/O — audio is AES67 over Ethernet vian Inferno.
 Playback currently goes to local ALSA (target: route out through Inferno — Known Gaps #1).
 
 ---
@@ -131,7 +131,7 @@ Playback currently goes to local ALSA (target: route out through Inferno — Kno
 
 > `test-hardware` is not yet implemented — this sequence is the spec for it.
 > Until it lands, the equivalents are `go run ./cmd/simcheck` (renders every
-> OLED screen to PNG) and `./inferno-loopback.sh` (proves the Dante path).
+> OLED screen to PNG) and `./inferno-loopback.sh` (proves the Inferno path).
 
 ### Audio Verification
 
