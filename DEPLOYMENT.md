@@ -221,6 +221,15 @@ The practical consequence is clock quality, not function — Dante clock quality
 on a Pi 4 is software-derived, so it is worse than a PTP-capable NIC and
 latency has to be set with more margin.
 
+On the deployment target (Pi 5) `eth0` exposes a MAC-level PTP hardware clock
+(`/dev/ptp0`, Cadence GEM via `macb`). Keep one clock config for both models:
+leave `hardware-clock` at `auto` so statime takes the PHC where it exists and
+falls back to software timestamping on a Pi 4 — never model-detect, and the
+app must never assume `/dev/ptp0` exists. First Pi 5 contact must verify
+`ethtool -T eth0` shows `PTP Hardware Clock: 0` and that statime actually
+selects `/dev/ptp0` (early Pi 5 kernels had missing-timestamp driver bugs, so
+re-verify on the pinned kernel).
+
 ---
 
 ## 4. Subscriptions are what make audio flow
