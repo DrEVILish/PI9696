@@ -34,10 +34,14 @@ const (
 	MaxChannelCount     = 128
 	BitsPerSample       = 32 // internal FIFO/pipeline sample width, shown in status bar
 	OutputBitsPerSample = 24 // actual pcm_s24le WAV written to disk, used for storage math
-	RecordPath          = "/rec"
-	RawPath             = "/rec/raw"
 	USBMountPoint       = "/media/usb"
 	meterSilence        = -100.0 // dB sentinel shown/reported when no recording is active
+)
+
+// Vars, not consts, so TestMain can point the suite at a temp tree.
+var (
+	RecordPath = "/rec"
+	RawPath    = "/rec/raw"
 )
 
 // InfernoBinary is the prebuilt Inferno receiver executable, produced once at

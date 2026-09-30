@@ -36,8 +36,27 @@ func TestMain(m *testing.M) {
 	// config.json) - ConfigPath is computed once at package init, so the
 	// per-test PI9696_CONFIG env is ignored; repoint it here instead.
 	ConfigPath = filepath.Join(os.TempDir(), "pi9696-test-config.json")
+	// Same for recordings: TestDownloadAll empties RecordPath and many tests
+	// cut takes into it, which on a deployed unit meant wiping the real /rec.
+	recDir, err := os.MkdirTemp("", "pi9696-test-rec-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "TestMain: temp RecordPath:", err)
+		os.Exit(1)
+	}
+	RecordPath = recDir
+	RawPath = filepath.Join(recDir, "raw")
 	go infernoWorker()
-	os.Exit(m.Run())
+	code := m.Run()
+	os.RemoveAll(recDir)
+	os.Exit(code)
+}
+
+func TestSuiteDoesNotTouchRealRecordings(t *testing.T) {
+	for _, p := range []string{RecordPath, RawPath} {
+		if p == "/rec" || strings.HasPrefix(p, "/rec/") {
+			t.Fatalf("test suite is pointed at the real recordings tree (%s) - TestMain must redirect it", p)
+		}
+	}
 }
 
 // fakeExecutable writes an executable shell script named `name` into a temp
