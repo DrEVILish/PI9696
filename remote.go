@@ -3099,9 +3099,9 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 {{else}}<p class="idle">Idle - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
 {{if .Notice}}<p class="err">{{.Notice}}</p>{{end}}
 {{if not .InfernoUp}}<p>(Inferno not running &mdash; build the Inferno binary and restart)</p>{{end}}
-<p id="txstatus">{{.TXStatus}}</p>
 {{if .DemoMode}}<p>(Demo mode &mdash; simulated audio)</p>{{end}}
 {{end}}
+<p id="txstatus">{{.TXStatus}}</p>
 <div class="sys-readout">
 <p>Uptime {{.Uptime}} &middot; v{{.AppVersion}}</p>
 <p>Temp {{if ge .CPUTemp 0.0}}{{printf "%.0f" .CPUTemp}}&deg;{{else}}&mdash;{{end}}</p>
