@@ -90,3 +90,36 @@ func TestZeroValueDeviceDoesNotPanic(t *testing.T) {
 		t.Error("Write on a zero-value device returned no error")
 	}
 }
+
+// OpenPlayback mirrors Open's validation and its missing-device behaviour: a
+// TX-only holder must fail the same way, not a new way, so the app's
+// device-absent fallback treats both identically.
+func TestOpenPlaybackRejectsBadConfig(t *testing.T) {
+	for _, tc := range []struct{ rate, channels int }{
+		{0, 2}, {48000, 0}, {-1, 2}, {48000, -1},
+	} {
+		if _, err := OpenPlayback("inferno", tc.rate, tc.channels); err == nil {
+			t.Fatalf("OpenPlayback(rate=%d, channels=%d) accepted invalid config", tc.rate, tc.channels)
+		}
+	}
+}
+
+func TestOpenPlaybackMissingDeviceIsNamed(t *testing.T) {
+	_, err := OpenPlayback("no-such-pcm-xyzzy", 48000, 2)
+	if err == nil {
+		t.Fatal("OpenPlayback on a nonexistent device returned no error")
+	}
+	if got := err.Error(); got == "" || !contains(got, "no such ALSA device") {
+		t.Fatalf("error = %q, want it to name the missing device", got)
+	}
+}
+
+// A playback-only device must refuse capture: the TX holder never reads, and
+// a Read slipping through would prepare a capture stream the instance never
+// asked for.
+func TestPlaybackOnlyRefusesRead(t *testing.T) {
+	d := &Device{channels: 2, framesPerIO: 1024}
+	if _, err := d.Read(make([]int32, 64)); err == nil {
+		t.Error("Read on a playback-only device returned no error")
+	}
+}
