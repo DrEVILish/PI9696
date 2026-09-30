@@ -2947,6 +2947,9 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	persistConfig()
 	mutex.Unlock()
 	logInfof("Device name changed to %q via remote", name)
+	// The TX holder advertises <name>-TX: reconcile it with the new name
+	// (deferred while a take plays).
+	go ensureTxHolder()
 
 	mutex.Lock()
 	current := deviceName

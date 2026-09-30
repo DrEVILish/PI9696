@@ -4663,3 +4663,382 @@ func TestBroadcastTelemetryNoClients(t *testing.T) {
 		t.Fatalf("clientless broadcast took %s", elapsed)
 	}
 }
+
+// The TX holder is the unit's Dante transmit side (see txholder.go): these
+// cover its device-string contract, the pump, and the lifecycle. The dev box
+// has no inferno ALSA device, so the opener is faked; the real
+// behaviour under test is selection, framing and state handling.
+
+type fakeTxHolder struct {
+	mu       sync.Mutex
+	writes   [][]int32
+	writeErr error
+	closed   bool
+	maxCalls int // fail Writes after this many calls (0 = unlimited); bounds paused-pump tests
+	calls    int
+}
+
+func (f *fakeTxHolder) Write(b []int32) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls++
+	if f.writeErr != nil {
+		return 0, f.writeErr
+	}
+	if f.maxCalls > 0 && f.calls > f.maxCalls {
+		return 0, errors.New("fake TX holder write limit")
+	}
+	f.writes = append(f.writes, append([]int32(nil), b...))
+	return len(b), nil
+}
+
+func (f *fakeTxHolder) Close() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.closed = true
+	return nil
+}
+
+func (f *fakeTxHolder) flattened() []int32 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []int32
+	for _, w := range f.writes {
+		out = append(out, w...)
+	}
+	return out
+}
+
+func saveTxGlobals(t *testing.T) {
+	t.Helper()
+	oDemo, oState := demoMode, currentState
+	oRate, oCh, oName := sampleRateIdx, channelCount, deviceName
+	oHolder, oDev, oReady, oPending := txHolder, txHolderDevice, txHolderReady, txReopenPending
+	oOpener, oVia := openTxDevice, playbackViaDante
+	oCmd := playbackCmd
+	t.Cleanup(func() {
+		mutex.Lock()
+		demoMode, currentState = oDemo, oState
+		sampleRateIdx, channelCount, deviceName = oRate, oCh, oName
+		txHolder, txHolderDevice, txHolderReady, txReopenPending = oHolder, oDev, oReady, oPending
+		openTxDevice, playbackViaDante = oOpener, oVia
+		playbackCmd = oCmd
+		mutex.Unlock()
+	})
+}
+
+func TestSanitizeDanteName(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"PI9696", "PI9696"},
+		{"PI 9696_Live", "PI-9696-Live"},
+		{"", "PI9696"},
+		{"!!!", "PI9696"},
+		{"9lives", "D9lives"},
+		{strings.Repeat("A", 40), strings.Repeat("A", 31)},
+	} {
+		if got := sanitizeDanteName(tc.in); got != tc.want {
+			t.Errorf("sanitizeDanteName(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+func TestTxAlsaDevice(t *testing.T) {
+	got := txAlsaDevice("PI9696", 48000, 2)
+	want := "inferno:NAME=PI9696-TX,SAMPLE_RATE=48000,TX_CHANNELS=2,RX_CHANNELS=0,PROCESS_ID=1,ALT_PORT=10300"
+	if got != want {
+		t.Errorf("txAlsaDevice = %q, want %q", got, want)
+	}
+	// TX and RX stay equal: the string pins TX_CHANNELS to the single
+	// channelCount, never a second knob.
+	if got := txAlsaDevice("PI 9696", 96000, 8); !strings.Contains(got, "TX_CHANNELS=8") || !strings.Contains(got, "NAME=PI-9696-TX") {
+		t.Errorf("txAlsaDevice(8ch, spaced name) = %q, want TX_CHANNELS=8 and sanitized NAME", got)
+	}
+}
+
+func TestBuildPlaybackCmdSelection(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	mutex.Lock()
+	demoMode = false
+	sampleRateIdx, channelCount = 1, 2
+	mutex.Unlock()
+
+	// No holder: today's local path, unchanged.
+	mutex.Lock()
+	txHolder, txHolderReady = nil, false
+	mutex.Unlock()
+	cmd, stdout, via := buildPlaybackCmd("take.wav", 0)
+	if via || stdout != nil {
+		t.Error("no holder: buildPlaybackCmd selected Dante")
+	}
+	if !strings.Contains(strings.Join(cmd.Args, " "), "default") {
+		t.Errorf("no holder: local cmd = %q, want the default-ALSA command", cmd.Args)
+	}
+
+	// Present but unready (clock missing): still local, never Dante.
+	mutex.Lock()
+	txHolder, txHolderReady = &fakeTxHolder{}, false
+	mutex.Unlock()
+	_, _, via = buildPlaybackCmd("take.wav", 0)
+	if via {
+		t.Error("unready holder: buildPlaybackCmd selected Dante")
+	}
+
+	// Ready: decode-to-stdout for the pump.
+	mutex.Lock()
+	txHolder, txHolderReady = &fakeTxHolder{}, true
+	mutex.Unlock()
+	cmd, stdout, via = buildPlaybackCmd("take.wav", 5*time.Second)
+	if !via || stdout == nil {
+		t.Fatal("ready holder: buildPlaybackCmd did not select Dante")
+	}
+	args := strings.Join(cmd.Args, " ")
+	for _, want := range []string{"-f s32le", "-ac 2", "-ar 48000", "-ss 5.000"} {
+		if !strings.Contains(args, want) {
+			t.Errorf("dante cmd = %q, want %q", args, want)
+		}
+	}
+	if cmd.Args[len(cmd.Args)-1] != "-" {
+		t.Errorf("dante cmd = %q, want stdout output (-)", args)
+	}
+}
+
+// The pump must deliver samples bit-exact: s32le bytes to int32 in order,
+// across odd-sized reads.
+func TestPumpPlaybackPassthrough(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	raw := make([]byte, 0)
+	var want []int32
+	for i := int32(1); i <= 24; i++ {
+		want = append(want, i)
+		var b [4]byte
+		binary.LittleEndian.PutUint32(b[:], uint32(i))
+		raw = append(raw, b[:]...)
+	}
+	holder := &fakeTxHolder{}
+	cmd := exec.Command("true")
+	mutex.Lock()
+	playbackCmd, txHolder = cmd, holder
+	currentState = StatePlaying
+	mutex.Unlock()
+
+	// Prime-sized reads force the carry path: 7 bytes can never align to an
+	// 8-byte stereo frame.
+	src := &chunkReader{data: raw, chunk: 7}
+	pumpPlaybackToTx(cmd, src, holder, 2)
+
+	if got := holder.flattened(); !equalInt32(got, want) {
+		t.Errorf("pump delivered %v, want %v", got, want)
+	}
+	if src.left() != 0 {
+		t.Errorf("pump left %d bytes unconsumed", src.left())
+	}
+}
+
+type chunkReader struct {
+	data  []byte
+	chunk int
+	pos   int
+}
+
+func (r *chunkReader) Read(p []byte) (int, error) {
+	if r.pos >= len(r.data) {
+		return 0, io.EOF
+	}
+	n := r.chunk
+	if n > len(p) {
+		n = len(p)
+	}
+	if n > len(r.data)-r.pos {
+		n = len(r.data) - r.pos
+	}
+	copy(p, r.data[r.pos:r.pos+n])
+	r.pos += n
+	return n, nil
+}
+
+func (r *chunkReader) left() int { return len(r.data) - r.pos }
+
+func equalInt32(a, b []int32) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// While paused the pump writes silence and never touches the decoder pipe,
+// so ffmpeg back-pressures to a stop with the file offset frozen.
+func TestPumpPlaybackPausedWritesSilence(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	holder := &fakeTxHolder{maxCalls: 3}
+	cmd := exec.Command("true")
+	raw := bytes.Repeat([]byte{0xFF}, 64)
+	src := bytes.NewReader(raw)
+	mutex.Lock()
+	playbackCmd, txHolder = cmd, holder
+	currentState = StatePaused
+	mutex.Unlock()
+
+	pumpPlaybackToTx(cmd, src, holder, 2)
+
+	for _, w := range holder.writes {
+		for _, s := range w {
+			if s != 0 {
+				t.Fatalf("paused pump wrote nonzero sample %d", s)
+			}
+		}
+	}
+	if src.Len() != len(raw) {
+		t.Errorf("paused pump consumed %d decoder bytes, want 0", len(raw)-src.Len())
+	}
+}
+
+// A stale generation must exit without touching the sink: the seek handoff
+// briefly leaves the old pump alive while the new one owns the holder.
+func TestPumpPlaybackStaleGenerationExits(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	holder := &fakeTxHolder{}
+	old, live := exec.Command("true"), exec.Command("true")
+	mutex.Lock()
+	playbackCmd, txHolder = live, holder
+	currentState = StatePlaying
+	mutex.Unlock()
+
+	pumpPlaybackToTx(old, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, 2)
+
+	if len(holder.writes) != 0 {
+		t.Errorf("stale pump wrote %d chunks, want 0", len(holder.writes))
+	}
+}
+
+func TestEnsureTxHolderLifecycle(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	type openCall struct {
+		device string
+		rate   int
+		ch     int
+	}
+	var calls []openCall
+	fake := &fakeTxHolder{}
+	openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
+		calls = append(calls, openCall{device, rate, channels})
+		return fake, nil
+	}
+	mutex.Lock()
+	demoMode = false
+	sampleRateIdx, channelCount, deviceName = 1, 2, "PI9696"
+	currentState = StateIdle
+	txHolder, txHolderDevice, txHolderReady = nil, "", false
+	mutex.Unlock()
+
+	ensureTxHolder()
+	mutex.Lock()
+	if txHolder == nil || !txHolderReady {
+		mutex.Unlock()
+		t.Fatal("ensure did not open and warm up the holder")
+	}
+	mutex.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("opener called %d times, want 1", len(calls))
+	}
+	want := txAlsaDevice("PI9696", 48000, 2)
+	if calls[0].device != want || calls[0].rate != 48000 || calls[0].ch != 2 {
+		t.Errorf("open(%+v), want device %q rate 48000 ch 2", calls[0], want)
+	}
+
+	// Steady state: no reopen.
+	ensureTxHolder()
+	if len(calls) != 1 {
+		t.Errorf("steady ensure reopened the holder (%d opens)", len(calls))
+	}
+
+	// Audio settings move: reopen with the new string, close the old.
+	mutex.Lock()
+	channelCount = 8
+	mutex.Unlock()
+	ensureTxHolder()
+	if len(calls) != 2 || calls[1].ch != 8 {
+		t.Fatalf("after channel change: opens = %+v, want a second open at 8ch", calls)
+	}
+	if !fake.closed {
+		t.Error("reopen did not close the stale holder")
+	}
+	// Reset the closed flag the reopen set: later subtests reuse the fake.
+	fake.mu.Lock()
+	fake.closed = false
+	fake.mu.Unlock()
+
+	// While playing the holder is frozen and the reopen defers.
+	mutex.Lock()
+	currentState = StatePlaying
+	channelCount = 2
+	mutex.Unlock()
+	ensureTxHolder()
+	if len(calls) != 2 {
+		t.Errorf("ensure while playing reopened (%d opens)", len(calls))
+	}
+	mutex.Lock()
+	pending := txReopenPending
+	mutex.Unlock()
+	if !pending {
+		t.Error("ensure while playing did not defer the reopen")
+	}
+}
+
+// No clock overlay: the holder opens but never warms up, staying present
+// but unready so playback refuses instead of misrouting to local ALSA.
+func TestEnsureTxHolderUnreadyOnNoClock(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	dead := &fakeTxHolder{writeErr: errors.New("no clock available (timeout waiting for overlay update)")}
+	openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
+		return dead, nil
+	}
+	mutex.Lock()
+	demoMode = false
+	sampleRateIdx, channelCount, deviceName = 1, 2, "PI9696"
+	currentState = StateIdle
+	txHolder, txHolderDevice, txHolderReady = nil, "", false
+	mutex.Unlock()
+
+	ensureTxHolder()
+	mutex.Lock()
+	defer mutex.Unlock()
+	if txHolder == nil {
+		t.Fatal("ensure dropped the holder on warmup failure; want it held but unready")
+	}
+	if txHolderReady {
+		t.Error("holder warmed up without a clock")
+	}
+}
+
+// No inferno ALSA device at all (dev/sim): the holder stays absent and
+// takes fall back to local ALSA via buildPlaybackCmd.
+func TestEnsureTxHolderAbsentWithoutDevice(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
+		return nil, errors.New("no such ALSA device")
+	}
+	mutex.Lock()
+	demoMode = false
+	currentState = StateIdle
+	txHolder, txHolderDevice, txHolderReady = nil, "", false
+	mutex.Unlock()
+
+	ensureTxHolder()
+	mutex.Lock()
+	defer mutex.Unlock()
+	if txHolder != nil {
+		t.Error("ensure kept a holder the opener refused")
+	}
+}
