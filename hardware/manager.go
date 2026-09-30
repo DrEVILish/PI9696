@@ -91,7 +91,9 @@ func (hm *HardwareManager) Close() error {
 		hm.Buttons.Close()
 	}
 	if hm.Lamps != nil {
-		hm.Lamps.Close()
+		if err := hm.Lamps.Close(); err != nil {
+			return err
+		}
 	}
 	if hm.FiraCode != nil {
 		return hm.FiraCode.Close()

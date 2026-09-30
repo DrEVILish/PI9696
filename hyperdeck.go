@@ -196,6 +196,13 @@ func handleHyperdeckConn(c net.Conn) {
 	for {
 		c.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		if !sc.Scan() {
+			// A line longer than the buffer fails the scan; dropping the
+			// session silently would leave the controller hanging, so say
+			// why before closing (the stream is misaligned past this
+			// point, so resuming the session is not safe).
+			if sc.Err() != nil {
+				h.fail(100, "command too long")
+			}
 			return
 		}
 		line := strings.TrimSpace(sc.Text())

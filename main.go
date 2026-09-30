@@ -1276,7 +1276,9 @@ func gracefulShutdown() {
 	mutex.Unlock()
 
 	stopInfernoAndWait()
-	hwManager.Close()
+	if err := hwManager.Close(); err != nil {
+		logWarnf("hardware close: %v", err)
+	}
 }
 
 func setupHardwareCallbacks() {

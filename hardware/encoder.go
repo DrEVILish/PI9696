@@ -23,6 +23,7 @@ type Encoder struct {
 	releasePending   bool
 	releaseSince     time.Time
 	quit             chan struct{}
+	wg               sync.WaitGroup
 	mutex            sync.Mutex
 	callbacks        struct {
 		onRotate func(direction int) // +1 for clockwise, -1 for counter-clockwise
@@ -72,13 +73,16 @@ func NewEncoder() (*Encoder, error) {
 		quit:      make(chan struct{}),
 	}
 
-	// Start monitoring goroutine
+	// Start monitoring goroutine, joined in Close so callbacks can't fire
+	// into teardown after it returns.
+	e.wg.Add(1)
 	go e.monitor()
 
 	return e, nil
 }
 
 func (e *Encoder) monitor() {
+	defer e.wg.Done()
 	// Edge-wait instead of a 1ms poll: rotation wakes the loop immediately
 	// (better than poll latency) and idle costs ~50 wakeups/s instead of
 	// 1000. The 20ms timeout also services the click/hold path, whose 3s
@@ -96,15 +100,19 @@ func (e *Encoder) monitor() {
 	}
 }
 
-// Close stops the monitor goroutine and releases the pins.
+// Close stops the monitor goroutine and releases the pins. The join
+// happens without holding the mutex: the monitor takes e.mutex itself, so
+// waiting under it would deadlock. Worst case the join lasts one edge-wait
+// timeout (~20ms).
 func (e *Encoder) Close() {
 	e.mutex.Lock()
-	defer e.mutex.Unlock()
 	select {
 	case <-e.quit:
 	default:
 		close(e.quit)
 	}
+	e.mutex.Unlock()
+	e.wg.Wait()
 }
 
 func (e *Encoder) readEncoder() {

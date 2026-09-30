@@ -3,6 +3,7 @@ package hardware
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"periph.io/x/conn/v3/gpio"
 )
@@ -67,5 +68,43 @@ func TestTruncateRunes(t *testing.T) {
 				t.Errorf("%q produced invalid UTF-8: %q", s, got)
 			}
 		}
+	}
+}
+
+// A lamp stuck on after close is user-visible, so Close must report the
+// failure instead of swallowing the pin error.
+func TestLampCloseReportsPinFailure(t *testing.T) {
+	lm := &LampManager{
+		pins:   [2]gpio.PinOut{errPin{err: errors.New("boom")}, nil},
+		states: [2]bool{true, false},
+	}
+	if err := lm.Close(); err == nil {
+		t.Fatal("Close with a failing pin returned no error")
+	}
+	// State still clears: a failed close must not leave the manager
+	// believing the lamp is on.
+	if lm.states[0] {
+		t.Error("failed close left lamp state set")
+	}
+}
+
+// Close must be prompt and idempotent even with no monitor running (sim
+// hardware never spawns one): shutdown calls it unconditionally.
+func TestInputClosePromptAndIdempotent(t *testing.T) {
+	e := &Encoder{quit: make(chan struct{})}
+	done := make(chan struct{})
+	go func() { e.Close(); e.Close(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Encoder.Close did not return")
+	}
+	bm := &ButtonManager{quit: make(chan struct{})}
+	done2 := make(chan struct{})
+	go func() { bm.Close(); bm.Close(); close(done2) }()
+	select {
+	case <-done2:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ButtonManager.Close did not return")
 	}
 }

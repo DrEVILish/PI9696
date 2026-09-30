@@ -70,14 +70,19 @@ func (lm *LampManager) Set(kind LampType, on bool) {
 	}
 }
 
-// Close turns every lamp off and releases the pins.
-func (lm *LampManager) Close() {
+// Close turns every lamp off and releases the pins, reporting the first
+// failure: a lamp stuck on after close is user-visible, so silence is wrong.
+func (lm *LampManager) Close() error {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
+	var firstErr error
 	for i := range lm.pins {
 		if lm.pins[i] != nil && lm.states[i] {
-			lm.pins[i].Out(gpio.Low)
+			if err := lm.pins[i].Out(gpio.Low); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("lamp %d off: %w", i, err)
+			}
 			lm.states[i] = false
 		}
 	}
+	return firstErr
 }

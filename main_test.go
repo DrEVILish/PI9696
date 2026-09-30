@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image/png"
 	"io"
@@ -104,7 +105,6 @@ func demoTestCleanup(t *testing.T) {
 		}
 	})
 }
-
 
 // resetTransportCleanup is the standard transport-state cleanup for demo and
 // playback tests: stops the monitor, then forces every transport field back
@@ -2549,7 +2549,7 @@ func TestConfigImportMissingFileFailsCleanly(t *testing.T) {
 	initTestHardware(t)
 	origUSB := usbMounted
 	t.Cleanup(func() { mutex.Lock(); usbMounted = origUSB; mutex.Unlock() })
-	
+
 	// We don't need an actual USB path - just set the flag and try to import
 	mutex.Lock()
 	usbMounted = true
@@ -3060,7 +3060,6 @@ func TestRenderSkipsUnchangedFramePush(t *testing.T) {
 		t.Error("identical frame re-pushed to display; skip the SPI write when the hash matches")
 	}
 }
-
 
 // A meterReader from a preempted session (old ffmpeg exiting late) must not
 // corrupt the new session's meters: flushes from a stale generation drop.
@@ -4470,4 +4469,25 @@ func TestSettingChangedDebouncesWrites(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(ConfigPath), "config.json")); err != nil {
 		t.Fatal("flushConfig did not persist synchronously")
 	}
+}
+
+// Render and encode failures (client disconnect mid-response) must be logged,
+// not panics and not silent truncation. A writer that always fails exercises
+// every best-effort error path added for this.
+type failResponseWriter struct{ header http.Header }
+
+func (failResponseWriter) Header() http.Header        { return http.Header{} }
+func (failResponseWriter) Write([]byte) (int, error)  { return 0, errors.New("boom") }
+func (failResponseWriter) WriteHeader(statusCode int) {}
+
+func TestRenderEncodeFailuresLoggedNotPanics(t *testing.T) {
+	initTestHardware(t)
+	w := failResponseWriter{}
+	r := httptest.NewRequest("GET", "/", nil)
+	// Each must return normally despite every Write failing.
+	handleAPIStatus(w, r)
+	handleManifest(w, r)
+	handleAPITelemetry(w, r)
+	// Meter snapshots encode the same way; drive the encoder path directly.
+	_ = json.NewEncoder(w).Encode(currentMeterResponse())
 }
