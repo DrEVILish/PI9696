@@ -92,10 +92,14 @@ There is no binary called `inferno`; the app looks for
 `inferno/target/release/inferno2pipe` (override with `PI9696_INFERNO_BIN` if
 you install it somewhere else).
 
-**Never run `go test ./...` inside a deployed project directory that has a real
-`inferno/` build in it.** Older test helpers did exactly that; the current ones
-build their stub in a temp dir, and `TestSuiteDoesNotTouchInstalledInferno`
-fails if `inferno/` is ever emptied.
+**Never run `go test ./...` on a unit - run it on the dev server.** Older test
+helpers emptied `inferno/`; the current ones build their stub in a temp dir,
+and `TestSuiteDoesNotTouchInstalledInferno` fails if `inferno/` is ever
+emptied. Until `0049ab5` the suite also emptied `/rec` (`TestDownloadAll`) and
+cut takes into it - on 2026-09-30 that deleted every recording on the test
+unit (REPORT.md). It now runs against a temp recordings tree, guarded by
+`TestSuiteDoesNotTouchRealRecordings`, but it still starts ffmpeg children and
+inferno clients that do not belong on a live recorder.
 
 ```bash
 # ALSA virtual soundcard (needed to transmit, and for any inferno output path)
@@ -105,17 +109,26 @@ cp target/release/libasound_module_pcm_inferno.so \
 
 ### asoundrc
 
-The README recommends putting settings in `asoundrc` rather than the device
-string, because a long ALSA device string can be truncated. Use Inferno's own
-`alsa_pcm_inferno/asoundrc` as the starting point:
+The app opens the **bare** `inferno` device and passes every per-instance
+setting (NAME, SAMPLE_RATE, TX/RX_CHANNELS, PROCESS_ID, ALT_PORT) through
+`INFERNO_*` environment variables (`txholder.go`, since `275c3c5`). The unit's
+`/etc/asound.conf` therefore defines the device with no keys at all:
 
-```bash
-cp inferno/alsa_pcm_inferno/asoundrc /etc/asound.conf
+```
+pcm.inferno {
+	type inferno
+	hint {
+		show on
+		description "Inferno ALSA virtual device"
+	}
+}
 ```
 
-Its `@args.X` indirection is safe: unset variables expand to empty and are
-dropped rather than reaching the config parser (verified — an unset
-`INFERNO_ALT_PORT` is still honoured, and nothing panics).
+This replaces the earlier instruction to copy Inferno's own
+`alsa_pcm_inferno/asoundrc` (the `@args.X` form). That form was verified to drop
+unset variables, but the unit's own config comment records empty expansions
+panicking numeric keys; the two were never reconciled. The bare form is what
+the unit runs and what the two-host test used (REPORT.md), so keep it.
 
 One behaviour worth knowing when running several instances on one IP, because
 it is easy to lose an afternoon to: `inferno_aoip` merges the ALSA config
@@ -207,6 +220,33 @@ gcc -O2 -o /opt/pi9696/fake_usrvclock_server \
 `deploy/pi9696-clock.service` runs it, and carries the documented Statime
 invocation for a real install. Replace it with Statime the moment a hardware
 inferno-network device is on the network.
+
+The stub publishes the host's own `CLOCK_MONOTONIC_RAW` (uptime) with no shift,
+so **it only works for a single host**. Two hosts on stubs are days apart, and
+inferno TX between them arrives as silence (packets were stamped 159,446 s
+away from the receiver's clock).
+
+### Two inferno hosts, no hardware device (interop testing)
+
+Statime cannot be a PTPv1 master (`trying to act as master in PTPv1, not
+implemented yet`), so use PTPv2 on both - inferno only reads the overlay and
+does not care which PTP version produced it:
+
+- **Second host (master):** `protocol-version = "PTPv2"`, `priority1` below the
+  unit's 251, `usrvclock-export = false`, `interface` set to its NIC, plus the
+  stock stub for its own inferno. A master never steers, so it never exports;
+  its PTP time is its own `monotonic_raw`, which is exactly what the stub
+  publishes.
+- **Unit (slave):** the repo's `inferno-ptpv1.toml` with only
+  `protocol-version = "PTPv2"`. It locks within ~20 s (±130 µs to a VM master).
+
+Stop `pi9696-clock` first, and **do not start or restart `pi9696.service`**
+while testing: its `Wants=pi9696-clock` brings the stub back, which re-creates
+`/tmp/ptp-usrvclock` and silently takes the socket over from statime.
+`systemctl mask --runtime` does not prevent it, because the unit file in
+`/etc/systemd/system` takes precedence over the `/run` mask. Check with
+`ss -xp | grep ptp-usrvclock` - only statime should be bound.
+`test/interop/README.md` has the full procedure.
 
 ### Hardware clock caveat
 
@@ -425,16 +465,18 @@ Nothing outstanding for `ftl-themes`.
 - **Playback goes out through Inferno when the holder is ready**, local ALSA
   otherwise (see README). The app holds a TX-only instance (`<name>-TX`,
   `PROCESS_ID=1`, `ALT_PORT=10300`) alongside inferno2pipe's default-port RX
-  instance - the same separation inferno-loopback.sh proves. Still to confirm
-  with a second inferno receiver: audibility at a subscriber, TX visible in
-  both modes, and behaviour past 2ch (a single host cannot provide the
-  second receiver: all instances share one IP, so the unicast addresses the
-  transmitter advertises cannot be resolved per receiver).
+  instance - the same separation inferno-loopback.sh proves. Measured with a
+  second host (REPORT.md): audible at a subscriber and visible in both
+  modes, but the shipped build underruns and restarts the transmitter many
+  times per minute (F2), sends no media while idle and loses the start of
+  each playback (F3), and dithers 24-bit output (F4). Behaviour past 2ch is
+  still unmeasured.
   Port reservations on one host: inferno2pipe defaults, app TX 10300-10303,
   loopback.sh 10100-10102/10200-10202 - never run the loopback while the app
-  holds TX. `/etc/asound.conf` must keep the upstream `@args` indirection
-  (verify with `grep @args`): the app passes NAME/SAMPLE_RATE/TX_CHANNELS/
-  RX_CHANNELS per open, and hardcoded values would pin TX to 2ch.
+  is up (it also runs `pkill -x inferno2pipe`, which kills the app's
+  receiver). `/etc/asound.conf` must stay bare (see asoundrc above): a key
+  set there wins over the `INFERNO_*` env the app passes per open, and would
+  pin e.g. TX to 2ch.
 - **No OLED or buttons attached.** The panel SPI path is fixed and exercised
   (`/dev/spidev0.0`, 4 MB FIFO), but rendering has not been seen on glass.
 - **A second ALSA-based receiver records silence** on this single host, while
@@ -443,4 +485,17 @@ Nothing outstanding for `ftl-themes`.
   advertises cannot be resolved per receiver. Needs a second host to settle.
 - **No hardware inferno-network device on the LAN**, so the clock comes from the test stub rather
   than Statime — see the clock section.
+- **`statime.service` is stale**: it points at
+  `/home/pi/statime/target/debug/statime`, which does not exist, and
+  has failed since boot. The built binary is
+  `/opt/pi9696/statime/target/release/statime`.
+- **`/var/log/pi9696/` was missing**, so there was no `app.log`; the installed
+  `pi9696.service` also predates the template (`TimeoutStopSec` 20 vs 30).
+  Re-run the §5 install steps.
+- **`inferno2pipe` output is discarded** by the app, so subscription and media
+  errors ("not receiving media packets", reorder-buffer losses) never reach the
+  journal. Debug the receive side with a standalone `inferno2pipe` instance.
+- **The sample rate is not shown by netaudio** for any inferno device: inferno
+  does not answer netaudio's sample-rate probe. The TX channels carry it in
+  their mDNS records (`rate=`); the RX-only `PI9696` device publishes none.
 - **Pi 4 has no PTP hardware clock**, so AES67 clock quality is software-only.
