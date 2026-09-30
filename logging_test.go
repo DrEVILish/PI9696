@@ -24,3 +24,28 @@ func TestLogLevelThresholds(t *testing.T) {
 		}
 	}
 }
+
+// Disabled levels must not pay for formatting: with the threshold at Error,
+// Debug/Info/Warn args (which Sprintf would evaluate eagerly) must never be
+// touched, while Error still formats.
+type formatProbe struct{ called *bool }
+
+func (p formatProbe) String() string { *p.called = true; return "x" }
+
+func TestDisabledLogSkipsFormatting(t *testing.T) {
+	orig := currentLogLevel()
+	applyLogLevel(LogError)
+	t.Cleanup(func() { applyLogLevel(orig) })
+	called := false
+	p := formatProbe{called: &called}
+	logDebugf("msg %s", p)
+	logInfof("msg %s", p)
+	logWarnf("msg %s", p)
+	if called {
+		t.Fatal("disabled level evaluated format args")
+	}
+	logErrorf("msg %s", p)
+	if !called {
+		t.Fatal("enabled level skipped formatting")
+	}
+}

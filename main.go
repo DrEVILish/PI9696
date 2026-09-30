@@ -598,9 +598,12 @@ func wifiQRContent() string {
 
 // escapeWifiField escapes a WiFi QR text field per spec: \ ; , : " must be
 // backslash-escaped or the code won't scan.
+// wifiFieldEscaper is built once: escapeWifiField runs per QR render and
+// the table never changes.
+var wifiFieldEscaper = strings.NewReplacer(`\`, `\\`, `;`, `\;`, `,`, `\,`, `:`, `\:`, `"`, `\"`)
+
 func escapeWifiField(s string) string {
-	r := strings.NewReplacer(`\`, `\\`, `;`, `\;`, `,`, `\,`, `:`, `\:`, `"`, `\"`)
-	return r.Replace(s)
+	return wifiFieldEscaper.Replace(s)
 }
 
 // renderWifiQRScreen draws the WiFi join QR code plus the SSID/password text
@@ -4507,8 +4510,28 @@ func renderIdleVUPage(page int) {
 // details Settings -> Network Info shows, plus the remote-control access
 // token (see remoteAccessInfo) for anyone who wants to hop on the WebUI
 // after checking input levels here.
+// infoPageCache avoids redoing interface enumeration, gateway/DNS reads and
+// QR encoding at the 10Hz render tick while the info page is up: network
+// facts change on DHCP/link timescales, and the QR only changes with IP,
+// port or token. Guarded by the app mutex; render holds it.
+var infoCache struct {
+	at      time.Time
+	details []string
+	ip      string
+	qrFor   string
+	qr      [][]bool
+}
+
+const infoCacheTTL = 5 * time.Second
+
 func renderIdleInfoPage() {
-	details := hwManager.GetDetailedNetworkInfo()
+	now := time.Now()
+	if now.Sub(infoCache.at) > infoCacheTTL {
+		infoCache.details = hwManager.GetDetailedNetworkInfo()
+		infoCache.ip = anyInterfaceIP()
+		infoCache.at = now
+	}
+	details := infoCache.details
 	hwManager.SwitchToContext("details")
 	y := 22
 	for i, d := range details {
@@ -4518,10 +4541,14 @@ func renderIdleInfoPage() {
 		hwManager.DrawText(4, y, fitText(d, 190))
 		y += 10
 	}
-	ip := anyInterfaceIP()
+	ip := infoCache.ip
 	if ip != "" {
-		bmp := qrBitmap("http://" + ip + ":" + remoteControlPort() + "/#t=" + remoteToken)
-		drawQRBitmapFit(bmp)
+		key := "http://" + ip + ":" + remoteControlPort() + "/#t=" + remoteToken
+		if infoCache.qrFor != key {
+			infoCache.qr = qrBitmap(key)
+			infoCache.qrFor = key
+		}
+		drawQRBitmapFit(infoCache.qr)
 	} else {
 		hwManager.DrawCenteredText("Token: "+formatToken(remoteToken), "selected", y+4)
 	}
