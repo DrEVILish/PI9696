@@ -32,7 +32,9 @@ I2P="$HERE/inferno/target/release/inferno2pipe"
 
 # instances must be told apart: inferno binds fixed UDP ports (ARC 4440, CMC
 # 8800, info 8700) so only one instance can use the defaults. ALT_PORT moves
-# the whole block; PROCESS_ID keeps the Dante instance IDs unique.
+# the whole block; PROCESS_ID keeps the Dante instance IDs unique. Port
+# reservations on one host: the app's TX holder takes 10300-10303, so this
+# script keeps 10100/10200 - never run it while the app holds TX.
 RX_NAME=pi9696rx
 TX_NAME=pi9696tx
 AR_NAME=pi9696arec

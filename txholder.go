@@ -183,6 +183,31 @@ func warmupTxHolder(holder txFrameWriter, channels int) {
 	mutex.Unlock()
 }
 
+// txStatusLocked reports the Dante TX state for the UI: short fits one
+// 256px OLED menu value, long suits the dashboard. Callers hold the app
+// mutex (same discipline as webNoticeIfLive).
+func txStatusLocked() (short, long string) {
+	name := sanitizeDanteName(deviceName) + "-TX"
+	switch {
+	case txHolder != nil && txHolderReady:
+		return "ready", "Dante TX ready (" + name + ")"
+	case txHolder != nil:
+		return "no clock", "Dante TX: waiting for clock"
+	case demoMode:
+		return "off", "Dante TX off (demo mode)"
+	default:
+		return "off", "Dante TX unavailable (no device)"
+	}
+}
+
+// txStatusShort is the OLED form; it locks, unlike txStatusLocked.
+func txStatusShort() string {
+	mutex.Lock()
+	defer mutex.Unlock()
+	short, _ := txStatusLocked()
+	return short
+}
+
 // closeTxHolder drops the persistent TX device (shutdown). All pumps are
 // dead by then: playback is reaped before this runs, and a stale pump exits
 // on its generation check before touching the closed handle.

@@ -1702,7 +1702,7 @@ func navigateMenu(direction int) {
 	case StateSettings:
 		maxItems = 12 // Audio, Metering, Display, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, Monitoring, WiFi, Exit
 	case StateAudio:
-		maxItems = 5 // Sample Rate, Channel Count, Tag, Prefix, Back
+		maxItems = 6 // Sample Rate, Channel Count, Tag, Prefix, TX status, Back
 	case StateMetering:
 		maxItems = 3 // Meter Range, Peak Hold, Back
 	case StateDisplay:
@@ -1804,7 +1804,8 @@ func handleAudioClick() {
 	switch selectedMenu {
 	case 0, 1, 2, 3: // Sample Rate, Channel Count, Tag, Prefix
 		editingParameter = true
-	case 4: // Back
+	case 4: // TX status row: display only, nothing to edit
+	case 5: // Back
 		currentState = StateSettings
 		selectedMenu = 0
 		menuScrollOffset = 0
@@ -5067,6 +5068,7 @@ func renderAudioMenu() {
 		{Label: "Channel Count →", Value: fmt.Sprintf("%d", channelCount)},
 		{Label: "Tag →", Value: tagStatusText()},
 		{Label: "Prefix →", Value: prefixStatusText()},
+		{Label: "TX", Value: txStatusShort()},
 		{Label: "← Back", Value: ""},
 	}
 	totalItems := len(items)
