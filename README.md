@@ -73,6 +73,8 @@ Playback path (interim):
 - Recording starts only from idle, never over an active take
 - Playback and recording are mutually exclusive in both directions
 - Inferno is bidirectional (sends + receives); the app currently drives receive (recording) while transmit/playback-out moves to the app's ALSA client (`alsapcm/`, one process holding capture + playback so a single instance does both)
+- TX is real scope, not a stretch goal: the unit has two modes, RECORDING and PLAYBACK, and its TX and RX channels stay visible on the Dante/Inferno/AES67 network in both modes. TX and RX channel counts are always equal (one `channelCount` drives both). The clock source is a hard TX gate — Inferno aborts transmit without the usrvclock overlay — so statime (PTPv1, locked to the Dante leader) replaces the stub the moment Dante hardware is on the LAN
+- ffmpeg is the capture/playback converter (tried and tested); no native rewrite planned
 
 ---
 
