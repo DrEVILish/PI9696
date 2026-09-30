@@ -3085,6 +3085,11 @@ func startMonitor() {
 
 	monitorCmd = cmd
 	monitoring = true
+	// The outgoing monitor's reaper skips its reset once monitorCmd points
+	// here, so a restart that gets no media (e.g. a rate change the source
+	// can't serve) would otherwise show the previous session's level forever.
+	meterPeakDB = meterSilence
+	meterRMSDB = meterSilence
 	meterGen++
 	meterChannelPeak = make([]float64, channelCount)
 	meterChannelRMS = make([]float64, channelCount)

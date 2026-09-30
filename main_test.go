@@ -2721,6 +2721,32 @@ func TestDemoMonitorLiveLevels(t *testing.T) {
 	mutex.Unlock()
 }
 
+// TestStartMonitorResetsOverallMeter: a new monitor session must not inherit
+// the previous session's overall Peak/RMS - with no media arriving, nothing
+// would ever overwrite it and the dashboard/OLED waveform show a phantom level.
+func TestStartMonitorResetsOverallMeter(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("real ffmpeg required for the monitor pipeline")
+	}
+	initTestHardware(t)
+	demoTestCleanup(t)
+	setDemoModeLocked(true)
+	resetTransportCleanup(t)
+	ensureMonitorDown(t)
+	mutex.Lock()
+	meterPeakDB, meterRMSDB = -7.8, -14.6
+	startMonitor()
+	mon, peak, rms := monitoring, meterPeakDB, meterRMSDB
+	mutex.Unlock()
+	t.Cleanup(func() { mutex.Lock(); stopMonitor(); mutex.Unlock() })
+	if !mon {
+		t.Fatalf("startMonitor did not start a monitor")
+	}
+	if peak != meterSilence || rms != meterSilence {
+		t.Fatalf("overall meter carried over into the new monitor: peak=%v rms=%v, want %v", peak, rms, meterSilence)
+	}
+}
+
 // TestDemoRecordTake verifies that a recorded take captures genuine
 // audio, not silent noise.
 func TestDemoRecordTake(t *testing.T) {
