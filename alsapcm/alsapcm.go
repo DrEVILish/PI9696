@@ -50,6 +50,18 @@ static void pcm_open_both(const char *dev, int rate, int channels, int latency_u
 	}
 }
 
+static void pcm_open_playback(const char *dev, int rate, int channels, int latency_us,
+                                snd_pcm_t **play, int *out_err) {
+	int err;
+	*out_err = 0;
+	if ((err = snd_pcm_open(play, dev, SND_PCM_STREAM_PLAYBACK, 0)) < 0) { *out_err = err; return; }
+	if ((err = snd_pcm_set_params(*play, SND_PCM_FORMAT_S32_LE, SND_PCM_ACCESS_RW_INTERLEAVED,
+	                              (unsigned int)channels, (unsigned int)rate, 1,
+	                              (snd_pcm_uframes_t)latency_us)) < 0) {
+		snd_pcm_close(*play); *play = NULL; *out_err = err; return;
+	}
+}
+
 static void pcm_readi(snd_pcm_t *pcm, void *buf, int frames, int *out_frames, int *out_err) {
 	snd_pcm_sframes_t n = snd_pcm_readi(pcm, buf, (snd_pcm_uframes_t)frames);
 	if (n < 0) { *out_frames = 0; *out_err = (int)n; return; }
@@ -126,6 +138,33 @@ func Open(name string, rate, channels int) (*Device, error) {
 // Rate and Channels report the configuration the device was opened with.
 func (d *Device) Rate() int     { return d.rate }
 func (d *Device) Channels() int { return d.channels }
+
+// OpenPlayback opens the named ALSA device for playback only. This is the
+// transmit holder: inferno's plugin fixes TX channels from its own config at
+// define time, and a TX-only instance advertises no RX channels, so opening
+// capture alongside would fail (or advertise phantom RX). Same rate/channel
+// rebuild rule as Open.
+func OpenPlayback(name string, rate, channels int) (*Device, error) {
+	if rate <= 0 || channels <= 0 {
+		return nil, fmt.Errorf("alsapcm: invalid rate/channels %d/%d", rate, channels)
+	}
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+
+	var play *C.snd_pcm_t
+	var rc C.int
+	C.pcm_open_playback(cname, C.int(rate), C.int(channels), C.int(LatencyUs), &play, &rc)
+	if rc != 0 {
+		return nil, fmt.Errorf("alsapcm: open %s: %w", name, alsaErr(rc))
+	}
+
+	d := &Device{
+		play: play, name: name, rate: rate, channels: channels,
+		framesPerIO: 1024,
+	}
+	runtime.SetFinalizer(d, (*Device).Close)
+	return d, nil
+}
 
 // Read captures interleaved frames into buf, which must hold a whole number of
 // frames. It returns the number of frames read; a short read is normal at the
