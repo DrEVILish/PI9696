@@ -58,7 +58,7 @@ or `go test ./...` needs the headers.
 
 ---
 
-## 2. Inferno (Dante/AES67 AoIP server)
+## 2. Inferno (AES67 AoIP server)
 
 Inferno is pinned at install time, not tracked as a submodule (it has its own
 submodules, and they must be initialised too).
@@ -98,7 +98,7 @@ build their stub in a temp dir, and `TestSuiteDoesNotTouchInstalledInferno`
 fails if `inferno/` is ever emptied.
 
 ```bash
-# ALSA virtual soundcard (needed to transmit, and for any Dante output path)
+# ALSA virtual soundcard (needed to transmit, and for any Inferno output path)
 cp target/release/libasound_module_pcm_inferno.so \
    /usr/lib/aarch64-linux-gnu/alsa-lib/       # find with: find /usr/lib* -type d -name alsa-lib
 ```
@@ -130,13 +130,13 @@ Defaults, all documented upstream and all confirmed here: `SAMPLE_RATE` 48000,
 
 ### Running more than one instance
 
-Only one instance can use the standard Dante UDP ports. Per the README, each
+Only one instance can use the standard Inferno UDP ports. Per the README, each
 extra instance needs both `ALT_PORT` and `PROCESS_ID` — a distinct `DEVICE_ID`
 is *not* sufficient — and instances should be separated by at least 10 ports
 (`ALT_PORT` to `ALT_PORT+3` are used today). Without this the second instance
 dies with `error starting really needed listener: Address already in use`.
 
-Latency is a real constraint rather than a tuning knob: Dante caps it at 40 ms,
+Latency is a real constraint rather than a tuning knob: Inferno caps it at 40 ms,
 and the README's method for finding your own floor is to measure worst-case
 scheduling latency with `cyclictest` and derive `TX_LATENCY_NS`/`RX_LATENCY_NS`
 from it.
@@ -152,7 +152,7 @@ socket (`/tmp/ptp-usrvclock`). Without it the transmitter aborts with:
 no clock available (timeout waiting for overlay update)
 ```
 
-The receiver still starts, so this presents as "the Dante path is broken"
+The receiver still starts, so this presents as "the Inferno path is broken"
 rather than "there is no clock".
 
 ### With a PTP grandmaster on the LAN (real deployment)
@@ -170,7 +170,7 @@ stepping the system clock collides with PTP, and inferno's README documents
 audible damage from it. With `virtual-system-clock = true` the risk is much
 lower, but it is not zero.
 
-### Without one (this test unit — no Dante hardware on the LAN)
+### Without one (this test unit — no Inferno hardware on the LAN)
 
 The README's PTPv2 route does work as advertised: with `protocol-version =
 "PTPv2"` Statime becomes a working master and announces on the wire.
@@ -180,7 +180,7 @@ INFO statime::port: new state for port 1: Listening -> Master
 TRACE statime::port::master: sending sync message
 ```
 
-It still will not transmit on this LAN, because with no Dante device present
+It still will not transmit on this LAN, because with no Inferno device present
 the clock overlay is never published. Inferno connects and reports `clock
 ready`, then has nothing to schedule against:
 
@@ -189,14 +189,14 @@ ERROR inferno_aoip::device_server::flows_tx] unable to get start timestamp for r
 ```
 
 This is not contrary to the README so much as its stated caveat: master
-operation removes the need for a Dante device to *exist*, but "at least one
-Dante device with AES67 enabled must be present in the network to make Inferno
-and Dante devices interoperate". With zero devices there is nothing to
+operation removes the need for an Inferno device to *exist*, but "at least one
+Inferno device with AES67 enabled must be present in the network to make Inferno
+and Inferno devices interoperate". With zero devices there is nothing to
 discipline the master clock against and the usrvclock export never becomes
 valid. Tested with both `virtual-system-clock-base` values the README mentions
 (`monotonic` and the shipped `monotonic_raw`) - no overlay either way.
 
-So for a LAN with no Dante hardware, build the clock stub from Inferno's own
+So for a LAN with no Inferno hardware, build the clock stub from Inferno's own
 test suite:
 
 ```bash
@@ -205,7 +205,7 @@ gcc -O2 -o /opt/pi9696/fake_usrvclock_server \
 ```
 
 `deploy/pi9696-clock.service` runs it, and carries the documented Statime
-invocation for a real install. Replace it with Statime the moment a Dante
+invocation for a real install. Replace it with Statime the moment an Inferno
 device is on the network.
 
 ### Hardware clock caveat
@@ -217,7 +217,7 @@ and names software timestamping as the default that "is compatible with all
 NICs". Leave `hardware-clock` at its shipped default (`auto`) rather than
 forcing `none`; it falls back on its own.
 
-The practical consequence is clock quality, not function — Dante clock quality
+The practical consequence is clock quality, not function — Inferno clock quality
 on a Pi 4 is software-derived, so it is worse than a PTP-capable NIC and
 latency has to be set with more margin.
 
@@ -235,7 +235,7 @@ re-verify on the pinned kernel).
 ## 4. Subscriptions are what make audio flow
 
 Inferno does **not** auto-connect. A receiver only subscribes to a transmitter
-when a Dante controller tells it to, so without this step everything starts
+when an Inferno controller tells it to, so without this step everything starts
 cleanly and no audio ever arrives.
 
 ```bash
@@ -358,7 +358,7 @@ is for scheduling jitter, not for buffering a take.
 
 ## Verifying audio
 
-`inferno-loopback.sh` proves audio in and out with no Dante hardware present:
+`inferno-loopback.sh` proves audio in and out with no Inferno hardware present:
 a tone is played into Inferno's ALSA virtual device (transmitted), and a
 subscribed `inferno2pipe` receives it.
 
@@ -369,9 +369,9 @@ subscribed `inferno2pipe` receives it.
 Result on this unit:
 
 ```
-inferno2pipe (Dante RX -> file): mean=-27.7dBFS  tone=1000Hz  (source 1000Hz)
-OK: audio received from inferno's Dante transmit
-== PASS: audio passed out of inferno (ALSA -> Dante TX) and back in (Dante RX -> inferno2pipe)
+inferno2pipe (Inferno RX -> file): mean=-27.7dBFS  tone=1000Hz  (source 1000Hz)
+OK: audio received from inferno's Inferno transmit
+== PASS: audio passed out of inferno (ALSA -> Inferno TX) and back in (Inferno RX -> inferno2pipe)
 ```
 
 ### End-to-end through the app
@@ -411,7 +411,7 @@ so they are not lost:
 | Observation | Where it is covered |
 |---|---|
 | `inferno2pipe/README.md` documents `./save_to_file N` and `sample_rate=`, but the v0.5.4 binary takes `-c`/`-o` and `INFERNO_SAMPLE_RATE`; it also omits the clock daemon the top-level README calls mandatory | §2, §3 |
-| With no Dante device on the LAN, Statime as PTPv2 master never publishes the usrvclock overlay, so transmit cannot start | §3 |
+| With no Inferno device on the LAN, Statime as PTPv2 master never publishes the usrvclock overlay, so transmit cannot start | §3 |
 | `test/dockerized_trx/control_and_test.sh` uses `netaudio` flags removed in 0.3.14 | §4 |
 | `alsa_pcm_inferno` RX recorded silence while `inferno2pipe` RX worked — same host, verified subscription, likely a same-IP addressing artifact rather than a plugin fault | Known limitations |
 | `netaudio subscription list` reported `Unresolved` for flows that were carrying audio | §4 |
@@ -426,7 +426,7 @@ Nothing outstanding for `ftl-themes`.
   otherwise (see README). The app holds a TX-only instance (`<name>-TX`,
   `PROCESS_ID=1`, `ALT_PORT=10300`) alongside inferno2pipe's default-port RX
   instance - the same separation inferno-loopback.sh proves. Still to confirm
-  with a second Dante receiver: audibility at a subscriber, TX visible in
+  with a second Inferno receiver: audibility at a subscriber, TX visible in
   both modes, and behaviour past 2ch (a single host cannot provide the
   second receiver: all instances share one IP, so the unicast addresses the
   transmitter advertises cannot be resolved per receiver).
@@ -441,6 +441,6 @@ Nothing outstanding for `ftl-themes`.
   `inferno2pipe` from the same build receives correctly. Unresolved: all
   instances share 192.0.2.69, so the unicast endpoints the transmitter
   advertises cannot be resolved per receiver. Needs a second host to settle.
-- **No Dante device on the LAN**, so the clock comes from the test stub rather
+- **No Inferno device on the LAN**, so the clock comes from the test stub rather
   than Statime — see the clock section.
 - **Pi 4 has no PTP hardware clock**, so AES67 clock quality is software-only.
