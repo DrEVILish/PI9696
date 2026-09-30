@@ -5151,6 +5151,16 @@ func TestTxStatusDashboardWiring(t *testing.T) {
 	if !strings.Contains(buf.String(), `id="txstatus"`) || !strings.Contains(buf.String(), v.TXStatus) {
 		t.Errorf("status fragment missing TX line: %q", buf.String())
 	}
+	// The TX line must render in every transport state, not just Idle: it
+	// once sat inside the Idle else-branch and vanished while monitoring.
+	buf.Reset()
+	v.Monitoring = true
+	if err := statusTmpl.Execute(&buf, v); err != nil {
+		t.Fatalf("status render (monitoring): %v", err)
+	}
+	if !strings.Contains(buf.String(), `id="txstatus"`) {
+		t.Errorf("monitoring status missing TX line: %q", buf.String())
+	}
 
 	buf.Reset()
 	if err := dashboardTmpl.Execute(&buf, dashboardData{}); err != nil {
