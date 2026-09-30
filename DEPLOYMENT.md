@@ -422,12 +422,19 @@ Nothing outstanding for `ftl-themes`.
 
 ## Known limitations on this unit
 
-- **Playback still goes to local ALSA**, not out through Inferno. Inferno's
-  transmit works (verified above), so a Dante output path is a matter of
-  routing ffmpeg at the `inferno` ALSA device — but a second Dante receiver is
-  needed to confirm it, and a single host cannot provide one (all instances
-  share one IP, so the unicast addresses the transmitter advertises cannot be
-  resolved per receiver).
+- **Playback goes out through Inferno when the holder is ready**, local ALSA
+  otherwise (see README). The app holds a TX-only instance (`<name>-TX`,
+  `PROCESS_ID=1`, `ALT_PORT=10300`) alongside inferno2pipe's default-port RX
+  instance - the same separation inferno-loopback.sh proves. Still to confirm
+  with a second Dante receiver: audibility at a subscriber, TX visible in
+  both modes, and behaviour past 2ch (a single host cannot provide the
+  second receiver: all instances share one IP, so the unicast addresses the
+  transmitter advertises cannot be resolved per receiver).
+  Port reservations on one host: inferno2pipe defaults, app TX 10300-10303,
+  loopback.sh 10100-10102/10200-10202 - never run the loopback while the app
+  holds TX. `/etc/asound.conf` must keep the upstream `@args` indirection
+  (verify with `grep @args`): the app passes NAME/SAMPLE_RATE/TX_CHANNELS/
+  RX_CHANNELS per open, and hardcoded values would pin TX to 2ch.
 - **No OLED or buttons attached.** The panel SPI path is fixed and exercised
   (`/dev/spidev0.0`, 4 MB FIFO), but rendering has not been seen on glass.
 - **A second ALSA-based receiver records silence** on this single host, while

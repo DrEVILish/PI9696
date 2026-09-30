@@ -63,9 +63,10 @@ go build -o pi9696 . && sudo ./pi9696
               │  VU meters + meters     │
               └─────────────────────────┘
 
-Playback path (interim):
-  ffmpeg -f alsa default ← pause via SIGSTOP, seek via -ss restart
-  Target: the app's Inferno ALSA client (TX), closing the local-ALSA gap
+Playback path:
+  ffmpeg -f s32le → pump → TX holder (`inferno` ALSA, Dante out); pause writes
+  silence, seek via -ss restart. Local `-f alsa default` only where no
+  inferno device exists (dev/sim fallback).
 ```
 
 **Key design decisions:**
@@ -91,7 +92,7 @@ Playback path (interim):
 
 ### Playback
 
-- Target: plays out through Inferno ALSA (pause/resume via SIGSTOP/SIGCONT preserves position without gaps). Currently plays to local ALSA (`default`) until the app drives Inferno's ALSA device directly (see `alsapcm/`); sample rate/channel mismatches are refused with a log + UI error
+- Target: plays out through Inferno ALSA (pause writes silence to Dante TX so the playhead holds without gaps or SIGSTOP choreography). The app holds the `inferno` device persistently (`txholder.go`: TX-only, own NAME/PROCESS_ID/ALT_PORT), pumping ffmpeg-decoded s32le through it; local ALSA (`default`) remains the fallback where no inferno device exists (dev/sim). Sample rate/channel mismatches are refused with a log + UI error; a present-but-clockless holder refuses Dante playback with a notice instead of misrouting locally
 - Encoder: click = play/pause, rotate while paused = 5 s scrub, hold = exit
 - Progress bar + elapsed/total with [PAUSED] marker
 
@@ -272,7 +273,7 @@ go test ./...        # run all tests
 
 Design debt worth flagging here:
 
-1. **Playback via Inferno/AoIP** — target: out through Inferno's ALSA device (`alsapcm/`: one process, one instance, RX + TX). Verified so far: Inferno's transmit works (tone → ALSA virtual device → Dante → received by a subscriber). Currently still local ALSA (`default`).
+1. **Playback via Inferno/AoIP** — done for TX (persistent holder + pump, `txholder.go`), local ALSA kept as fallback. Interim: two Dante devices on the wire (`<name>` RX-only via inferno2pipe, `<name>-TX` TX-only via the holder) until the RX side moves in-process and unifies them. Still to verify on hardware: TX audibility at a subscribed receiver, always-visible TX in both modes, high channel counts.
 2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
 3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
 4. **FIFO handoff window** — monitor→recording transition has a brief sub-100 ms window where the outgoing monitor's read can still race the new recording reader. Accepted as a startup blip; documented in code comments.
