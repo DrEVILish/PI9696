@@ -5042,3 +5042,90 @@ func TestEnsureTxHolderAbsentWithoutDevice(t *testing.T) {
 		t.Error("ensure kept a holder the opener refused")
 	}
 }
+
+// The Dante TX state must be visible in both UIs (see txholder.go): the
+// formatter matrix, the OLED menu click-through, and the dashboard
+// template/JS hooks.
+
+func TestTxStatusText(t *testing.T) {
+	saveTxGlobals(t)
+	for _, tc := range []struct {
+		name      string
+		holder    txFrameWriter
+		ready     bool
+		demo      bool
+		wantShort string
+		wantLong  string
+	}{
+		{"ready", &fakeTxHolder{}, true, false, "ready", "Dante TX ready (PI9696-TX)"},
+		{"no clock", &fakeTxHolder{}, false, false, "no clock", "Dante TX: waiting for clock"},
+		{"demo", nil, false, true, "off", "Dante TX off (demo mode)"},
+		{"absent", nil, false, false, "off", "Dante TX unavailable (no device)"},
+	} {
+		mutex.Lock()
+		txHolder, txHolderReady = tc.holder, tc.ready
+		demoMode, deviceName = tc.demo, "PI9696"
+		short, long := txStatusLocked()
+		mutex.Unlock()
+		if short != tc.wantShort || long != tc.wantLong {
+			t.Errorf("%s: got (%q, %q), want (%q, %q)", tc.name, short, long, tc.wantShort, tc.wantLong)
+		}
+	}
+}
+
+// The TX row is display-only: clicking it must neither enter edit mode nor
+// leave the menu, and Back moves one row down from before.
+func TestAudioMenuTxRowClick(t *testing.T) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	oState, oSel, oEdit := currentState, selectedMenu, editingParameter
+	defer func() { currentState, selectedMenu, editingParameter = oState, oSel, oEdit }()
+
+	currentState, editingParameter = StateAudio, false
+	selectedMenu = 4
+	handleAudioClick()
+	if currentState != StateAudio || editingParameter {
+		t.Errorf("TX row click: state=%d editing=%v, want StateAudio/no-edit", currentState, editingParameter)
+	}
+	selectedMenu = 5
+	handleAudioClick()
+	if currentState != StateSettings {
+		t.Errorf("Back click: state=%d, want StateSettings", currentState)
+	}
+}
+
+// Template wiring: statusTmpl must render the TX line (a missing struct
+// field errors only at execution), and the dashboard must carry both the
+// element the meter tick updates and the JS that updates it.
+func TestTxStatusDashboardWiring(t *testing.T) {
+	var buf bytes.Buffer
+	v := statusView{Format: "WAV", SampleRate: 48, Channels: 2, TXStatus: "Dante TX ready (PI9696-TX)"}
+	if err := statusTmpl.Execute(&buf, v); err != nil {
+		t.Fatalf("status render: %v", err)
+	}
+	if !strings.Contains(buf.String(), `id="txstatus"`) || !strings.Contains(buf.String(), v.TXStatus) {
+		t.Errorf("status fragment missing TX line: %q", buf.String())
+	}
+
+	buf.Reset()
+	if err := dashboardTmpl.Execute(&buf, dashboardData{}); err != nil {
+		t.Fatalf("dashboard render: %v", err)
+	}
+	for _, want := range []string{`getElementById('txstatus')`, `m.txStatus`} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("dashboard missing TX live-update hook %q", want)
+		}
+	}
+}
+
+// The meter tick carries TX state so clock loss shows without a refresh.
+func TestMeterResponseCarriesTxStatus(t *testing.T) {
+	saveTxGlobals(t)
+	mutex.Lock()
+	txHolder, txHolderReady = &fakeTxHolder{}, true
+	deviceName = "PI9696"
+	mutex.Unlock()
+	if got := currentMeterResponse().TXStatus; got != "Dante TX ready (PI9696-TX)" {
+		t.Errorf("meter TXStatus = %q, want ready line", got)
+	}
+}

@@ -2605,6 +2605,12 @@ function applyMeter(m) {
     document.getElementById('oled').src = '/api/display.png?t=' + Date.now();
   }
 
+  // Dante TX state rides the same tick: clock loss shows without refresh.
+  var txEl = document.getElementById('txstatus');
+  if (txEl && typeof m.txStatus === 'string' && txEl.textContent !== m.txStatus) {
+    txEl.textContent = m.txStatus;
+  }
+
   var paused = !!m.paused;
   // Reels and the tape-path pulse stop moving while paused (frozen transport)
   // but the head display still shows the frozen elapsed time rather than
@@ -3093,6 +3099,7 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 {{else}}<p class="idle">Idle - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
 {{if .Notice}}<p class="err">{{.Notice}}</p>{{end}}
 {{if not .InfernoUp}}<p>(Inferno not running &mdash; build the Inferno binary and restart)</p>{{end}}
+<p id="txstatus">{{.TXStatus}}</p>
 {{if .DemoMode}}<p>(Demo mode &mdash; simulated audio)</p>{{end}}
 {{end}}
 <div class="sys-readout">
@@ -3126,6 +3133,7 @@ type statusView struct {
 	Channels    int
 	InfernoUp   bool
 	DemoMode    bool
+	TXStatus    string
 	Uptime      string
 	AppVersion  string
 	CPUPerCore  []float64
@@ -3154,6 +3162,7 @@ func currentStatusView() statusView {
 		InfernoUp:  infernoUp(),
 		DemoMode:   demoMode,
 	}
+	_, v.TXStatus = txStatusLocked()
 	switch {
 	case v.Recording:
 		v.Elapsed = formatDuration(time.Since(recordStart))
@@ -3409,6 +3418,9 @@ type meterResponse struct {
 	// DisplaySeq is the OLED framebuffer generation (see render) so the
 	// dashboard mirror reloads on change instead of polling blindly.
 	DisplaySeq uint64 `json:"displaySeq"`
+	// TXStatus is the Dante transmit state (see txholder.go), pushed live
+	// so the dashboard tracks clock loss without a status refresh.
+	TXStatus string `json:"txStatus"`
 }
 
 // jsonSafeDB coerces a dB level to a JSON-encodable value. encoding/json will
@@ -3445,7 +3457,7 @@ func currentMeterResponse() meterResponse {
 		FloorDB:    vuRangeOptions[vuRangeIdx],
 		DisplaySeq: displaySeq,
 	}
-	// Always size the meter bank to the configured channel count. During
+	_, resp.TXStatus = txStatusLocked()	// Always size the meter bank to the configured channel count. During
 	// recording, the peak/RMS arrays are exactly channelCount (startRecording
 	// sizes them to it), and at idle/monitoring they follow it too, so this
 	// is normally a no-op - but while a channel change is still in flight
