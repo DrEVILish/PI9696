@@ -184,9 +184,13 @@ func (d *TTFDisplay) init() error {
 	// settle time before the init commands - the previous empty for-loop did
 	// nothing measurable (Go drops it; even if it ran it's nanoseconds), which
 	// left the panel unpredictable on real hardware.
-	d.resPin.Out(gpio.Low)
+	if err := d.resPin.Out(gpio.Low); err != nil {
+		return fmt.Errorf("display reset pin: %w", err)
+	}
 	time.Sleep(20 * time.Millisecond)
-	d.resPin.Out(gpio.High)
+	if err := d.resPin.Out(gpio.High); err != nil {
+		return fmt.Errorf("display reset pin: %w", err)
+	}
 	time.Sleep(20 * time.Millisecond)
 
 	// SSD1322 initialization sequence
@@ -238,14 +242,21 @@ func (d *TTFDisplay) SetBrightness(pct int) {
 	if d.sim {
 		return
 	}
-	d.writeCommand([]byte{0xC1, byte(pct * 255 / 100)})
+	// Failures here are rare (settings changes, auto-dim transitions) but a
+	// dead pin must not fail silently the way it used to; the per-frame path
+	// reports through writeCommand/Update and the render log throttle.
+	if err := d.writeCommand([]byte{0xC1, byte(pct * 255 / 100)}); err != nil {
+		slog.Warn(fmt.Sprintf("display brightness command failed: %v", err))
+	}
 }
 
 func (d *TTFDisplay) writeCommand(cmd []byte) error {
 	if d.sim {
 		return nil
 	}
-	d.dcPin.Out(gpio.Low) // Command mode
+	if err := d.dcPin.Out(gpio.Low); err != nil { // Command mode
+		return fmt.Errorf("display DC pin: %w", err)
+	}
 	return d.spiConn.Tx(cmd, nil)
 }
 
@@ -258,7 +269,9 @@ func (d *TTFDisplay) writeData(data []byte) error {
 	if d.sim {
 		return nil
 	}
-	d.dcPin.Out(gpio.High) // Data mode
+	if err := d.dcPin.Out(gpio.High); err != nil { // Data mode
+		return fmt.Errorf("display DC pin: %w", err)
+	}
 	// Chunked: the driver rejects any single transfer over maxSPITx, which a
 	// full framebuffer update exceeds. DC stays high across the chunks, so the
 	// panel sees one continuous data burst.

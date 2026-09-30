@@ -261,9 +261,45 @@ func persistConfig() {
 }
 
 // settingChanged is a tiny helper for the handful of places a persistent
-// setting is mutated, so they all funnel through persistConfig.
+// setting is mutated, so they all funnel through one path.
+//
+// It debounces instead of persisting synchronously: every encoder detent used
+// to do MkdirAll+WriteFile+Rename disk I/O while holding the app-wide UI
+// mutex, stalling render/input on slow SD media and multiplying write wear.
+// Changes coalesce for configPersistDelay; gracefulShutdown flushes, so only
+// a power cut inside the window can lose the latest settings (same class as
+// the existing temp-file risk). Callers hold the app mutex. Var so tests can
+// shrink the window instead of sleeping out half a second.
+var configPersistDelay = 500 * time.Millisecond
+var configDirty = false
+var configTimer *time.Timer
+
 func settingChanged() {
-	persistConfig()
+	configDirty = true
+	if configTimer == nil {
+		configTimer = time.AfterFunc(configPersistDelay, func() {
+			mutex.Lock()
+			configTimer = nil
+			if configDirty {
+				configDirty = false
+				persistConfig()
+			}
+			mutex.Unlock()
+		})
+	}
+}
+
+// flushConfig persists immediately if a debounced change is pending, for
+// shutdown and tests. Callers hold the app mutex, like settingChanged.
+func flushConfig() {
+	if configTimer != nil {
+		configTimer.Stop()
+		configTimer = nil
+	}
+	if configDirty {
+		configDirty = false
+		persistConfig()
+	}
 }
 
 // configExportName is the config profile a unit writes/reads on its USB drive
@@ -753,38 +789,61 @@ func sanitizeMDNSHost(name string) string {
 // advertising <device>.local after the process exits.
 var mdnsCmd *exec.Cmd
 
-func mdnsLoop() {
+// mdnsLastName is the device name currently (believed) advertised. Kept as a
+// global rather than a loop local so tests can drive mdnsTick directly.
+var mdnsLastName = ""
+
+// mdnsTick ensures the mDNS advertisement for the current device name is up,
+// returning whether one is active. A failed Start must NOT latch: otherwise a
+// missing avahi binary is never retried until the next rename. A child that
+// dies on its own is reaped by its dedicated goroutine, which clears mdnsCmd
+// so the next tick republishes the same name.
+func mdnsTick() bool {
+	mutex.Lock()
+	defer mutex.Unlock()
+	name := deviceName
+	if name == mdnsLastName && mdnsCmd != nil {
+		return true
+	}
+	if mdnsCmd != nil {
+		mdnsCmd.Process.Kill()
+		mdnsCmd.Wait()
+		mdnsCmd = nil
+	}
+	host := sanitizeMDNSHost(name)
+	// avahi-publish-service <name>._workstation._tcp <port> advertises
+	// a browseable workstation service; the important bit is that
+	// avahi also registers the local hostname so <host>.local resolves.
+	c := exec.Command("avahi-publish-service", "-s", host, "_workstation._tcp", "9")
+	if err := c.Start(); err != nil {
+		logErrorf("mdns: avahi publish failed: %v", err)
+		return false
+	}
+	mdnsCmd = c
+	mdnsLastName = name
+	logInfof("mdns: advertising %s.local", host)
+	go func() {
+		c.Wait() // reap; the rename path may also Wait - second Wait errors harmlessly
+		mutex.Lock()
+		if mdnsCmd == c {
+			mdnsCmd = nil
+		}
+		mutex.Unlock()
+	}()
+	return true
+}
+
+func mdnsLoop(stop <-chan struct{}) {
 	if isSimMode() {
 		return
 	}
-	lastName := ""
 	for {
-		mutex.Lock()
-		name := deviceName
-		mutex.Unlock()
-
-		if name != lastName {
-			mutex.Lock()
-			if mdnsCmd != nil {
-				mdnsCmd.Process.Kill()
-				mdnsCmd.Wait()
-				mdnsCmd = nil
-			}
-			host := sanitizeMDNSHost(name)
-			// avahi-publish-service <name>._workstation._tcp <port> advertises
-			// a browseable workstation service; the important bit is that
-			// avahi also registers the local hostname so <host>.local resolves.
-			c := exec.Command("avahi-publish-service", "-s", host, "_workstation._tcp", "9")
-			if err := c.Start(); err != nil {
-				logErrorf("mdns: avahi publish failed: %v", err)
-			} else {
-				mdnsCmd = c
-				logInfof("mdns: advertising %s.local", host)
-			}
-			lastName = name
-			mutex.Unlock()
+		mdnsTick()
+		select {
+		case <-stop:
+			return
+		case <-time.After(5 * time.Second):
 		}
-		time.Sleep(5 * time.Second)
 	}
 }
 
@@ -1043,7 +1102,7 @@ func main() {
 	go cpuUsageLoop()
 	go telemetryHistLoop()
 	go telemetryWSLoop()
-	go mdnsLoop()
+	go mdnsLoop(shutdownCh)
 
 	// A persisted demo mode starts its generator (and the always-on input
 	// monitor over it) at boot, exactly like doStartInferno does for a real
@@ -1143,6 +1202,12 @@ func waitDone(done <-chan struct{}, what string) {
 }
 
 func gracefulShutdown() {
+	// Persist any debounced settings first: settingChanged only schedules a
+	// write, and without this a change made moments before shutdown would
+	// never reach disk.
+	mutex.Lock()
+	flushConfig()
+	mutex.Unlock()
 	// Stop accepting new work first: a record/play arriving mid-drain would
 	// start transport the drain below just stood down. Close the shutdown
 	// channel before anything else so the network monitor can't enqueue a
@@ -3190,6 +3255,15 @@ func validatePlaybackFile(file string) error {
 	return nil
 }
 
+// abortPlaybackStart unwinds a playback start that failed after standing the
+// input monitor down: clear output-metering mode and bring the monitor back
+// (mirrors restartPlaybackAt), so the meters don't go permanently silent.
+// Callers hold the app mutex.
+func abortPlaybackStart() {
+	monitoringOutput = false
+	maybeResumeInputMonitorLocked()
+}
+
 func startPlayback() {
 	if currentState != StateIdle && currentState != StateIdleBrowse {
 		logWarnf("startPlayback refused: not idle (state %d)", currentState)
@@ -3237,7 +3311,7 @@ func startPlayback() {
 	cmd := playbackCmdFor(file, 0)
 	if err := cmd.Start(); err != nil {
 		logErrorf("Failed to start playback: %v", err)
-		monitoringOutput = false
+		abortPlaybackStart()
 		return
 	}
 
@@ -4786,9 +4860,12 @@ func renderCopyFilesMenu() {
 		displayName := file
 		maxTextWidth := DisplayWidth - 32 // Account for margins and checkbox
 		if hwManager.GetTextWidth(prefix+checkbox+" "+displayName) > maxTextWidth {
-			// Truncate filename if too long
+			// Truncate filename if too long, rune-wise like fitText: byte
+			// slicing would split multi-byte UTF-8 mid-sequence and render
+			// as garbage.
 			for len(displayName) > 0 && hwManager.GetTextWidth(prefix+checkbox+" "+displayName+"...") > maxTextWidth {
-				displayName = displayName[:len(displayName)-1]
+				_, size := utf8.DecodeLastRuneInString(displayName)
+				displayName = displayName[:len(displayName)-size]
 			}
 			if len(displayName) > 0 {
 				displayName = displayName + "..."
@@ -5509,13 +5586,22 @@ var (
 )
 
 func getFreeSpace() uint64 {
+	return getFreeSpaceAt(RecordPath)
+}
+
+func getFreeSpaceAt(path string) uint64 {
 	freeSpaceMu.Lock()
 	defer freeSpaceMu.Unlock()
 	if time.Since(freeSpaceAt) < time.Second {
 		return freeSpaceBytes
 	}
 	var stat syscall.Statfs_t
-	if err := syscall.Statfs(RecordPath, &stat); err != nil {
+	if err := syscall.Statfs(path, &stat); err != nil {
+		// Stamp the failure too: otherwise a missing/unreadable path turns
+		// every 100ms render tick (remaining-time, storage, mid-take check)
+		// into a syscall instead of one cached miss per second.
+		freeSpaceBytes = 0
+		freeSpaceAt = time.Now()
 		return 0
 	}
 	freeSpaceBytes = stat.Bavail * uint64(stat.Bsize)

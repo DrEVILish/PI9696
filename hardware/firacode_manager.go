@@ -242,6 +242,22 @@ func (fcm *FiraCodeManager) DrawCenteredText(text, context string, y int) error 
 	return nil
 }
 
+// truncateRunes shortens s to at most maxChars runes, appending "..." when
+// shortened. Byte slicing would split multi-byte UTF-8 mid-sequence; kept as
+// a helper (rather than inline) so the boundary is unit-testable without a
+// display. A non-positive budget returns s unchanged, matching the old
+// behavior of skipping truncation entirely in that degenerate case.
+func truncateRunes(s string, maxChars int) string {
+	if maxChars <= 0 {
+		return s
+	}
+	r := []rune(s)
+	if len(r) <= maxChars {
+		return s
+	}
+	return string(r[:maxChars]) + "..."
+}
+
 // DrawRecordingStatus shows recording information with bold emphasis
 func (fcm *FiraCodeManager) DrawRecordingStatus(elapsed, remaining, filename string) error {
 	// Recording indicator with bold font
@@ -260,15 +276,15 @@ func (fcm *FiraCodeManager) DrawRecordingStatus(elapsed, remaining, filename str
 
 	// Filename with light font
 	if filename != "" {
-		// Truncate filename if too long
+		// Truncate filename if too long, rune-wise: maxChars counts
+		// characters but len(filename) counts bytes, so byte slicing would
+		// split multi-byte UTF-8 mid-sequence and render as garbage.
 		maxWidth := 256 - 32 // Leave margins
 		if fcm.display.GetTextWidth(filename) > maxWidth {
 			// Estimate characters that fit
 			avgCharWidth := fcm.display.GetTextWidth("M") // Use 'M' as average width
 			maxChars := maxWidth/avgCharWidth - 3         // Reserve space for "..."
-			if maxChars > 0 && maxChars < len(filename) {
-				filename = filename[:maxChars] + "..."
-			}
+			filename = truncateRunes(filename, maxChars)
 		}
 		fcm.display.DrawTextCentered(filename, 56)
 	}
