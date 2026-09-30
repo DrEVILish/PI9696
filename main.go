@@ -1279,6 +1279,9 @@ func gracefulShutdown() {
 	mutex.Unlock()
 
 	stopInfernoAndWait()
+	// Pumps are all dead here (playback reaped above), so the TX device can
+	// go without stranding a writer.
+	closeTxHolder()
 	if err := hwManager.Close(); err != nil {
 		logWarnf("hardware close: %v", err)
 	}
@@ -2127,6 +2130,10 @@ func infernoWorker() {	for req := range infernoReqCh {
 			time.Sleep(1 * time.Second)
 			doStartInferno()
 			}
+			// The TX holder is independent of the pipe server (own Dante
+			// instance on its own ports) but follows the same audio
+			// settings: reconcile after every (re)start, including boot.
+			go ensureTxHolder()
 		}
 
 		if req.done != nil {
@@ -3296,6 +3303,20 @@ func startPlayback() {
 	}
 	playbackDuration = playbackFileDuration(file)
 
+	// A present-but-unready TX holder means the inferno device exists but
+	// its clock overlay never arrived: Dante transmit is impossible, and
+	// falling back to local ALSA would play out of the wrong output
+	// silently. Refuse with a notice and retry the holder in the
+	// background; an absent holder (dev/sim/no plugin) keeps the local
+	// fallback via buildPlaybackCmd below.
+	if !demoMode && txHolder != nil && !txHolderReady {
+		logErrorf("startPlayback refused: TX clock not ready")
+		showSysNotice("TX no clock")
+		showWebNotice("Dante TX clock not ready - playback refused, retrying clock")
+		go ensureTxHolder()
+		return
+	}
+
 	// Playback switches the dashboard OLED/WebUI out of input-monitoring
 	// into output-monitoring mode: stand the FIFO input monitor down (it's
 	// no longer what the meters should be showing) and signal that the
@@ -3313,7 +3334,7 @@ func startPlayback() {
 	monitoringOutput = true
 	playbackPausedElapsed = 0
 
-	cmd := playbackCmdFor(file, 0)
+	cmd, stdout, viaDante := buildPlaybackCmd(file, 0)
 	if err := cmd.Start(); err != nil {
 		logErrorf("Failed to start playback: %v", err)
 		abortPlaybackStart()
@@ -3321,6 +3342,10 @@ func startPlayback() {
 	}
 
 	playbackCmd = cmd
+	playbackViaDante = viaDante
+	if viaDante {
+		go pumpPlaybackToTx(cmd, stdout, txHolder, channelCount)
+	}
 	playbackFile = file
 	playbackStart = time.Now()
 	currentState = StatePlaying
@@ -3341,6 +3366,11 @@ func startPlayback() {
 			playbackPausedElapsed = 0
 			if currentState == StatePlaying || currentState == StatePaused {
 				currentState = StateIdle
+			}
+			// Audio settings may have moved mid-take (the TX holder
+			// reopen defers while playing): reconcile now we're idle.
+			if txReopenPending {
+				go ensureTxHolder()
 			}
 		}
 		// Back to idle and the input monitor is expected to be a persistent,
@@ -3415,9 +3445,13 @@ func pausePlayback() {
 		return
 	}
 	playbackPausedElapsed = time.Since(playbackStart)
-	if err := playbackCmd.Process.Signal(syscall.SIGSTOP); err != nil {
-		logWarnf("Playback pause failed: %v", err)
-		return
+	// The Dante path needs no SIGSTOP: the pump writes silence while paused
+	// and the full stdout pipe back-pressures ffmpeg on its own.
+	if !playbackViaDante {
+		if err := playbackCmd.Process.Signal(syscall.SIGSTOP); err != nil {
+			logWarnf("Playback pause failed: %v", err)
+			return
+		}
 	}
 	currentState = StatePaused
 	// Freeze the demo end-of-track countdown with the playhead; resume
@@ -3438,9 +3472,11 @@ func resumePlayback() {
 	if currentState != StatePaused || playbackCmd == nil || playbackCmd.Process == nil {
 		return
 	}
-	if err := playbackCmd.Process.Signal(syscall.SIGCONT); err != nil {
-		logWarnf("Playback resume failed: %v", err)
-		return
+	if !playbackViaDante {
+		if err := playbackCmd.Process.Signal(syscall.SIGCONT); err != nil {
+			logWarnf("Playback resume failed: %v", err)
+			return
+		}
 	}
 	// The wall-clock start is now stale (it includes the paused gap), so
 	// slide it forward by that gap to keep the elapsed readout accurate.
@@ -3633,7 +3669,7 @@ func restartPlaybackAt(pos time.Duration) {
 		return
 	}
 
-	cmd := playbackCmdFor(playbackFile, pos)
+	cmd, stdout, viaDante := buildPlaybackCmd(playbackFile, pos)
 	if err := cmd.Start(); err != nil {
 		// The old process is confirmed dead here, so drive to idle cleanly
 		// instead of leaving a stale cmd behind.
@@ -3649,6 +3685,10 @@ func restartPlaybackAt(pos time.Duration) {
 	}
 
 	playbackCmd = cmd
+	playbackViaDante = viaDante
+	if viaDante {
+		go pumpPlaybackToTx(cmd, stdout, txHolder, channelCount)
+	}
 	// The old reaper may have run during the handoff wait: it clears
 	// monitoringOutput and can stand the input monitor back up (state
 	// briefly reads Idle). Restore output-metering mode like startPlayback,
@@ -3660,7 +3700,11 @@ func restartPlaybackAt(pos time.Duration) {
 	if wasPaused {
 		currentState = StatePaused
 		playbackPausedElapsed = pos
-		cmd.Process.Signal(syscall.SIGSTOP)
+		// Local path freezes the decoder with SIGSTOP; Dante needs none
+		// (the pump writes silence while paused).
+		if !viaDante {
+			cmd.Process.Signal(syscall.SIGSTOP)
+		}
 	} else {
 		currentState = StatePlaying
 		playbackStart = time.Now().Add(-pos)
@@ -3679,6 +3723,11 @@ func restartPlaybackAt(pos time.Duration) {
 			playbackPausedElapsed = 0
 			if currentState == StatePlaying || currentState == StatePaused {
 				currentState = StateIdle
+			}
+			// Audio settings may have moved mid-take (the TX holder
+			// reopen defers while playing): reconcile now we're idle.
+			if txReopenPending {
+				go ensureTxHolder()
 			}
 			// Only the current generation resumes the monitor: a stale
 			// reaper from a pre-seek process must not stand the monitor
