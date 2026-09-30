@@ -2838,12 +2838,14 @@ func TestDemoTogglePersists(t *testing.T) {
 	}
 	mutex.Lock()
 	setDemoModeLocked(true)
+	flushConfig()
 	mutex.Unlock()
 	if !readFlag() {
 		t.Fatal("demo mode true did not persist")
 	}
 	mutex.Lock()
 	setDemoModeLocked(false)
+	flushConfig()
 	mutex.Unlock()
 	if readFlag() {
 		t.Fatal("demo mode false did not persist")
@@ -4181,5 +4183,291 @@ func TestEnqueueInfernoDropsPromptlyWhenFull(t *testing.T) {
 	enqueueInferno(infernoCmdRestart)
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Fatalf("best-effort enqueue blocked %s on a full queue", elapsed)
+	}
+}
+
+// A take past ~9.2 GiB overflowed int64 when its byte count was scaled to
+// nanoseconds first (Duration(bytes) * Second exceeds 9.22e18), going
+// negative and poisoning seeks, demo end timers and the UI. 128ch/192kHz
+// reaches that in ~2 minutes. A sparse file stands in for the giant take
+// without writing gigabytes.
+func TestRecordingDurationHugeFile(t *testing.T) {
+	dir := t.TempDir()
+	huge := filepath.Join(dir, "Show_20260101_120000_ch128_192kHz.wav")
+	f, err := os.Create(huge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const tenGiB = 10 << 30
+	if err := f.Truncate(tenGiB); err != nil {
+		f.Close()
+		t.Fatal(err)
+	}
+	f.Close()
+
+	d := recordingDuration(huge, 128, 192000)
+	if d <= 0 {
+		t.Fatalf("10GiB take duration = %s, want positive", d)
+	}
+	// 10GiB at 128ch/192kHz/3B = ~73.7MB/s -> ~145s. Generous bounds: the
+	// point is sane and non-negative, not sample-exact.
+	if d < 100*time.Second || d > 200*time.Second {
+		t.Fatalf("10GiB take duration = %s, want ~145s", d)
+	}
+
+	// Absurd filename-derived rates must not wrap the arithmetic negative.
+	if d := recordingDuration(huge, 1<<30, 1<<30); d < 0 {
+		t.Fatalf("absurd rate duration = %s, want >= 0", d)
+	}
+}
+
+// A playback start that dies after standing the monitor down must not leave
+// the meters silent: abort restores output-metering off and brings the input
+// monitor back (mirroring restartPlaybackAt's resume).
+func TestAbortedPlaybackRestoresMonitor(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+	origMon, origCmd := monitoring, monitorCmd
+	origOut, origAuto := monitoringOutput, autoMonitor
+	origState, origDemo, origInferno := currentState, demoMode, infernoState
+	t.Cleanup(func() {
+		mutex.Lock()
+		monitoring, monitorCmd = origMon, origCmd
+		monitoringOutput, autoMonitor = origOut, origAuto
+		currentState, demoMode, infernoState = origState, origDemo, origInferno
+		mutex.Unlock()
+	})
+
+	// Inferno up so the monitor can start; monitor down + output mode on is
+	// exactly the state a failed startPlayback leaves behind.
+	mutex.Lock()
+	infernoState, demoMode = InfernoRunning, false
+	monitoring, monitorCmd = false, nil
+	monitoringOutput, autoMonitor = true, false
+	currentState = StateIdle
+	mutex.Unlock()
+
+	mutex.Lock()
+	abortPlaybackStart()
+	mon, out := monitoring, monitoringOutput
+	mutex.Unlock()
+	if out {
+		t.Error("output-metering mode still set after abort")
+	}
+	if !mon {
+		t.Fatal("input monitor not resumed after abort")
+	}
+	// Leave it as found: stop what the abort started.
+	mutex.Lock()
+	stopMonitor()
+	mutex.Unlock()
+}
+
+// A failed avahi start must not latch: previously lastName was set even on
+// Start failure, so a missing binary was never retried until the next rename
+// and the unit silently stopped advertising.
+func TestMdnsTickRetriesAfterFailure(t *testing.T) {
+	initTestHardware(t)
+	origCmd, origLast, origDev := mdnsCmd, mdnsLastName, deviceName
+	t.Cleanup(func() {
+		mutex.Lock()
+		mdnsCmd, mdnsLastName, deviceName = origCmd, origLast, origDev
+		mutex.Unlock()
+	})
+	if origCmd != nil {
+		t.Skip("another test left a live mDNS child")
+	}
+	// Hide every avahi binary from PATH so Start fails.
+	t.Setenv("PATH", t.TempDir())
+	mutex.Lock()
+	deviceName = "Unit-Mdns-Test"
+	mutex.Unlock()
+	if mdnsTick() {
+		t.Fatal("tick reported active with no avahi binary")
+	}
+	mutex.Lock()
+	latched := mdnsLastName
+	cmd := mdnsCmd
+	mutex.Unlock()
+	if cmd != nil {
+		t.Fatal("failed start left a child handle behind")
+	}
+	// A second tick must try again rather than trusting latched state.
+	if mdnsTick() {
+		t.Fatal("tick reported active with no avahi binary")
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if mdnsLastName != latched {
+		t.Fatal("unrelated state moved between ticks")
+	}
+	_ = latched
+}
+
+// A child that dies on its own must be reaped and republished: the reaper
+// clears mdnsCmd so the next tick restarts the same name, instead of leaving
+// a zombie and silence until the next rename.
+func TestMdnsTickRepublishesAfterDeath(t *testing.T) {
+	initTestHardware(t)
+	origCmd, origLast, origDev := mdnsCmd, mdnsLastName, deviceName
+	t.Cleanup(func() {
+		mutex.Lock()
+		mdnsCmd, mdnsLastName, deviceName = origCmd, origLast, origDev
+		mutex.Unlock()
+	})
+	if origCmd != nil {
+		t.Skip("another test left a live mDNS child")
+	}
+	marker := filepath.Join(t.TempDir(), "starts")
+	fakeExecutable(t, "avahi-publish-service",
+		"#!/bin/sh\necho started >> "+marker+"\nexit 0\n")
+	mutex.Lock()
+	deviceName = "Unit-Mdns-Test"
+	mutex.Unlock()
+	if !mdnsTick() {
+		t.Fatal("tick with a working binary reported inactive")
+	}
+	// The script exits at once; the reaper must clear the handle so the
+	// next tick republishes instead of believing its own advertisement.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mutex.Lock()
+		gone := mdnsCmd == nil
+		mutex.Unlock()
+		if gone {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("dead avahi child was never reaped")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !mdnsTick() {
+		t.Fatal("tick did not republish after the child died")
+	}
+	// The republished child is newly spawned; wait for it to run rather
+	// than racing its first write.
+	deadline = time.Now().Add(3 * time.Second)
+	for {
+		raw, err := os.ReadFile(marker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(string(raw), "started"); n >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("republished avahi never ran")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// fitText must never split a multi-byte rune: the copy-files menu truncates
+// with the same DecodeLastRuneInString loop, and byte slicing there used to
+// render garbage for non-ASCII names.
+func TestFitTextKeepsRunesIntact(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	defer mutex.Unlock()
+	// Narrow enough to force truncation of anything non-trivial.
+	const maxPx = 40
+	for _, s := range []string{"abcdef", "abédef", "日本語テスト", "a🎵b", "» editing"} {
+		got := fitText(s, maxPx)
+		for _, r := range got {
+			if r == 0xFFFD {
+				t.Errorf("fitText(%q) produced invalid UTF-8: %q", s, got)
+			}
+		}
+		if hwManager.GetTextWidth(got) > maxPx {
+			t.Errorf("fitText(%q) exceeds %dpx", s, maxPx)
+		}
+	}
+	if got := fitText("", maxPx); got != "" {
+		t.Errorf("fitText empty = %q, want empty", got)
+	}
+}
+
+// A failed stat must stamp the cache like a success does: otherwise a
+// missing /rec turns every 100ms render tick into a syscall instead of one
+// cached miss per second.
+func TestFreeSpaceFailureIsCached(t *testing.T) {
+	freeSpaceMu.Lock()
+	origBytes, origAt := freeSpaceBytes, freeSpaceAt
+	freeSpaceMu.Unlock()
+	t.Cleanup(func() {
+		freeSpaceMu.Lock()
+		freeSpaceBytes, freeSpaceAt = origBytes, origAt
+		freeSpaceMu.Unlock()
+	})
+	// Force a cold cache so the first call really stats.
+	freeSpaceMu.Lock()
+	freeSpaceAt = time.Time{}
+	freeSpaceMu.Unlock()
+
+	missing := filepath.Join(t.TempDir(), "nope")
+	if got := getFreeSpaceAt(missing); got != 0 {
+		t.Fatalf("missing path free space = %d, want 0", got)
+	}
+	// The path now exists with real free space, but the 1s window must still
+	// serve the stamped miss rather than re-statting.
+	if err := os.MkdirAll(missing, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if got := getFreeSpaceAt(missing); got != 0 {
+		t.Fatalf("cached miss returned %d after the path appeared, want 0 (still cached)", got)
+	}
+}
+
+// Rapid setting changes must coalesce into one write, not one per detent:
+// spinning a setting used to do disk I/O under the UI mutex every step.
+// The timer fires on its own, and flushConfig persists immediately.
+func TestSettingChangedDebouncesWrites(t *testing.T) {
+	initTestHardware(t)
+	origPath, origDelay := ConfigPath, configPersistDelay
+	t.Cleanup(func() {
+		mutex.Lock()
+		if configTimer != nil {
+			configTimer.Stop()
+			configTimer = nil
+		}
+		configDirty = false
+		ConfigPath, configPersistDelay = origPath, origDelay
+		mutex.Unlock()
+	})
+	mutex.Lock()
+	ConfigPath = filepath.Join(t.TempDir(), "config.json")
+	configPersistDelay = 50 * time.Millisecond
+	mutex.Unlock()
+
+	mutex.Lock()
+	for i := 0; i < 5; i++ {
+		settingChanged()
+	}
+	mutex.Unlock()
+	// Fresh temp dir: nothing may have been written synchronously.
+	cfg := filepath.Join(filepath.Dir(ConfigPath), "config.json")
+	if _, err := os.Stat(cfg); !os.IsNotExist(err) {
+		t.Fatal("rapid marks wrote synchronously instead of debouncing")
+	}
+	// The timer must persist on its own without any flush.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(filepath.Join(filepath.Dir(ConfigPath), "config.json")); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("debounced persist never fired")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// And flushConfig must persist synchronously.
+	os.Remove(filepath.Join(filepath.Dir(ConfigPath), "config.json"))
+	mutex.Lock()
+	settingChanged()
+	flushConfig()
+	mutex.Unlock()
+	if _, err := os.Stat(filepath.Join(filepath.Dir(ConfigPath), "config.json")); err != nil {
+		t.Fatal("flushConfig did not persist synchronously")
 	}
 }

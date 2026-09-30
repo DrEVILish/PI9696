@@ -3600,10 +3600,29 @@ func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	if dataBytes <= 0 || dataBytes > info.Size()-12 {
 		dataBytes = info.Size() - 44
 	}
-	if dataBytes <= 0 || channels <= 0 || sampleRate <= 0 {
+	bytesPerSec := int64(channels) * int64(bytesPerSample) * int64(sampleRate)
+	if dataBytes <= 0 || bytesPerSec <= 0 {
 		return 0
 	}
-	return time.Duration(dataBytes) * time.Second / time.Duration(int64(channels)*int64(bytesPerSample)*int64(sampleRate))
+	// Divide before scaling to nanoseconds: time.Duration(dataBytes) *
+	// time.Second overflows int64 past ~9.2 GiB (reached in ~2 min at
+	// 128ch/192kHz), going negative and poisoning seeks, demo end timers
+	// and the UI.
+	secs := dataBytes / bytesPerSec
+	// Saturate instead of overflowing: beyond ~136 years the exact value is
+	// meaningless to every caller (UI, seeks, timers).
+	const maxSecs = int64(1 << 32)
+	if secs > maxSecs {
+		return time.Duration(maxSecs) * time.Second
+	}
+	rem := dataBytes % bytesPerSec
+	// rem < bytesPerSec, so rem*time.Second stays in int64 for any rate a
+	// real stream can have; absurd rates skip the sub-second part they
+	// cannot meaningfully have anyway.
+	if bytesPerSec < int64(9e9) {
+		return time.Duration(secs)*time.Second + time.Duration(rem)*time.Second/time.Duration(bytesPerSec)
+	}
+	return time.Duration(secs) * time.Second
 }
 
 func buildRecordingRow(path string) recordingRow {
