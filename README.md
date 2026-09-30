@@ -3,7 +3,7 @@
 A 1U rack-mounted multichannel audio recorder: AES67 over Ethernet via inferno, uncompressed
 WAV to SD card, operated from a 256×64 OLED front panel or a token-auth web dashboard.
 
-**Docs:** [WIRING.md](WIRING.md) · [AGENTS.md](AGENTS.md) · [DEPLOYMENT.md](DEPLOYMENT.md)
+**Docs:** [WIRING.md](WIRING.md) · [AGENTS.md](AGENTS.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [REPORT.md](REPORT.md) (two-host inferno test, 2026-09-30)
 
 ---
 
@@ -239,7 +239,9 @@ go test ./...        # run all tests
 
 ### Testing
 
-- 78 tests in `main_test.go` (+ 10 `theme_test.go`, 7 `hyperdeck_test.go`, 5 `alsapcm/`, 2 `hardware/`, 1 `logging_test.go`)
+- 128 tests in `main_test.go` (+ 10 `theme_test.go`, 9 `hyperdeck_test.go`, 8 `alsapcm/`, 7 `hardware/`, 2 `logging_test.go`)
+- The suite runs against a temp recordings tree (`TestMain`); still run it on the dev server, never on a unit - see DEPLOYMENT.md
+- `test/interop/` measures a unit against a second inferno host sample-for-sample (REPORT.md)
 - Tests run the real HTTP handlers over `httptest` (auth, recordings API, ZIP download, settings)
 - Playback/seek tested against a fake `ffmpeg` via PATH shim
 - Inferno worker concurrency tested against a stub server
@@ -273,10 +275,10 @@ go test ./...        # run all tests
 
 Design debt worth flagging here:
 
-1. **Playback via Inferno/AoIP** — done for TX (persistent holder + pump, `txholder.go`), local ALSA kept as fallback. Interim: two inferno devices on the wire (`<name>` RX-only via inferno2pipe, `<name>-TX` TX-only via the holder) until the RX side moves in-process and unifies them. Still to verify on hardware: TX audibility at a subscribed receiver, always-visible TX in both modes, high channel counts.
+1. **Playback via Inferno/AoIP** — done for TX (persistent holder + pump, `txholder.go`), local ALSA kept as fallback. Interim: two inferno devices on the wire (`<name>` RX-only via inferno2pipe, `<name>-TX` TX-only via the holder) until the RX side moves in-process and unifies them. Measured against a second host (REPORT.md): audible and visible in both modes, but the pump stalls on the app mutex while `render()` holds it, so the shipped build restarts the transmitter many times a minute (F2); TX is silent while idle and loses the start of each playback (F3); inferno dithers every 24-bit transmit (F4). High channel counts still unmeasured.
 2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
 3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
-4. **FIFO handoff window** — monitor→recording transition has a brief sub-100 ms window where the outgoing monitor's read can still race the new recording reader. Accepted as a startup blip; documented in code comments.
+4. **FIFO handoff window** — monitor→recording transition has a brief sub-100 ms window where the outgoing monitor's read can still race the new recording reader. Accepted as a startup blip; documented in code comments. Measured once at 50 ms of audio missing 50 ms into a take (REPORT.md F6) - audible, so worth closing.
 5. **Config persistence** — atomic rename, but temp file not fsync'd before rename (power loss can truncate config).
 6. **Meter race on monitor→record** — fixed via the `meterGen` generation counter (stale reapers can't touch the new session); kept here as history of the hazard.
 7. **No analog/USB audio I/O** — Ethernet only (product decision).
