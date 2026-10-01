@@ -33,18 +33,36 @@ type FiraCodeConfig struct {
 }
 
 // NewFiraCodeManager creates a new FiraCode font manager
+// defaultFontSizes are the per-context point sizes. Shared with the system-
+// font fallback in NewHardwareManager: a config without them makes every
+// SwitchToContext load a 0pt face, after which nothing renders at all.
+func defaultFontSizes() map[string]float64 {
+	return map[string]float64{
+		"StatusBar":   9.0,  // Top status bar - compact but readable
+		"MainContent": 11.0, // Primary content - optimal balance
+		"MenuItems":   10.0, // Menu navigation - clean spacing
+		"Headers":     13.0, // Section headers - prominent
+		"Recording":   14.0, // Recording indicator - attention grabbing
+		"Small":       8.0,  // Fine details - minimum readable
+		"Large":       16.0, // Alerts/emphasis - maximum for display
+	}
+}
+
+// fallbackFiraCodeConfig is the system-font (DejaVu) config used when the
+// FiraCode files cannot be loaded.
+func fallbackFiraCodeConfig() *FiraCodeConfig {
+	return &FiraCodeConfig{
+		BasePath: "./fonts",
+		Regular:  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+		Bold:     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+		sizes:    defaultFontSizes(),
+	}
+}
+
 func NewFiraCodeManager() (*FiraCodeManager, error) {
 	config := &FiraCodeConfig{
 		BasePath: "./fonts",
-		sizes: map[string]float64{
-			"StatusBar":   9.0,  // Top status bar - compact but readable
-			"MainContent": 11.0, // Primary content - optimal balance
-			"MenuItems":   10.0, // Menu navigation - clean spacing
-			"Headers":     13.0, // Section headers - prominent
-			"Recording":   14.0, // Recording indicator - attention grabbing
-			"Small":       8.0,  // Fine details - minimum readable
-			"Large":       16.0, // Alerts/emphasis - maximum for display
-		},
+		sizes:    defaultFontSizes(),
 	}
 
 	// Set font paths
