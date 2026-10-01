@@ -168,15 +168,31 @@ no clock available (timeout waiting for overlay update)
 The receiver still starts, so this presents as "the inferno path is broken"
 rather than "there is no clock".
 
+**Recording needs more than a clock: it needs a network clock.** The app
+refuses to start a take until statime's observation socket
+(`/run/statime/observation.sock`) reports this unit as a PTP slave within
+1 ms of its master on 5 consecutive polls. The stub below never qualifies, so a
+unit on the stub can monitor and play back but cannot record.
+
 ### With a PTP grandmaster on the LAN (real deployment)
 
 ```bash
 cd /opt/pi9696
 git clone --recurse-submodules -b inferno-dev https://github.com/teodly/statime
-cd statime && cargo build --release
-# edit inferno-ptpv1.toml: interface = "eth0", hardware-clock = "none" on a Pi 4
-sudo ./target/release/statime -c inferno-ptpv1.toml
+cd statime && cargo build --release && cd ..
+sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/statime.service > /etc/systemd/system/statime.service
+systemctl daemon-reload
+systemctl disable --now pi9696-clock      # the stub and statime conflict (one owns /tmp/ptp-usrvclock)
+systemctl enable --now statime
 ```
+
+`deploy/statime.service` runs the release binary with the tracked
+`deploy/statime.toml` (PTPv1, `eth0`, `hardware-clock = "auto"`, usrvclock export,
+observation socket) and carries `Conflicts=pi9696-clock.service`. Check the
+lock on the dashboard's Status panel (Clock row) or with
+`python3 -c "import socket;s=socket.socket(socket.AF_UNIX);s.connect('/run/statime/observation.sock');print(s.recv(65536))"`.
+The installed unit used to point at `/home/drevilish/statime/target/debug/statime`
+(absent) and failed at every boot; reinstall it from the template.
 
 Disable NTP while Inferno is in use (`systemctl stop systemd-timesyncd`):
 stepping the system clock collides with PTP, and inferno's README documents
@@ -240,12 +256,15 @@ does not care which PTP version produced it:
 - **Unit (slave):** the repo's `inferno-ptpv1.toml` with only
   `protocol-version = "PTPv2"`. It locks within ~20 s (±130 µs to a VM master).
 
-Stop `pi9696-clock` first, and **do not start or restart `pi9696.service`**
-while testing: its `Wants=pi9696-clock` brings the stub back, which re-creates
-`/tmp/ptp-usrvclock` and silently takes the socket over from statime.
-`systemctl mask --runtime` does not prevent it, because the unit file in
-`/etc/systemd/system` takes precedence over the `/run` mask. Check with
-`ss -xp | grep ptp-usrvclock` - only statime should be bound.
+Stop `pi9696-clock` first. Before `25de538`, `pi9696.service` had
+`Wants=pi9696-clock`, so any app restart brought the stub back, which
+re-created `/tmp/ptp-usrvclock` and silently took the socket over from statime
+(`systemctl mask --runtime` did not prevent it: the unit file in
+`/etc/systemd/system` takes precedence over the `/run` mask). Units installed
+from the current templates are safe. Check with
+`ss -xp | grep ptp-usrvclock` - only statime should be bound. The slave config
+needs the `[observability]` section from `deploy/statime.toml` for the recording
+gate to see it.
 `test/interop/README.md` has the full procedure.
 
 ### Hardware clock caveat
@@ -332,10 +351,17 @@ sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696.service \
     > /etc/systemd/system/pi9696.service
 sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696-clock.service \
     > /etc/systemd/system/pi9696-clock.service
+sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/statime.service \
+    > /etc/systemd/system/statime.service
 printf 'PI9696_REMOTE_PORT=80\n' > /opt/pi9696/.env   # optional; default 8080
 systemctl daemon-reload
-systemctl enable --now pi9696-clock pi9696
+# exactly one clock: statime (network PTP leader present - required to record)
+# or the stub (no leader: monitor/playback only). They conflict.
+systemctl enable --now statime pi9696      # or: pi9696-clock pi9696
 ```
+
+`pi9696.service` only orders itself after the clock units; it no longer
+`Wants=` the stub, so restarting the app cannot replace a running statime.
 
 **Do not add a `CapabilityBoundingSet` to the unit.** See below — restricting
 it to a single capability silently costs the app its FIFO buffer.
@@ -485,17 +511,18 @@ Nothing outstanding for `ftl-themes`.
   advertises cannot be resolved per receiver. Needs a second host to settle.
 - **No hardware inferno-network device on the LAN**, so the clock comes from the test stub rather
   than Statime — see the clock section.
-- **`statime.service` is stale**: it points at
-  `/home/drevilish/statime/target/debug/statime`, which does not exist, and
-  has failed since boot. The built binary is
-  `/opt/pi9696/statime/target/release/statime`.
-- **`/var/log/pi9696/` was missing**, so there was no `app.log`; the installed
-  `pi9696.service` also predates the template (`TimeoutStopSec` 20 vs 30).
-  Re-run the §5 install steps.
-- **`inferno2pipe` output is discarded** by the app, so subscription and media
-  errors ("not receiving media packets", reorder-buffer losses) never reach the
-  journal. Debug the receive side with a standalone `inferno2pipe` instance.
+- **Clock units on this unit:** `statime.service` reinstalled from the template
+  (it used to point at a missing debug binary) but **disabled**: this LAN has no
+  PTPv1 leader, so the boot clock stays the stub and **recording is refused**
+  until statime is enabled with a leader present (or the two-host PTPv2 recipe
+  is used). `/var/log/pi9696/` created and `pi9696.service` reinstalled from the
+  template (2026-10-01).
+- **`inferno2pipe` receive faults** (reorder-buffer losses, media timeouts) are
+  counted by the app and logged as summaries (`inferno2pipe: N sample-loss
+  events ...`, Error level) since `b08d6da`; the raw output is still not kept.
 - **The sample rate is not shown by netaudio** for any inferno device: inferno
-  does not answer netaudio's sample-rate probe. The TX channels carry it in
-  their mDNS records (`rate=`); the RX-only `PI9696` device publishes none.
+  does not answer netaudio's sample-rate probe (INFERNO-UPSTREAM.md U2, patch
+  verified), and netaudio will not probe 192.168.10.69 at all while `PI9696` and
+  `PI9696-TX` share it (U8). The TX channels carry the rate in their mDNS
+  records (`rate=`); the RX-only `PI9696` device publishes none.
 - **Pi 4 has no PTP hardware clock**, so AES67 clock quality is software-only.
