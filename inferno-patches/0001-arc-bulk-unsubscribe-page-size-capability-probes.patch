@@ -1,7 +1,34 @@
 diff --git a/inferno_aoip/src/device_server/arc_server.rs b/inferno_aoip/src/device_server/arc_server.rs
-index 325ee4c..c480636 100644
+index 325ee4c..2395342 100644
 --- a/inferno_aoip/src/device_server/arc_server.rs
 +++ b/inferno_aoip/src/device_server/arc_server.rs
+@@ -124,7 +124,7 @@ pub async fn run_server(
+           paginate_respond(
+             &mut conn,
+             request.content(),
+-            if subscriber.is_some() { self_info.rx_channels.len().min(32).try_into().unwrap() } else { 0 },
++            if subscriber.is_some() { self_info.rx_channels.len().min(16).try_into().unwrap() } else { 0 },
+             self_info.rx_channels.iter().enumerate(),
+             |(channel_index, ch), bytes| {
+               if common_descriptor_offset == 0 {
+@@ -164,7 +164,7 @@ pub async fn run_server(
+           paginate_respond(
+             &mut conn,
+             request.content(),
+-            self_info.tx_channels.len().min(32).try_into().unwrap(),
++            self_info.tx_channels.len().min(16).try_into().unwrap(),
+             self_info.tx_channels.iter().enumerate(),
+             |(channel_index, ch), bytes| {
+               if common_descriptor_offset == 0 {
+@@ -188,7 +188,7 @@ pub async fn run_server(
+           paginate_respond(
+             &mut conn,
+             request.content(),
+-            self_info.tx_channels.len().min(32).try_into().unwrap(),
++            self_info.tx_channels.len().min(16).try_into().unwrap(),
+             self_info.tx_channels.iter().enumerate(),
+             |(channel_index, ch), bytes| {
+               if !wrote {
 @@ -609,11 +609,20 @@ pub async fn run_server(
            // received unknown opcode1 0x3014, content 000100000002
            // whole packet: "27ff00104a1c30140000000100000002"

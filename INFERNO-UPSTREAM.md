@@ -7,7 +7,7 @@ DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
 
 Each entry gives where the problem is, how it was found, its effect on PI9696,
-and the change wanted. Two of the fixes are prototyped in
+and the change wanted. Three of the fixes are prototyped in
 [`inferno-patches/`](inferno-patches/) and were verified on the dev server.
 
 | # | Component | Issue | PI9696 impact | Status |
@@ -24,6 +24,7 @@ and the change wanted. Two of the fixes are prototyped in
 | U10 | inferno2pipe | Logs at debug by default; one "Lost" line per channel | noisy stderr at 128 ch (counted in-app since `b08d6da`) | change wanted |
 | U11 | docs | `inferno2pipe/README.md` documents a CLI the v0.5.4 binary doesn't take | install confusion | already in DEPLOYMENT.md |
 | U12 | netaudio | `device list` leaves Sample Rate blank even when the device answers | rate visible only via `device show` | investigate (netaudio) |
+| **U13** | inferno ARC | Channel lists paginated **32 per page**; netaudio expects 16 | **a device with >16 channels cannot be read or subscribed by netaudio** | **patch verified** |
 
 ---
 
@@ -70,6 +71,26 @@ u16 0x0018 | u16 n_supported | u32 current | u32 0 | u32 0x00020000 | n x u32 su
 patched `inferno2pipe` reports `Sample Rate 96 kHz`, `Supported Sample Rates 96 kHz`.
 Still open: `0x0085` (pull-up), `0x1006`, `0x100a`; netaudio's `device list`
 column (U12); and PI9696 specifically (U8).
+
+## U13 — Channel lists paginated 32 per page (devices >16 ch unusable from netaudio)
+
+**Where:** `arc_server.rs`, `get_receive_channels` / `get_transmit_channels` /
+`get_transmit_channels_friendly_names`: `paginate_respond(..., channels.len().min(32), ...)`.
+That argument is the number of entries **per response page**, not a total.
+
+**Found:** the channel-count sweep failed at 32, 64 and 128 channels with no
+audio fault involved. `netaudio subscription add` aborted with `could not read
+current subscriptions from PI9696.local. before making changes:
+netaudio_client_get_rx_channels_json: malformed binary response`, and
+`netaudio channel list` showed **0** RX channels for a 64-channel receiver.
+netaudio parses at most 16 entries per page (the protocol's page size), so any
+device with more than 16 channels cannot be inspected or routed.
+
+**Fix:** page size 16 (`.min(16)`). Verified on the dev server: with the patch,
+`netaudio channel list` shows all 64 RX channels and a bulk 64-channel
+subscribe from a *stock* 64-channel transmitter succeeds (`MODIFIED RX 64@ITEST-RX
+<- 64@ITEST-SRC (verified)`). Included in
+`inferno-patches/0001-arc-bulk-unsubscribe-page-size-capability-probes.patch`.
 
 ## U3 — TX always dithers 16/24-bit output (REPORT F4)
 
