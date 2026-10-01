@@ -176,6 +176,35 @@ func initTestHardware(t *testing.T) {
 		}
 		hwManager = hm
 	}
+	// Audio settings are package globals; a test that changes them (rate,
+	// channels, name) used to leave them changed, so later playback tests
+	// refused their 48kHz/2ch fixtures depending on run order (REPORT F12).
+	// Same for the web notice (refusal tests raise one) and the input
+	// monitor: a notice or a monitor left behind changes what later tests'
+	// status panels and frames render.
+	mutex.Lock()
+	rate, ch, name := sampleRateIdx, channelCount, deviceName
+	notice, noticeUntil := webNotice, webNoticeUntil
+	monWas := monitoring
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		sampleRateIdx, channelCount, deviceName = rate, ch, name
+		webNotice, webNoticeUntil = notice, noticeUntil
+		var done chan struct{}
+		if !monWas && monitoring {
+			done = monitorDone
+			autoMonitor = false
+			stopMonitor()
+		}
+		mutex.Unlock()
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(ffmpegStopGrace + time.Second):
+			}
+		}
+	})
 }
 
 // testSessionCookie logs in through the real login flow and returns a valid
