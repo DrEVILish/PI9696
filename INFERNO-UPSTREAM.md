@@ -25,6 +25,7 @@ and the change wanted. Three of the fixes are prototyped in
 | U11 | docs | `inferno2pipe/README.md` documents a CLI the v0.5.4 binary doesn't take | install confusion | already in DEPLOYMENT.md |
 | U12 | netaudio | `device list` leaves Sample Rate blank even when the device answers | rate visible only via `device show` | investigate (netaudio) |
 | **U13** | inferno ARC | Channel lists paginated **32 per page**; netaudio expects 16 | **a device with >16 channels cannot be read or subscribed by netaudio** | **patch verified** |
+| U14 | inferno2pipe | A blocked FIFO write stalls the whole runtime | a slow reader takes down ARC (no replies) and media (kernel drops) | change wanted |
 
 ---
 
@@ -91,6 +92,21 @@ device with more than 16 channels cannot be inspected or routed.
 subscribe from a *stock* 64-channel transmitter succeeds (`MODIFIED RX 64@ITEST-RX
 <- 64@ITEST-SRC (verified)`). Included in
 `inferno-patches/0001-arc-bulk-unsubscribe-page-size-capability-probes.patch`.
+
+## U14 — inferno2pipe stalls completely when its FIFO reader is slow
+
+**Found:** in the channel sweep, while the unit's metering ffmpeg could not
+keep up (or, above 64 ch, could not start), `inferno2pipe`'s FIFO write
+blocked. With it went everything else on its runtime: raw ARC requests got no
+reply at all (128 of 128 subscribe batches timed out), and the kernel dropped
+its media packets at ~12,000-14,000 `RcvbufErrors`/s. A recorder must not lose its control plane
+because a consumer is slow.
+
+**Change wanted:** write the pipe from a dedicated thread behind a bounded
+queue, count and log overruns, and keep ARC/mDNS/flow reception on threads
+that never block on the output. PI9696 removed the trigger (lean metering,
+`65b26cd`), but any stall in the consumer (SD hiccup, CPU spike) still
+propagates.
 
 ## U3 — TX always dithers 16/24-bit output (REPORT F4)
 
