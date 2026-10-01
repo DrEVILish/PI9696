@@ -528,7 +528,7 @@ func writeLoginPage(w http.ResponseWriter, d loginPageData) {
 	d.Logo = template.HTML(pi9696LogoSVG)
 	d.Theme, d.ThemeCSS = loginPageTheme()
 	d.CoreVersion = themeBuildVersion()
-	d.HTMLTag = displayHTMLTag(currentTheme())
+	d.HTMLTag = displayHTMLTag(currentTheme(), currentThemeVariant())
 	if err := loginPageTmpl.Execute(w, d); err != nil {
 		logDebugf("login render: %v", err)
 	}
@@ -619,6 +619,12 @@ const defaultThemeSlug = "xbmc"
 // than one browser. Guarded by mutex.
 var themeSlug = defaultThemeSlug
 
+// themeVariant is the palette variant (CONTRACT.md "Palette variants") of
+// themeSlug, rendered as <html data-variant>; "" is the theme's own palette.
+// Persisted beside the theme and only ever one the theme lists. Guarded by
+// mutex.
+var themeVariant string
+
 // Library display options (CONTRACT.md "User display options"): browser
 // switches an app may offer beside the theme, applied as documentElement
 // attributes/style. Guarded by the app mutex; persisted like every setting.
@@ -635,12 +641,15 @@ var displayDensityValues = [3]string{"1", "0.85", "1.15"}
 // inline custom property - the contract's documented override path, which
 // beats any theme). Built server-side because html/template refuses
 // dynamic content between a tag's attributes.
-func displayHTMLTag(theme string) template.HTML {
+func displayHTMLTag(theme, variant string) template.HTML {
 	mutex.Lock()
 	motion, contrast, density := displayMotion, displayContrast, displayDensityValues[displayDensityIdx]
 	mutex.Unlock()
 	var b strings.Builder
 	b.WriteString(`<html data-theme="` + html.EscapeString(theme) + `"`)
+	if variant != "" {
+		b.WriteString(` data-variant="` + html.EscapeString(variant) + `"`)
+	}
 	if motion == "reduced" {
 		b.WriteString(` data-motion="reduced"`)
 	}
@@ -666,6 +675,14 @@ type themeManifest struct {
 	Scheme      string   `json:"scheme"`
 	Luminance   *float64 `json:"luminance"`
 	ShellAware  bool     `json:"shellAware"`
+	// Variants are the theme's palette variants (sub-themes), offered in
+	// the picker beneath the theme. Absent on most themes.
+	Variants []themeVariantEntry `json:"variants"`
+}
+
+type themeVariantEntry struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
 }
 
 // themeAssetPath maps a path inside the submodule to its embed path.
@@ -733,6 +750,37 @@ func isKnownTheme(slug string) bool {
 	return false
 }
 
+// themeHasVariant reports whether slug's manifest entry lists variant id.
+// "" (the theme's own palette) is not a variant.
+func themeHasVariant(slug, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, t := range availableThemes() {
+		if t.Slug == slug {
+			for _, v := range t.Variants {
+				if v.ID == id {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// currentThemeVariant returns the active palette variant of the active
+// theme, "" when none is chosen or it does not belong to that theme.
+func currentThemeVariant() string {
+	theme := currentTheme()
+	mutex.Lock()
+	v := themeVariant
+	mutex.Unlock()
+	if !themeHasVariant(theme, v) {
+		return ""
+	}
+	return v
+}
+
 // currentTheme returns the active slug, falling back to the default when
 // the persisted value names a bundle that no longer ships (e.g. an
 // upstream-archived theme or an old "none"). Caller holds no lock.
@@ -745,23 +793,84 @@ func currentTheme() string {
 	return themeSlug
 }
 
-func themeOptionsView() optionsView {
-	all := availableThemes()
-	opts := make([]string, 0, len(all))
-	idx := 0
-	active := currentTheme()
-	for i, t := range all {
-		opts = append(opts, t.Label)
-		if t.Slug == active {
-			idx = i
-		}
-	}
-	return optionsView{Options: opts, Idx: idx}
+// themeChoice is one entry of the theme picker: a theme with its own
+// palette (Variant "") or one of its palette variants. The picker posts the
+// choice's index in themeChoices().
+type themeChoice struct {
+	Slug, Variant, Label string
 }
 
-func themeSelect() selectView {
-	return settingSelect("theme", "/api/settings/theme", "Theme", "", themeOptionsView)
+// themeChoices lists every theme in manifest order, each followed by its
+// variants, so a variant always sits beneath its theme (CONTRACT.md).
+func themeChoices() []themeChoice {
+	var out []themeChoice
+	for _, t := range availableThemes() {
+		out = append(out, themeChoice{Slug: t.Slug, Label: t.Label})
+		for _, v := range t.Variants {
+			out = append(out, themeChoice{Slug: t.Slug, Variant: v.ID, Label: v.Label})
+		}
+	}
+	return out
 }
+
+// themeChoiceIndex returns the picker index of (slug, variant), -1 if none.
+func themeChoiceIndex(slug, variant string) int {
+	for i, c := range themeChoices() {
+		if c.Slug == slug && c.Variant == variant {
+			return i
+		}
+	}
+	return -1
+}
+
+// themePickerView groups the choices for the picker template: a theme
+// without variants is a plain option, a theme with variants an <optgroup>
+// holding its own palette first and then each variant.
+type themePickerView struct {
+	Groups []themePickerGroup
+}
+
+type themePickerGroup struct {
+	Label   string // optgroup label; "" for a theme without variants
+	Options []themePickerOption
+}
+
+type themePickerOption struct {
+	Idx      int
+	Label    string
+	Selected bool
+}
+
+func themePicker() themePickerView {
+	active := themeChoiceIndex(currentTheme(), currentThemeVariant())
+	var v themePickerView
+	i := 0
+	for _, t := range availableThemes() {
+		g := themePickerGroup{}
+		if len(t.Variants) > 0 {
+			g.Label = t.Label
+		}
+		g.Options = append(g.Options, themePickerOption{Idx: i, Label: t.Label, Selected: i == active})
+		i++
+		for _, tv := range t.Variants {
+			g.Options = append(g.Options, themePickerOption{Idx: i, Label: tv.Label, Selected: i == active})
+			i++
+		}
+		v.Groups = append(v.Groups, g)
+	}
+	return v
+}
+
+var themeFragmentTmpl = template.Must(template.New("theme-select").Parse(`<div id="theme" class="setting-cell">
+<div class="field-row">
+<form hx-post="/api/settings/theme" hx-target="#theme" hx-swap="outerHTML">
+<label class="label">Theme</label>
+<select name="idx" class="select" onchange="this.form.requestSubmit()">
+{{range .Groups}}{{if .Label}}<optgroup label="{{.Label}}">{{end}}{{range .Options}}<option value="{{.Idx}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}{{if .Label}}</optgroup>{{end}}
+{{end}}</select>
+</form>
+</div>
+</div>`))
 
 // The three library display options (CONTRACT.md "User display options"):
 // density/motion/contrast ride the documentElement, not the theme, so a
@@ -867,21 +976,27 @@ func registerDisplayOptionRoutes(mux *http.ServeMux) {
 // other setting, so it follows the device rather than the browser - the
 // front panel and the web UI share one state, as they do for brightness.
 func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
-	changed := false
+	themeChanged, variantChanged := false, false
 	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
-		all := availableThemes()
+		all := themeChoices()
 		if idx >= 0 && idx < len(all) {
+			c := all[idx]
 			mutex.Lock()
-			if themeSlug != all[idx].Slug {
-				themeSlug = all[idx].Slug
-				changed = true
+			themeChanged = themeSlug != c.Slug
+			variantChanged = themeChanged || themeVariant != c.Variant
+			themeSlug, themeVariant = c.Slug, c.Variant
+			if variantChanged {
 				settingChanged()
 			}
 			mutex.Unlock()
 		}
 	}
-	selectFragmentTmpl.Execute(w, themeSelect())
-	if changed {
+	themeFragmentTmpl.Execute(w, themePicker())
+	if variantChanged && !themeChanged {
+		// Same bundle, other palette: only the marker attribute changes.
+		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">%s;telePalette=null</script>", variantCarrier(currentThemeVariant()))
+	}
+	if themeChanged {
 		// Out-of-band swap of the <link> and the <html data-theme> marker so
 		// the change is visible immediately, without a reload that would lose
 		// the live meter and telemetry sockets.
@@ -896,8 +1011,17 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		// executing in-swapped scripts, which multi-node responses don't
 		// guarantee. The sprite rewrite keeps every .icon <use> pointed
 		// at the new theme's icon set (same ids, theme-authored shapes).
-		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);SPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null;document.querySelectorAll('.icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, iconSpriteHref(active))
+		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);%s;SPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null;document.querySelectorAll('.icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, variantCarrier(currentThemeVariant()), iconSpriteHref(active))
 	}
+}
+
+// variantCarrier is the documentElement update for a palette variant: set
+// data-variant, or remove it for the theme's own palette.
+func variantCarrier(variant string) string {
+	if variant == "" {
+		return `document.documentElement.removeAttribute("data-variant")`
+	}
+	return fmt.Sprintf(`document.documentElement.setAttribute("data-variant",%q)`, variant)
 }
 
 type dashboardData struct {
@@ -2842,6 +2966,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	mutex.Unlock()
 
 	activeTheme := currentTheme()
+	activeVariant := currentThemeVariant()
 	activeThemeCSS := themeCSSHref(activeTheme)
 	// ?preview=<slug> renders a theme for this browser only, without
 	// persisting it: try-before-apply on shared hardware, where selecting
@@ -2850,6 +2975,12 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	if pv := r.URL.Query().Get("preview"); isKnownTheme(pv) {
 		activeTheme = pv
 		activeThemeCSS = themeCSSHref(pv)
+		// &variant=<id> previews one of its palettes (the library's demo
+		// pages use the same parameter); anything else is its own palette.
+		activeVariant = ""
+		if pvv := r.URL.Query().Get("variant"); themeHasVariant(pv, pvv) {
+			activeVariant = pvv
+		}
 	}
 
 	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf, motionBuf, contrastBuf, densityBuf bytes.Buffer
@@ -2862,7 +2993,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
 	hyperdeckFragmentTmpl.Execute(&hyperdeckBuf, hyperdeckViewData())
 	selectFragmentTmpl.Execute(&logLevelBuf, logLevelSelect())
-	selectFragmentTmpl.Execute(&themeBuf, themeSelect())
+	themeFragmentTmpl.Execute(&themeBuf, themePicker())
 	for _, opt := range displayOptions {
 		buf := displayOptBuf(opt.id, &motionBuf, &contrastBuf, &densityBuf)
 		if buf != nil {
@@ -2891,7 +3022,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		ThemeCSS:             activeThemeCSS,
 		CoreVersion:          themeBuildVersion(),
 		IconSprite:           iconSpriteHref(activeTheme),
-		HTMLTag:              displayHTMLTag(activeTheme),
+		HTMLTag:              displayHTMLTag(activeTheme, activeVariant),
 		VURangeFragment:      template.HTML(vuBuf.String()),
 		PeakHoldFragment:     template.HTML(holdBuf.String()),
 		SampleRateFragment:   template.HTML(srBuf.String()),

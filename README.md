@@ -140,7 +140,9 @@ Playback path:
   is the integration spec. Markup uses the library's own components (`.btn`, `.table`, `.modal`, `.meter`, `.scroll` — v4 dropped the `ftl-` prefix everywhere),
   the shared icon sprite (`/static/themes/icons/<slug>.svg`, per-theme art with a
   generic fallback) and the app-shell hooks. Density/Motion/Contrast display
-  options persist device-wide beside the theme choice. The app reads the library's tokens directly and declares none of them itself (see `TestDefaultThemeIsFTL`).
+  options persist device-wide beside the theme choice. Palette variants (sub-themes, `themes.json` `variants`) sit beneath their theme in the picker
+  (an `<optgroup>`: the theme's own palette, then each variant), render as `<html data-variant>`, persist beside the theme and are dropped when the theme
+  does not list them; `?preview=<slug>&variant=<id>` previews one. The app reads the library's tokens directly and declares none of them itself (see `TestDefaultThemeIsFTL`).
 
 ### Auth & Security
 

@@ -182,6 +182,10 @@ func loadPersistedConfig() {
 	if c.Theme != "" && isKnownTheme(c.Theme) {
 		themeSlug = c.Theme
 	}
+	themeVariant = ""
+	if themeHasVariant(themeSlug, c.ThemeVariant) {
+		themeVariant = c.ThemeVariant
+	}
 	if c.DisplayMotion == "full" || c.DisplayMotion == "reduced" {
 		displayMotion = c.DisplayMotion
 	}
@@ -231,6 +235,7 @@ func persistConfig() {
 		PeakHoldIdx:       peakHoldIdx,
 		TransportMode:     transportMode,
 		Theme:             themeSlug,
+		ThemeVariant:      themeVariant,
 		DisplayMotion:     displayMotion,
 		DisplayContrast:   displayContrast,
 		DensityIdx:        displayDensityIdx,
@@ -337,6 +342,7 @@ func exportConfigTo(dir string) error {
 		PeakHoldIdx:       peakHoldIdx,
 		TransportMode:     transportMode,
 		Theme:             themeSlug,
+		ThemeVariant:      themeVariant,
 		DisplayMotion:     displayMotion,
 		DisplayContrast:   displayContrast,
 		DensityIdx:        displayDensityIdx,
@@ -416,6 +422,10 @@ func importConfigFrom(dir string) error {
 	}
 	if c.Theme != "" && isKnownTheme(c.Theme) {
 		themeSlug = c.Theme
+	}
+	themeVariant = ""
+	if themeHasVariant(themeSlug, c.ThemeVariant) {
+		themeVariant = c.ThemeVariant
 	}
 	if c.DisplayMotion == "full" || c.DisplayMotion == "reduced" {
 		displayMotion = c.DisplayMotion
@@ -1035,6 +1045,9 @@ type PersistedConfig struct {
 	// Theme is the web dashboard's ftl-themes slug. Absent or naming a
 	// bundle that no longer ships falls back to the default theme.
 	Theme string `json:"theme,omitempty"`
+	// ThemeVariant is the chosen palette variant (sub-theme) of Theme, ""
+	// for the theme's own palette. Dropped when Theme does not list it.
+	ThemeVariant string `json:"themeVariant,omitempty"`
 	// Library display options (motion/contrast/density). Absent in old
 	// configs decodes to the defaults (full / standard / Normal).
 	DisplayMotion   string `json:"displayMotion,omitempty"`
