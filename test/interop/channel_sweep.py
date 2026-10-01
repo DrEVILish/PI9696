@@ -23,7 +23,7 @@ p.add_argument("--rx-host", default="root@192.0.2.162")
 p.add_argument("--work", default="/var/tmp/pi9696-work")
 p.add_argument("--base", default="http://127.0.0.1")
 p.add_argument("--keep-wav", action="store_true")
-p.add_argument("--control-bin", default="", help="inferno2pipe on the second host for a control capture of the same source (needs >16ch-capable ARC paging)")
+p.add_argument("--control-bin", default="", help="inferno2pipe on the second host for a control capture of the same source (above 16 ch it needs the U13 paging patch)")
 a = p.parse_args()
 
 W, RW = a.work, "/var/tmp/pi9696-work"

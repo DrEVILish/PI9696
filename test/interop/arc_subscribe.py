@@ -2,8 +2,8 @@
 """Subscribe RX 1..N of a device to "TX k"@<tx device> with raw ARC requests.
 
 netaudio's `subscription add` first reads the receiver's current
-subscriptions and aborts when that read fails - which it does for PI9696 above
-32 channels (REPORT, sweep). This sends the same add_subscriptions packets
+subscriptions and aborts when that read fails - which it does for a stock
+inferno receiver above 16 channels (INFERNO-UPSTREAM.md U13). This sends the same add_subscriptions packets
 (built with netaudio's own encoder) straight to the receiver's ARC port, in
 batches of 16, and checks each reply. Confirm the result from the audio
 (meters), not from a readback.
