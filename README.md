@@ -23,7 +23,7 @@ go build -o pi9696 . && sudo ./pi9696
 | Target | Raspberry Pi 5 deployment (`/dev/ptp0` hardware timestamping); must also run error-free on Pi 4 (software-timestamping fallback) |
 | Input | AES67 via Inferno (Ethernet only; no analog/USB audio) |
 | Rates | 44.1 / 48 / 96 / 192 kHz |
-| Channels | 1–128 (Pi 5 throughput at top end) |
+| Channels | 1–128. Measured on a Pi 4 at 48 kHz: 1–128 ch bit-exact, 58% CPU at 128 ch (REPORT.md round 3). Above 16 ch needs the inferno U13 patch (Known Limitations #11) |
 | Format | WAV PCM 24-bit on disk (32-bit internal) |
 | File naming | `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` in `/rec/YYYY-MM-DD/` |
 | Display | SSD1322 256×64 OLED (SPI), FiraCode TTF |
@@ -292,6 +292,7 @@ Design debt worth flagging here:
 8. **Sim config path** — `PI9696_SIM=1` writes to `/tmp/pi9696-config.json`; real Pi writes to `/etc/pi9696/config.json`. Resolved once in `init()`: set `PI9696_CONFIG` before startup to override (tests reassign `ConfigPath` directly).
 9. **FIFO buffer needs `CAP_SYS_RESOURCE`** — the 4 MB raw FIFO needs the capability to grow; a `CapabilityBoundingSet` on the unit silently costs it, and the recorder keeps working at the 64 KB default. See DEPLOYMENT.md.
 10. **Stuck takes are always stoppable** — `stopRecording`/`stopMonitor` escalate from SIGTERM to SIGKILL after 10 s (`ffmpegStopGrace`): an ffmpeg blocked reading an empty FIFO never acts on SIGTERM, which used to wedge the transport. The grace is long enough for ffmpeg to finalize a partial WAV on slow storage.
+11. **Above 16 channels needs patched inferno** — stock inferno pages its receive-channel list 32 at a time and pads short pages, so netaudio cannot read or subscribe PI9696 beyond 16 channels (INFERNO-UPSTREAM.md U13). With `inferno-patches/0001-…` applied it routes and records 1–128 ch (verified on the unit). Until that lands in the inferno fork, run the receiver from a patched build (`PI9696_INFERNO_BIN`).
 
 ---
 
