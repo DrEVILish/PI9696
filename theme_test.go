@@ -168,13 +168,8 @@ func TestThemePostSwapsStylesheetOutOfBand(t *testing.T) {
 	mux := newRemoteMux()
 	cookie := sessionCookie(t, mux)
 
-	// Resolve LCARS's picker index from the manifest (order is upstream's).
-	idx := -1
-	for i, th := range availableThemes() {
-		if th.Slug == "lcars" {
-			idx = i
-		}
-	}
+	// Resolve LCARS's picker index (manifest order, variants beneath their theme).
+	idx := themeChoiceIndex("lcars", "")
 	if idx < 0 {
 		t.Fatal("lcars missing from the manifest")
 	}
@@ -381,5 +376,141 @@ func TestDualClassMarkupPresent(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lost dual-class hook %q", want)
 		}
+	}
+}
+
+// Palette variants (CONTRACT.md): offered beneath their theme, rendered as
+// <html data-variant>, persisted beside the theme and only ever one the
+// theme lists.
+func postTheme(t *testing.T, mux http.Handler, cookie *http.Cookie, idx int) string {
+	t.Helper()
+	req := httptest.NewRequest("POST", "/api/settings/theme", strings.NewReader("idx="+strconv.Itoa(idx)))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST theme idx=%d: status %d", idx, rr.Code)
+	}
+	return rr.Body.String()
+}
+
+func TestThemePickerOffersVariantsBeneathTheirTheme(t *testing.T) {
+	defer func() { themeSlug, themeVariant = defaultThemeSlug, "" }()
+	themeSlug, themeVariant = defaultThemeSlug, ""
+	var buf strings.Builder
+	themeFragmentTmpl.Execute(&buf, themePicker())
+	html := buf.String()
+	// LCARS has variants: an optgroup holding its own palette, then each variant.
+	group := regexp.MustCompile(`(?s)<optgroup label="LCARS">(.*?)</optgroup>`).FindStringSubmatch(html)
+	if group == nil {
+		t.Fatalf("no LCARS optgroup in picker:\n%s", html)
+	}
+	labels := regexp.MustCompile(`>([^<]+)</option>`).FindAllStringSubmatch(group[1], -1)
+	got := []string{}
+	for _, l := range labels {
+		got = append(got, l[1])
+	}
+	if strings.Join(got, "|") != "LCARS|Voyager / DS9|Picard (25th century)" {
+		t.Errorf("LCARS group options = %v", got)
+	}
+	// A theme without variants stays a plain option, and every choice is listed once.
+	if strings.Contains(html, `<optgroup label="Matrix">`) {
+		t.Error("a theme without variants must not get an optgroup")
+	}
+	if n := strings.Count(html, "<option "); n != len(themeChoices()) {
+		t.Errorf("%d options for %d choices", n, len(themeChoices()))
+	}
+	// The selected option is the active (theme, variant).
+	themeSlug, themeVariant = "lcars", "picard"
+	buf.Reset()
+	themeFragmentTmpl.Execute(&buf, themePicker())
+	want := `<option value="` + strconv.Itoa(themeChoiceIndex("lcars", "picard")) + `" selected>Picard (25th century)</option>`
+	if !strings.Contains(buf.String(), want) {
+		t.Errorf("picker should select the active variant, want %s", want)
+	}
+}
+
+func TestSelectingVariantRendersAndSwapsDataVariant(t *testing.T) {
+	defer func() { themeSlug, themeVariant = defaultThemeSlug, "" }()
+	themeSlug, themeVariant = defaultThemeSlug, ""
+	mux := newRemoteMux()
+	cookie := sessionCookie(t, mux)
+
+	// Theme and variant in one choice: new bundle plus data-variant.
+	body := postTheme(t, mux, cookie, themeChoiceIndex("lcars", "voyager"))
+	if themeSlug != "lcars" || themeVariant != "voyager" {
+		t.Fatalf("state = %q/%q, want lcars/voyager", themeSlug, themeVariant)
+	}
+	if !strings.Contains(body, `href="/static/themes/lcars.css?v=`) ||
+		!strings.Contains(body, `document.documentElement.setAttribute("data-variant","voyager")`) {
+		t.Errorf("expected a bundle swap carrying data-variant, got:\n%s", body)
+	}
+	// Same theme, other variant: no stylesheet swap, only the attribute.
+	body = postTheme(t, mux, cookie, themeChoiceIndex("lcars", "picard"))
+	if strings.Contains(body, `id="themecss"`) {
+		t.Error("switching variant within a theme must not relink the bundle")
+	}
+	if !strings.Contains(body, `document.documentElement.setAttribute("data-variant","picard")`) {
+		t.Errorf("expected a data-variant update, got:\n%s", body)
+	}
+	// Back to the theme's own palette removes the attribute.
+	body = postTheme(t, mux, cookie, themeChoiceIndex("lcars", ""))
+	if !strings.Contains(body, `document.documentElement.removeAttribute("data-variant")`) || themeVariant != "" {
+		t.Errorf("own palette should remove data-variant (variant=%q):\n%s", themeVariant, body)
+	}
+	// Another theme drops the variant, also on the page.
+	postTheme(t, mux, cookie, themeChoiceIndex("lcars", "voyager"))
+	body = postTheme(t, mux, cookie, themeChoiceIndex("matrix", ""))
+	if themeVariant != "" || !strings.Contains(body, `removeAttribute("data-variant")`) {
+		t.Errorf("a theme change must clear the variant (variant=%q)", themeVariant)
+	}
+
+	// The dashboard renders the persisted variant on <html>.
+	themeSlug, themeVariant = "lcars", "voyager"
+	req := httptest.NewRequest("GET", "/", nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	if !strings.Contains(rr.Body.String(), `<html data-theme="lcars" data-variant="voyager">`) {
+		t.Error(`dashboard should open with <html data-theme="lcars" data-variant="voyager">`)
+	}
+}
+
+func TestVariantMustBelongToItsTheme(t *testing.T) {
+	defer func() { themeSlug, themeVariant = defaultThemeSlug, "" }()
+	// A stale variant (theme changed elsewhere, or dropped upstream) is ignored.
+	themeSlug, themeVariant = "matrix", "voyager"
+	if v := currentThemeVariant(); v != "" {
+		t.Errorf("currentThemeVariant() = %q for a variant matrix doesn't list", v)
+	}
+	if got := displayHTMLTag("matrix", currentThemeVariant()); strings.Contains(string(got), "data-variant") {
+		t.Errorf("tag %s should carry no data-variant", got)
+	}
+	if themeHasVariant("lcars", "") || !themeHasVariant("lcars", "picard") || themeHasVariant("nope", "picard") {
+		t.Error("themeHasVariant mismatch")
+	}
+}
+
+func TestPreviewVariantWithoutPersisting(t *testing.T) {
+	defer func() { themeSlug, themeVariant = defaultThemeSlug, "" }()
+	themeSlug, themeVariant = defaultThemeSlug, ""
+	mux := newRemoteMux()
+	cookie := sessionCookie(t, mux)
+	get := func(target string) string {
+		req := httptest.NewRequest("GET", target, nil)
+		req.AddCookie(cookie)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		return rr.Body.String()
+	}
+	if !strings.Contains(get("/?preview=winxp-luna&variant=olive"), `<html data-theme="winxp-luna" data-variant="olive">`) {
+		t.Error("preview should render the requested variant")
+	}
+	if !strings.Contains(get("/?preview=winxp-luna&variant=voyager"), `<html data-theme="winxp-luna">`) {
+		t.Error("a variant of another theme must not be previewed")
+	}
+	if themeSlug != defaultThemeSlug || themeVariant != "" {
+		t.Errorf("preview must not persist: %q/%q", themeSlug, themeVariant)
 	}
 }
