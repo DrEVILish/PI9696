@@ -18,7 +18,7 @@ and the change wanted. Three of the fixes are prototyped in
 | U4 | inferno settings | Encoding hard-coded to 24-bit | no PCM32 (undithered) option | change wanted |
 | U5 | ALSA plugin | `plugin_stop` blocking-sends under its own mutex | `snd_pcm_drop` can hang the app forever | change wanted (worked around) |
 | U6 | ALSA plugin | Ring not cleared on underrun; replayed while nothing writes | stale-audio loop after playback (worked around) | change wanted |
-| U7 | ALSA plugin | Buffer capped at 524,288 bytes regardless of channel count | 21 ms max buffer at 128 ch | change wanted |
+| U7 | ALSA plugin | ~~Buffer capped at 524,288 bytes~~ (wrong: the cap is 65,536 frames at any channel count) | none | **withdrawn** |
 | U8 | inferno (multi-instance) | Settings probes always go to port 8700 | the TX instance on ALT_PORT can never answer probes | design note |
 | U9 | statime | No PTPv1 master ("not implemented yet") | two inferno hosts with no hardware leader must use PTPv2 | upstream limitation |
 | U10 | inferno2pipe | Logs at debug by default; one "Lost" line per channel | noisy stderr at 128 ch (counted in-app since `b08d6da`) | change wanted |
@@ -191,13 +191,17 @@ subscriber after playback ended. **Change wanted:** on an underrun, or when the
 read position passes the write position, transmit zeros (and clear the ring)
 rather than stale samples.
 
-## U7 — Plugin buffer cap is in bytes, not frames
+## U7 — withdrawn: there is no per-byte buffer cap
 
-`HW_BUFFER_BYTES` tops out at 524,288 bytes whatever the channel count: 2048
-frames at 64 ch, 1024 frames (21 ms) at 128 ch/48 kHz. Writers at high
-channel counts get a buffer smaller than inferno's own 10 ms latency budget
-plus scheduling jitter. **Change wanted:** scale the cap with channels (or
-express it in frames/time).
+The original entry said `HW_BUFFER_BYTES` tops out at 524,288 bytes whatever
+the channel count (1024 frames, 21 ms, at 128 ch). That is wrong. The plugin
+offers power-of-two buffers of 1024 to **65,536 frames, at any channel
+count** (`alsa_pcm_inferno/src/lib.rs`, `buffer_sizes` scales the byte list
+by `num_channels`); 524,288 bytes is the 65,536-frame maximum at 2 channels,
+misread from a 2-channel debug line. Measured with `aplay -v` on the dev
+server: `--buffer-time=2000000` gives `buffer_size 65536` at both 2 and 128
+channels (1.37 s at 48 kHz). Because sizes are powers of two, a request is
+rounded down: 120 ms gives 4096 frames (85 ms).
 
 ## U8 — Settings/probes are per IP, but instances are per port
 
