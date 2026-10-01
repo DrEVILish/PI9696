@@ -186,6 +186,7 @@ func loadPersistedConfig() {
 	if themeHasVariant(themeSlug, c.ThemeVariant) {
 		themeVariant = c.ThemeVariant
 	}
+	themeTints = validThemeTints(c.ThemeTints)
 	if c.DisplayMotion == "full" || c.DisplayMotion == "reduced" {
 		displayMotion = c.DisplayMotion
 	}
@@ -236,6 +237,7 @@ func persistConfig() {
 		TransportMode:     transportMode,
 		Theme:             themeSlug,
 		ThemeVariant:      themeVariant,
+		ThemeTints:        copyThemeTints(themeTints),
 		DisplayMotion:     displayMotion,
 		DisplayContrast:   displayContrast,
 		DensityIdx:        displayDensityIdx,
@@ -343,6 +345,7 @@ func exportConfigTo(dir string) error {
 		TransportMode:     transportMode,
 		Theme:             themeSlug,
 		ThemeVariant:      themeVariant,
+		ThemeTints:        copyThemeTints(themeTints),
 		DisplayMotion:     displayMotion,
 		DisplayContrast:   displayContrast,
 		DensityIdx:        displayDensityIdx,
@@ -427,6 +430,7 @@ func importConfigFrom(dir string) error {
 	if themeHasVariant(themeSlug, c.ThemeVariant) {
 		themeVariant = c.ThemeVariant
 	}
+	themeTints = validThemeTints(c.ThemeTints)
 	if c.DisplayMotion == "full" || c.DisplayMotion == "reduced" {
 		displayMotion = c.DisplayMotion
 	}
@@ -1048,6 +1052,10 @@ type PersistedConfig struct {
 	// ThemeVariant is the chosen palette variant (sub-theme) of Theme, ""
 	// for the theme's own palette. Dropped when Theme does not list it.
 	ThemeVariant string `json:"themeVariant,omitempty"`
+	// ThemeTints holds the user-chosen tint colour (#rrggbb) per theme
+	// slug, for themes whose manifest declares a tint. Entries for themes
+	// without one, or with a malformed colour, are dropped on load.
+	ThemeTints map[string]string `json:"themeTints,omitempty"`
 	// Library display options (motion/contrast/density). Absent in old
 	// configs decodes to the defaults (full / standard / Normal).
 	DisplayMotion   string `json:"displayMotion,omitempty"`

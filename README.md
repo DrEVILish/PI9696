@@ -142,7 +142,10 @@ Playback path:
   generic fallback) and the app-shell hooks. Density/Motion/Contrast display
   options persist device-wide beside the theme choice. Palette variants (sub-themes, `themes.json` `variants`) sit beneath their theme in the picker
   (an `<optgroup>`: the theme's own palette, then each variant), render as `<html data-variant>`, persist beside the theme and are dropped when the theme
-  does not list them; `?preview=<slug>&variant=<id>` previews one. The app reads the library's tokens directly and declares none of them itself (see `TestDefaultThemeIsFTL`).
+  does not list them; `?preview=<slug>&variant=<id>` previews one. A theme that declares a tint (`themes.json` `tint`, today win7-aero's Window Color)
+  gets a colour control under the theme choice (hidden for every other theme); the colour renders as an inline token on `<html>` (sharing the style
+  attribute with `--density`), is stored per theme (`themeTints`, `#rrggbb` only), and is cleared by choosing one of the theme's presets (variants);
+  `Default` drops it, `&tint=%23rrggbb` previews one. The app reads the library's tokens directly and declares none of them itself (see `TestDefaultThemeIsFTL`).
 
 ### Auth & Security
 
