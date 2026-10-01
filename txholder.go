@@ -22,6 +22,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"pi9696/alsapcm"
@@ -43,8 +44,6 @@ const (
 // in tests (the dev box has no inferno ALSA device).
 type txFrameWriter interface {
 	Write([]int32) (int, error)
-	// Stop drops queued frames and halts transmission until the next Write.
-	Stop() error
 	Close() error
 }
 
@@ -175,6 +174,7 @@ func ensureTxHolder() {
 	txHolderReady = false
 	if old != nil {
 		old.Close()
+		txWriteLocks.Delete(old)
 	}
 	mutex.Unlock()
 
@@ -215,11 +215,6 @@ func warmupTxHolder(holder txFrameWriter, channels int) {
 	if _, err := holder.Write(zeros); err != nil {
 		logWarnf("TX holder not ready (no clock overlay?): %v", err)
 		return
-	}
-	// Idle sends nothing (owner decision): the warmup proved the clock, it
-	// must not leave the transmitter running.
-	if err := holder.Stop(); err != nil {
-		logWarnf("TX holder stop after warmup: %v", err)
 	}
 	mutex.Lock()
 	if txHolder == holder {
@@ -264,6 +259,7 @@ func closeTxHolder() {
 	defer mutex.Unlock()
 	if txHolder != nil {
 		txHolder.Close()
+		txWriteLocks.Delete(txHolder)
 		txHolder = nil
 		txHolderDevice = ""
 		txHolderReady = false
@@ -305,32 +301,57 @@ func buildPlaybackCmd(file string, pos time.Duration) (cmd *exec.Cmd, stdout io.
 	return playbackCmdFor(file, pos), nil, false
 }
 
-// finishTxPump makes TX go silent when a take ends or is stopped, and stops
-// transmitting so an idle holder sends nothing. Without it the plugin keeps
-// re-sending its last ring (~42 ms of the take's end) for as long as the
-// holder sits idle. At EOF one buffer of silence goes first so the take's
-// final frames still leave the device. A pump retired by a seek handoff
-// leaves the device alone: the new pump owns it.
-func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int, eof bool) {
+// txWriteLocks serialises writes per TX holder: a pump retiring (seek, stop)
+// and its successor must never write the same ALSA handle concurrently. Per
+// holder, so a write wedged on one device cannot stall another.
+var txWriteLocks sync.Map // txFrameWriter -> *sync.Mutex
+
+func txWrite(holder txFrameWriter, buf []int32) (int, error) {
+	m, _ := txWriteLocks.LoadOrStore(holder, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return holder.Write(buf)
+}
+
+// txSilenceFrames covers the plugin's whole playback ring at this rate: its
+// buffer is the next power of two above LatencyUs, plus one pump chunk.
+func txSilenceFrames(rate int) int {
+	ring := 1
+	for ring < rate*alsapcm.LatencyUs/1_000_000 {
+		ring <<= 1
+	}
+	return ring + txPumpFrames
+}
+
+// finishTxPump makes TX go silent when a take ends or is stopped (owner
+// decision: silent at end/stop). The inferno plugin keeps re-sending its
+// ring for as long as nothing writes, so the ring is overwritten with
+// silence; before this it looped the take's last ~42 ms indefinitely. The
+// stream is deliberately not stopped: the plugin's stop path
+// (plugin_stop -> blocking_send under its own mutex) can block forever,
+// which hung the app (see INFERNO-UPSTREAM.md). A pump retired by a seek
+// leaves the device to its successor.
+func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int) {
+	superseded := func() bool {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return txHolder != holder || (playbackCmd != nil && playbackCmd != cmd)
+	}
+	if superseded() {
+		return
+	}
 	mutex.Lock()
 	rate := sampleRates[sampleRateIdx]
 	mutex.Unlock()
-	if eof {
-		tail := (rate*alsapcm.LatencyUs/1_000_000 + txPumpFrames - 1) / txPumpFrames
-		zeros := make([]int32, txPumpFrames*channels)
-		for i := 0; i < tail; i++ {
-			if _, err := holder.Write(zeros); err != nil {
-				break
-			}
+	zeros := make([]int32, txPumpFrames*channels)
+	for left := txSilenceFrames(rate); left > 0; left -= txPumpFrames {
+		if superseded() {
+			return
 		}
-	}
-	mutex.Lock()
-	defer mutex.Unlock()
-	if txHolder != holder || (playbackCmd != nil && playbackCmd != cmd) {
-		return
-	}
-	if err := holder.Stop(); err != nil {
-		logWarnf("TX stop after playback: %v", err)
+		if _, err := txWrite(holder, zeros); err != nil {
+			return
+		}
 	}
 }
 
@@ -353,11 +374,11 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 		paused := currentState == StatePaused
 		mutex.Unlock()
 		if !alive {
-			finishTxPump(cmd, holder, channels, false)
+			finishTxPump(cmd, holder, channels)
 			return
 		}
 		if paused {
-			if _, err := holder.Write(zeros); err != nil {
+			if _, err := txWrite(holder, zeros); err != nil {
 				break
 			}
 			continue
@@ -376,7 +397,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 					o := i * 4
 					samples[i] = int32(chunk[o]) | int32(chunk[o+1])<<8 | int32(chunk[o+2])<<16 | int32(chunk[o+3])<<24
 				}
-				if _, err := holder.Write(samples[:full*channels]); err != nil {
+				if _, err := txWrite(holder, samples[:full*channels]); err != nil {
 					failed = true
 					break
 				}
@@ -387,7 +408,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 			}
 		}
 		if rerr != nil {
-			finishTxPump(cmd, holder, channels, true)
+			finishTxPump(cmd, holder, channels)
 			return
 		}
 	}
