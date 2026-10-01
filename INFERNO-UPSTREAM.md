@@ -26,6 +26,7 @@ and the change wanted. Three of the fixes are prototyped in
 | U12 | netaudio | `device list` leaves Sample Rate blank even when the device answers | rate visible only via `device show` | investigate (netaudio) |
 | **U13** | inferno ARC | RX channel list paged 32 (controllers take 16); a short last page carries zeroed padding | **a receiver with >16 channels, or a transmitter with 33–63, 65–95 … channels, cannot be read or routed by netaudio** | **patch verified** (1–128 ch) |
 | U14 | inferno2pipe | A blocked FIFO write stalls the whole runtime | a slow reader takes down ARC (no replies) and media (kernel drops) | change wanted |
+| U15 | inferno (all servers) | Malformed control packets and adverts panic server tasks (upstream issue teodly/inferno#49) | one packet from any LAN host stops routing, flows or TX until restart | **fixed in the fork**, branch `fix/issue-49-malformed-packets` |
 
 ---
 
@@ -244,3 +245,32 @@ logs "Probed sample rates" and still prints the column blank. The likely cause
 is that the list renders before the multicast reply is folded in. This is netaudio
 (chris-ritsen/network-audio-controller), not inferno; check against a
 hardware device before reporting.
+
+## U15 — Malformed packets panic server tasks (teodly/inferno#49)
+
+**Where it is fixed:** the owner's fork, `DrEVILish/inferno`, branch
+`fix/issue-49-malformed-packets` on top of `dev` (`9767558`). Seven commits,
+each revertible on its own. As with every inferno change, nothing goes
+upstream.
+
+The upstream issue lists four handlers. An audit of every place inferno parses
+network input found more, all fixed:
+
+| Commit | Area | Reachable panics removed |
+|---|---|---|
+| `3203a4f` | `deserialize_items` (ARC rename, subscribe) | count clamped against the whole payload; slice of a payload shorter than 2 bytes |
+| `ce8583a` | flow control 0x0100 / 0x0102 (UDP 4455) | unchecked channel count, offsets and string reads; out-of-range channel accepted; `flows_tx` unwrapped on RX-only devices |
+| `d7de045` | TX thread | packet larger than the buffer (bits, fpp, channel count), fpp 0 spin, channel index out of range; multicast activation after delete |
+| `def859f` | ARC 0x3014, 0x2201/0x2202, renames | unchecked lengths and ids; descriptor offset underflow; bundle assert; a channel label over the DNS limit panicked mDNS, and again on every start once saved |
+| `789d551` | receive side (mDNS adverts, flows) | `nchan=0`, odd encodings, huge latency, multicast slot out of range, more than 32 receive flows |
+| `3baa1dd` | info multicast clock stats | short or non-ASCII clock-stats file |
+| `06993a1` | supervision | ARC, CMC and flow-control servers restart after a panic (100 ms .. 5 s backoff) |
+
+Parsing moved into pure functions with unit tests (every truncation, oversized
+counts, offset underflow, seeded random mutations). Results: 114 unit tests
+pass on the Pi and the dev server (92 on `dev`), the `loopback_trx`
+integration test passes on the dev server, and netaudio channel lists and
+bulk subscribe behave as on stock. Not changed: 0x3014 still removes only the
+first listed channel (U1), and channel lists above 16 RX channels still need
+U13; both are next. The unit still runs stock `v0.5.4`; switching it to the
+fork's `dev` plus these fixes is a separate, tested step.
