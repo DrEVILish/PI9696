@@ -7,10 +7,12 @@ Documentation=https://github.com/teodly/inferno
 #   "no clock available (timeout waiting for overlay update)"
 # or, once connected but never updated,
 #   "unable to get start timestamp for ring buffer output"
-# and the Dante TX device never carries audio. The receiver still starts, so
-# the fault looks like a broken Dante path rather than a missing clock.
+# and the inferno TX device never carries audio. The receiver still starts, so
+# the fault looks like a broken inferno path rather than a missing clock.
 #
-# This unit runs a stub exporter because this test LAN has no Dante device.
+# This unit runs a stub exporter for a LAN with no PTP leader. It publishes
+# this host's own uptime clock, so it is single-host only, and the recording
+# gate never treats it as synced: use deploy/statime.service for recording.
 # Per the Inferno README, software timestamping is the default and works with
 # any NIC, using the Statime fork:
 #
@@ -20,11 +22,12 @@ Documentation=https://github.com/teodly/inferno
 #   ExecStart=__PI9696_DIR__/statime/target/release/statime -c inferno-ptpv1.toml
 #
 # Measured here: with protocol-version = PTPv2 that does become a working
-# master, but with no Dante device on the network it never publishes the
+# master, but with no hardware device on the network it never publishes the
 # overlay, so transmit still cannot start. Replace this stub with Statime as
-# soon as a Dante device is on the LAN. The README also notes that NTP stepping
+# soon as a hardware inferno-network device is on the LAN. The README also notes that NTP stepping
 # the system clock collides with PTP.
 Before=pi9696.service
+Conflicts=statime.service
 
 [Service]
 Type=simple
