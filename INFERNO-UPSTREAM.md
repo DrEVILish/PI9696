@@ -24,7 +24,7 @@ and the change wanted. Three of the fixes are prototyped in
 | U10 | inferno2pipe | Logs at debug by default; one "Lost" line per channel | noisy stderr at 128 ch (counted in-app since `b08d6da`) | change wanted |
 | U11 | docs | `inferno2pipe/README.md` documents a CLI the v0.5.4 binary doesn't take | install confusion | already in DEPLOYMENT.md |
 | U12 | netaudio | `device list` leaves Sample Rate blank even when the device answers | rate visible only via `device show` | investigate (netaudio) |
-| **U13** | inferno ARC | Channel lists paginated **32 per page**; netaudio expects 16 | **a device with >16 channels cannot be read or subscribed by netaudio** | **patch verified** |
+| **U13** | inferno ARC | RX channel list paged 32 (controllers take 16); a short last page carries zeroed padding | **a receiver with >16 channels, or a transmitter with 33–63, 65–95 … channels, cannot be read or routed by netaudio** | **patch verified** (1–128 ch) |
 | U14 | inferno2pipe | A blocked FIFO write stalls the whole runtime | a slow reader takes down ARC (no replies) and media (kernel drops) | change wanted |
 
 ---
@@ -73,25 +73,58 @@ patched `inferno2pipe` reports `Sample Rate 96 kHz`, `Supported Sample Rates 96 
 Still open: `0x0085` (pull-up), `0x1006`, `0x100a`; netaudio's `device list`
 column (U12); and PI9696 specifically (U8).
 
-## U13 — Channel lists paginated 32 per page (devices >16 ch unusable from netaudio)
+## U13 — Channel-list paging: RX pages too large, short pages padded
 
-**Where:** `arc_server.rs`, `get_receive_channels` / `get_transmit_channels` /
-`get_transmit_channels_friendly_names`: `paginate_respond(..., channels.len().min(32), ...)`.
-That argument is the number of entries **per response page**, not a total.
+**Where:** `arc_server.rs` (`get_receive_channels`, `get_transmit_channels`,
+`get_transmit_channels_friendly_names`, each `paginate_respond(...,
+channels.len().min(32), ...)`) and `proto_arc.rs` `serialize_items`.
 
-**Found:** the channel-count sweep failed at 32, 64 and 128 channels with no
-audio fault involved. `netaudio subscription add` aborted with `could not read
-current subscriptions from PI9696.local. before making changes:
-netaudio_client_get_rx_channels_json: malformed binary response`, and
-`netaudio channel list` showed **0** RX channels for a 64-channel receiver.
-netaudio parses at most 16 entries per page (the protocol's page size), so any
-device with more than 16 channels cannot be inspected or routed.
+**Found:** in the channel-count sweep, `netaudio subscription add` to PI9696
+aborted above 16 channels (`could not read current subscriptions ...
+netaudio_client_get_rx_channels_json: malformed binary response`). A first
+reading blamed one page size for every list. That was wrong: stock 17-, 32-
+and 64-channel *transmitters* list fine. The rules below come from feeding
+inferno's captured pages, and edited copies of them, to netaudio 0.3.14's own
+page parser (`netaudio.core.binding.parse_page`), and from `netaudio channel
+list` against stock devices on the dev server:
 
-**Fix:** page size 16 (`.min(16)`). Verified on the dev server: with the patch,
-`netaudio channel list` shows all 64 RX channels and a bulk 64-channel
-subscribe from a *stock* 64-channel transmitter succeeds (`MODIFIED RX 64@ITEST-RX
-<- 64@ITEST-SRC (verified)`). Included in
-`inferno-patches/0001-arc-bulk-unsubscribe-page-size-capability-probes.patch`.
+| Stock device | netaudio result | Why |
+|---|---|---|
+| RX 1–16 | OK | one page, 1–16 entries |
+| RX 17, 24, 32, 33, 64, 128 (any count above 16) | device dropped ("device not found") | RX page holds up to 32 entries; netaudio accepts at most **16** per receive page |
+| TX 1–32, 64, 96, 128 | OK | TX pages of **32** are accepted; every page is full |
+| TX 33, 48, 65, 127 (not a multiple of 32) | device dropped | short last page is **padded** |
+
+*Padding:* `serialize_items` reserves `space_items` entry slots before
+writing any strings, so a page with fewer entries (the last page, or one
+cut by `PACKET_SIZE_SOFT_LIMIT` = 800 bytes) has zeroed slots between the
+entry table and the strings. netaudio rejects that page as malformed; the
+same page with the gap removed parses. For a short *receive* page, netaudio
+also requires the first byte (which inferno sets to the page size) to equal
+the entry count: 16/1 fails, 1/1 parses. Every single-page list already
+satisfies this, which is why devices of ≤16 RX / ≤32 TX channels never
+showed the bug. Whether the rule is netaudio being strict or inferno breaking
+the protocol cannot be settled without a hardware capture; packing the page
+satisfies both readings.
+
+**Fix** (in `inferno-patches/0001-…`): RX page size 16 and TX 32
+(`RX_CHANNELS_PAGE_SIZE`, `TX_CHANNELS_PAGE_SIZE`); a new `serialize_page`
+for the channel lists that reserves only as many slots as entries remain,
+moves the string area down over any unused slots (each entry type
+implements `PagedEntry::shift_heap_offsets`), and writes the entry count in
+both header bytes. Unit tests cover a short last page, full pages and a
+soft-limit cut. The flow lists (`query_tx_flows`, `query_rx_flows`) still use
+`serialize_items`. Their records contain nested offsets, so they would need
+the same treatment record by record, and nothing here reads them in pages yet.
+
+**Verified** on the dev server with the patched `inferno2pipe` and ALSA
+plugin: `netaudio channel list` reads every channel of RX devices at 1, 2,
+15–17, 24, 31–33, 48, 63–65, 96, 127 and 128 channels and of TX devices at
+the same counts. Stock fails at every RX count above 16 and at TX 33/48/65/127. A bulk subscribe of 24 and
+of 40 channels between two patched devices is `verified` per channel by
+netaudio, and a bulk remove of all of them (U1) is verified too. An earlier
+version of this patch (all pages 16, still padded) only worked when the count
+was a multiple of 16; that is what the round-2 sweep used.
 
 ## U14 — inferno2pipe stalls completely when its FIFO reader is slow
 

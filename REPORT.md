@@ -8,7 +8,7 @@
 | Request | Outcome |
 |---|---|
 | No recording until the clock is synced to the network | **Done** (`a341360`). A take starts only while statime reports a PTP slave within 1 ms of its master on 5 consecutive polls; otherwise OLED `NO CLOCK SYNC`, a web notice and a log line. Verified both ways on the unit (Status panel `Synced (PTP slave, 2µs)` vs `Not synced (statime unreachable)`) |
-| Channel-count test 1 → n at 48 kHz, 60 s takes, bit-exact/drops, system metrics | **Done, 1–128 ch.** **Every count records full length with no drops or slips.** Bit-exact 100% at 1–24 and 48 ch; ≥99.9956% at 32/64/96/128 (short mid-take bursts, see below). It took three fixes to get past 16 ch (U13, `65b26cd`, `arc_subscribe.py`) |
+| Channel-count test 1 → n at 48 kHz, 60 s takes, bit-exact/drops, system metrics | **Done, 1–128 ch.** **Every count records full length with no drops or slips.** Bit-exact 100% at 1–24 and 48 ch; ≥99.9956% at 32/64/96/128 (short mid-take bursts, see below). It took three fixes to get past 16 ch (U13, `65b26cd`, `arc_subscribe.py`). U13 was misdiagnosed at first; see the correction below |
 | F6 (take-start jump) | **Fixed** (`7ca4d12`); confirmed by the sweep: no take-start errors at any channel count |
 | F8 (sample rate in netaudio) | **Investigated.** inferno ignores netaudio's rate/encoding probes (U2); patch verified (`device show` → 96 kHz). PI9696 additionally needs RX+TX as one instance (U8) |
 | F9 (bulk unsubscribe) | **Investigated: inferno's bug, not netaudio's** (U1). netaudio sends a correct list; inferno reads only the first id. Patch verified |
@@ -24,7 +24,7 @@
 Source: `ITEST-SRC` on the second host (inferno ALSA plugin, built without TX
 dither so the reference is bit-exact), N channels of deterministic 24-bit
 signal. Unit: the `HEAD` build (SIM mode for the WebUI token), statime PTPv2 slave
-locked to the second host, `inferno2pipe` patched for U1/U2/U13 (scratch build via
+locked to the second host, `inferno2pipe` patched for U1/U2 and the first U13 attempt (scratch build via
 `PI9696_INFERNO_BIN`). Every sample of every channel is compared. *Control RX* is a second
 receiver on the source host recording the same source during the take.
 
@@ -52,14 +52,41 @@ Notes on reading this:
 
 | Run | 1–16 ch | 24–48 ch | 64–128 ch | What it exposed |
 |---|---|---|---|---|
-| 1, stock inferno | 100% | 32 ch: only 16 subscribed | nothing subscribed | **U13**: inferno pages channel lists 32 per page, netaudio parses 16, so a >16-ch device cannot be read or routed (`malformed binary response`) |
-| 2, `inferno2pipe` patched (U13) | 100% | 32 ch 100% | 64+ still fails | netaudio's pre-read of *PI9696* (shared IP with `PI9696-TX`, U8) still fails; raw ARC answers instantly, so `arc_subscribe.py` was added |
+| 1, stock inferno | 100% | 32 ch: only 16 subscribed | nothing subscribed | **U13**: netaudio cannot read PI9696's receive-channel list above 16 ch (`malformed binary response`). First diagnosed as one page size for every list; corrected below |
+| 2, `inferno2pipe` with the first U13 patch (all pages 16) | 100% | 32 ch 100% | 64+ still fails | netaudio's pre-read of PI9696 still failed. This was blamed on the shared IP (U8), but it was the padding half of U13 that the first patch missed (see the correction). Raw ARC answers instantly, so `arc_subscribe.py` was added |
 | 3, + raw-ARC subscribe | 99.9–100% | 99.5–99.9%, errors at take start | collapse (64: 15%; 96/128: nothing) | **ffmpeg `astats` metering can't keep up** (64 ch: recorder 0.76× realtime, monitor 0.43×; >64 ch monitor fails to start: resampler refuses >64 ch). FIFO fills, `inferno2pipe` blocks and its whole runtime stalls (**U14**): ARC silent, ~13k `RcvbufErrors`/s |
 | 4, + lean metering (`65b26cd`) | 100% | 100% / 99.995% | 99.996–99.99991% | table above. Recorder 1.6× realtime at 128 ch (was 0.22×) |
 
-**Still blocking >16 channels on a stock unit:** U13 needs to land in the
-inferno fork (the patch is verified), and netaudio still cannot pre-read PI9696
-above 32 channels while RX and TX are separate devices on one IP (U8).
+**Still blocking >16 channels on a stock unit:** only U13. With the corrected
+patch, netaudio subscribes a receiver of any count from 1 to 128 directly, so
+`arc_subscribe.py` is no longer needed (see the correction).
+
+### Correction: U13 (2026-10-01, after owner review)
+
+The owner questioned the claim that *any* inferno device with more than 16
+channels is unusable from netaudio. They were right. Re-measured on the
+dev server with stock devices, plus netaudio's own page parser fed with
+inferno's captured pages (INFERNO-UPSTREAM.md U13 has the rules):
+
+- **Transmitters were never limited to 16.** Stock TX devices of 17, 32, 64,
+  96 and 128 channels list and route fine: netaudio accepts TX pages of 32
+  entries.
+- **Receivers are limited to 16** because inferno pages the RX list 32 at a
+  time and netaudio accepts at most 16 per receive page.
+- **A short last page is padded.** Inferno reserves a full page of entry
+  slots before writing strings, so a partial page carries zeroed slots, and
+  netaudio rejects it. This breaks stock TX devices of 33, 65, … channels,
+  and broke the first U13 patch at any RX count that was not a multiple of 16.
+  That is the round-2 "64+ still fails", not U8.
+
+Corrected patch (`inferno-patches/0001-…`): RX pages 16, TX pages 32, packed
+pages. Verified with netaudio: every channel read back at RX and TX counts
+1–128 (all page edges); bulk subscribe + verify + bulk remove at 24 and 40
+channels on the dev server; and **on the unit**, a 64- and a 40-channel
+patched receiver sharing 192.168.10.69 with PI9696 and PI9696-TX subscribed and
+removed through netaudio with every channel verified. The same test with
+stock inferno fails with the sweep's exact error. U8 still blocks
+netaudio's settings probes (sample rate, Q4), not routing.
 
 ### Round 2 findings
 
@@ -81,7 +108,7 @@ above 32 channels while RX and TX are separate devices on one IP (U8).
 
 ### Next steps (round 2)
 
-1. Land **U13 + U1 + U2** in the inferno fork (`inferno-patches/0001-…`); without U13 no stock unit can be routed above 16 channels.
+1. Land **U13 + U1 + U2** in the inferno fork (`inferno-patches/0001-…`); without U13 no stock unit can be routed above 16 RX channels.
 2. **F2:** a lock-free TX pump and a shorter `render()` critical section (still the cause of transmitter restarts).
 3. **U8:** RX and TX as one inferno instance (`alsapcm.Open` both directions), which also unblocks netaudio's view of PI9696 and Q4.
 4. **U5** in the plugin, so TX can truly stop after playback (Q1).

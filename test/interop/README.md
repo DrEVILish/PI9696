@@ -46,11 +46,15 @@ anything on the test unit: the analysis runs on the second host.
 
 ## Above 16 channels
 
-Stock inferno pages its channel lists 32 per page and netaudio parses 16, so
-a stock receiver with more than 16 channels cannot be read or subscribed by
-netaudio (INFERNO-UPSTREAM.md U13). For the sweep, the unit runs a patched
-`inferno2pipe` from a scratch build (`PI9696_INFERNO_BIN=...`, the installed
-inferno is untouched), and PI9696 is subscribed with `arc_subscribe.py`, because
-netaudio's pre-read of its subscriptions still fails above 32 channels (the
-shared IP with `PI9696-TX`, U8). Wait up to ~60 s for every flow to come up
-before recording: the subscriber resolves them one at a time.
+Stock inferno pages its receive-channel list 32 entries at a time, where
+netaudio accepts 16, and pads every short last page, which netaudio rejects.
+So netaudio cannot read or subscribe a stock receiver with more than 16
+channels, nor read a stock transmitter whose count is not a multiple of 32
+(33, 65, …). Transmitters of 1–32, 64, 96 and 128 channels work
+(INFERNO-UPSTREAM.md U13). For more than 16 channels, run the unit's receiver
+from a scratch build with `inferno-patches/0001-…` applied
+(`PI9696_INFERNO_BIN=...`, the installed inferno is untouched). With it,
+`netaudio subscription add` works directly at any count. The round-2 sweep
+predates the corrected patch and subscribed with `arc_subscribe.py`, which is
+kept for receivers that netaudio cannot read. Wait up to ~60 s for every flow
+to come up before recording: the subscriber resolves them one at a time.
