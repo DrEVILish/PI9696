@@ -73,6 +73,7 @@ Playback path:
 - Single Go process owns everything behind one app mutex
 - Inferno lifecycle is `infernoWorker`-owned (the only goroutine that mutates inferno state)
 - Recording starts only from idle, never over an active take
+- **Recording requires a network-synced clock.** A take only starts while statime reports this unit as a PTP *slave* within 1 ms of its master on 5 consecutive 1 s polls of its observation socket (`clocksync.go`). The single-host stub never qualifies, and neither does a PTP master. Demo mode (synthetic source) is exempt
 - Playback and recording are mutually exclusive in both directions
 - Inferno is bidirectional (sends + receives); the app currently drives receive (recording) while transmit/playback-out moves to the app's ALSA client (`alsapcm/`, one process holding capture + playback so a single instance does both)
 - TX is real scope, not a stretch goal: the unit has two modes, RECORDING and PLAYBACK, and its TX and RX channels stay visible on the inferno/AES67 network in both modes. TX and RX channel counts are always equal (one `channelCount` drives both). The clock source is a hard TX gate — Inferno aborts transmit without the usrvclock overlay — so statime (PTPv1, locked to the network's PTP leader) replaces the stub the moment a hardware inferno-network device is on the LAN
@@ -85,7 +86,9 @@ Playback path:
 ### Recording
 
 - Manual start/stop
+- Start refused unless the clock is synced to the network (OLED flashes `NO CLOCK SYNC / cannot record`, web notice, log line); losing sync mid-take is logged and the take continues
 - Start refused when <30 min space remains at the current rate
+- Take starts contiguous: the input monitor is killed and reaped before the recorder opens the FIFO
 - Take auto-stops when <1 min space remains (graceful finalize, LOW DISK warning)
 - Tag presets (Show/Rehearsal/Soundcheck/Interview/Backup/None) + filename prefix
 - Real-time elapsed/remaining, storage, Peak/RMS on OLED
@@ -93,6 +96,7 @@ Playback path:
 ### Playback
 
 - Target: plays out through Inferno ALSA (pause writes silence to inferno TX so the playhead holds without gaps or SIGSTOP choreography). The app holds the `inferno` device persistently (`txholder.go`: TX-only, own NAME/PROCESS_ID/ALT_PORT), pumping ffmpeg-decoded s32le through it; local ALSA (`default`) remains the fallback where no inferno device exists (dev/sim). Sample rate/channel mismatches are refused with a log + UI error; a present-but-clockless holder refuses inferno playback with a notice instead of misrouting locally
+- TX behaviour (owner decision): **nothing is sent while the unit is not playing**, and **TX goes silent at pause, end and stop**. A fresh holder sends no media. Pause writes silence. End and stop overwrite the plugin's whole ring with silence, because the plugin keeps re-sending its ring when nothing writes. Current limit: after the first playback TX keeps streaming that silence rather than nothing, because stopping the stream goes through the inferno plugin's deadlock-prone stop path (INFERNO-UPSTREAM.md U5); inferno also dithers silence to ±1 LSB (U3)
 - Encoder: click = play/pause, rotate while paused = 5 s scrub, hold = exit
 - Progress bar + elapsed/total with [PAUSED] marker
 
@@ -129,6 +133,8 @@ Playback path:
 - Settings modal (all persisted settings)
 - Per-channel VU meters over 100 ms WebSocket push
 - INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
+- Status panel shows the clock state (`Synced (PTP slave, 8µs)` / `Locking` / `Not synced (…)`) and the TX state in inferno terms (`Inferno TX ready (PI9696-TX)`)
+- Sample rate must be visible to an inferno controller (netaudio) for both TX and RX (owner requirement). Not yet met: needs inferno to answer the rate probe (INFERNO-UPSTREAM.md U2, patch verified) and RX+TX as one inferno instance (U8)
 - Theming: ftl-themes bundles (32 themes, `third_party/ftl-themes` submodule @ `03ebb1e`, v4.0.0 — always track latest upstream; `html[data-theme]` slugs unchanged) —
   one linked stylesheet + `html[data-theme]`; the `third_party/ftl-themes/CONTRACT.md`
   is the integration spec. Markup uses the library's own components (`.btn`, `.table`, `.modal`, `.meter`, `.scroll` — v4 dropped the `ftl-` prefix everywhere),
@@ -264,7 +270,8 @@ go test ./...        # run all tests
 |---------|-------|
 | Display blank | SPI enabled? Wiring per WIRING.md? Running as root? |
 | `[INF]` never lights | Ethernet up? `ip addr show eth0`? Inferno binary built? |
-| Recording fails | Low disk (<30 min)? Already recording? OLED flashes warning |
+| Recording fails | `NO CLOCK SYNC`? statime running and locked (`systemctl status statime`, Status panel Clock row)? Low disk (<30 min)? Already recording? OLED flashes the reason |
+| Gaps in a take | `journalctl -u pi9696 \| grep inferno2pipe` - receive-side losses are logged as `sample-loss events` |
 | WebUI unreachable | Any interface with IP? `ss -tlnp \| grep ${PI9696_REMOTE_PORT:-8080}` |
 | USB not detected | `mount -t tmpfs none /media/usb` for testing; real USB: `lsblk` |
 | Logs | `sudo journalctl -u pi9696 -f` + `/var/log/pi9696/app.log` |
@@ -275,10 +282,10 @@ go test ./...        # run all tests
 
 Design debt worth flagging here:
 
-1. **Playback via Inferno/AoIP** — done for TX (persistent holder + pump, `txholder.go`), local ALSA kept as fallback. Interim: two inferno devices on the wire (`<name>` RX-only via inferno2pipe, `<name>-TX` TX-only via the holder) until the RX side moves in-process and unifies them. Measured against a second host (REPORT.md): audible and visible in both modes, but the pump stalls on the app mutex while `render()` holds it, so the shipped build restarts the transmitter many times a minute (F2); TX is silent while idle and loses the start of each playback (F3); inferno dithers every 24-bit transmit (F4). High channel counts still unmeasured.
+1. **Playback via Inferno/AoIP** — done for TX (persistent holder + pump, `txholder.go`), local ALSA kept as fallback. Interim: two inferno devices on the wire (`<name>` RX-only via inferno2pipe, `<name>-TX` TX-only via the holder) until the RX side moves in-process and unifies them. Measured against a second host (REPORT.md): audible and visible in both modes, but the pump stalls on the app mutex while `render()` holds it, so the transmitter restarts many times a minute (F2, open); receivers time out while TX is idle, so the first seconds of a playback can be lost at a subscriber (F3, a consequence of the no-TX-while-idle decision); inferno dithers every 24-bit transmit (F4/U3). Stale-audio replay after a take is fixed.
 2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
 3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
-4. **FIFO handoff window** — monitor→recording transition has a brief sub-100 ms window where the outgoing monitor's read can still race the new recording reader. Accepted as a startup blip; documented in code comments. Measured once at 50 ms of audio missing 50 ms into a take (REPORT.md F6) - audible, so worth closing.
+4. **FIFO handoff window** — fixed (`7ca4d12`): the monitor's read used to race the new recorder for the first frames (measured: 50 ms missing 50 ms into a take, REPORT.md F6). The recorder now opens the FIFO only after the monitor (SIGKILLed - a graceful exit takes ~300 ms, longer than the FIFO holds at 128 ch) has exited.
 5. **Config persistence** — atomic rename, but temp file not fsync'd before rename (power loss can truncate config).
 6. **Meter race on monitor→record** — fixed via the `meterGen` generation counter (stale reapers can't touch the new session); kept here as history of the hazard.
 7. **No analog/USB audio I/O** — Ethernet only (product decision).
@@ -294,13 +301,19 @@ Design debt worth flagging here:
 main.go            app: state machine, menus, recording/playback, Inferno lifecycle
 remote.go          web server: auth, dashboard, settings, downloads, meter push
 hyperdeck.go       Blackmagic HyperDeck control server (TCP 9993)
+txholder.go        persistent inferno TX holder + playback pump
+clocksync.go       statime observation poller; the recording clock gate
+inferno_log.go     counts inferno2pipe receive faults into the app log
 logging.go         log/slog (stderr + app.log, default Error-only)
 hardware/          SSD1322 display, encoder, buttons, lamps, network detection
 alsapcm/           cgo ALSA wrapper so the app can be the single Inferno client (RX + TX)
 cmd/simcheck/      renders OLED screens to PNG via PI9696_SIM
-deploy/            systemd units (pi9696, pi9696-clock)
+deploy/            systemd units (pi9696, pi9696-clock stub, statime) + statime.toml
+test/interop/      two-host accuracy harness: signal, compare, TX run, channel sweep
+inferno-patches/   verified prototype patches for the inferno fork (INFERNO-UPSTREAM.md)
 inferno-loopback.sh  proves inferno TX→RX on one host (tone in, tone out)
 DEPLOYMENT.md      install record (this file defers to it); WIRING.md is hardware
+REPORT.md          interop test results; INFERNO-UPSTREAM.md upstream issues
 inferno/           Inferno AoIP server (Rust) — install-time checkout, NOT tracked
 fonts/ rec/ web assets  install-time/runtime paths, NOT tracked (see .gitignore)
 ```
