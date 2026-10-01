@@ -45,11 +45,27 @@ func TestMain(m *testing.M) {
 	}
 	RecordPath = recDir
 	clockSyncRequired = false
+	// infernoWorker (started below) reconciles the TX holder after every
+	// Inferno (re)start. With the production opener, any host with the inferno
+	// ALSA plugin installed (the Pi, a provisioned dev box) gets a real,
+	// ready holder, every later playback test silently takes the inferno path
+	// instead of local ALSA, and the failures cascade through leaked transport
+	// state (REPORT F12). Tests that want a holder install their own fake.
+	openTxDevice = func(string, int, int) (txFrameWriter, error) {
+		return nil, errors.New("test suite: no inferno ALSA device")
+	}
 	RawPath = filepath.Join(recDir, "raw")
 	go infernoWorker()
 	code := m.Run()
 	os.RemoveAll(recDir)
 	os.Exit(code)
+}
+
+func TestSuiteNeverOpensRealTxDevice(t *testing.T) {
+	if h, err := openTxDevice("inferno", 48000, 2); err == nil {
+		h.Close()
+		t.Fatal("the suite's default TX opener reached a real device - TestMain must fake it")
+	}
 }
 
 func TestSuiteDoesNotTouchRealRecordings(t *testing.T) {
