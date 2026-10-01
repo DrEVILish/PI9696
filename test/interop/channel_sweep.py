@@ -26,6 +26,8 @@ p.add_argument("--keep-wav", action="store_true")
 p.add_argument("--control-bin", default="", help="inferno2pipe on the second host for a control capture of the same source (above 16 ch it needs the U13 paging patch)")
 p.add_argument("--src-env", action="append", default=[], metavar="KEY=VALUE",
                help="extra environment for the source (repeatable), e.g. HOME=<dir> whose .asoundrc points pcm_type.inferno at a patched plugin")
+p.add_argument("--src-aplay-args", default="",
+               help="extra aplay options for the source, e.g. --buffer-time=2000000 on a source host that stalls (a Pi under memory pressure)")
 p.add_argument("--subscribe", choices=("netaudio", "arc"), default="netaudio",
                help="netaudio subscription add (needs the U13 patch on the unit above 16 ch) or raw ARC via arc_subscribe.py")
 a = p.parse_args()
@@ -171,7 +173,7 @@ for n in [int(x) for x in a.channels.split(",")]:
         src_env = "".join(f"-E {e} " for e in a.src_env)
         ssh(f"systemctl stop itest-src 2>/dev/null; systemctl reset-failed itest-src 2>/dev/null; systemd-run -q --unit=itest-src -p WorkingDirectory={RW} "
             f"{src_env}-E INFERNO_NAME=ITEST-SRC -E INFERNO_TX_CHANNELS={n} -E INFERNO_RX_CHANNELS=0 -E INFERNO_SAMPLE_RATE=48000 -E RUST_LOG=warn "
-            f"aplay -D inferno -f S32_LE -r 48000 -c {n} {srcf}")
+            f"aplay {a.src_aplay_args} -D inferno -f S32_LE -r 48000 -c {n} {srcf}")
         t_src = time.time()
         log(f"[{n}ch] set unit channels")
         http("/api/settings/channels", {"count": n})
