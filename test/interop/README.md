@@ -12,6 +12,8 @@ anything on the test unit: the analysis runs on the second host.
 | `tx_test.sh` | pi9696 | One playback-out run: fresh `ITEST-RX` capture on the second host, Play, wait for the take, count TX XRUNs/restarts |
 | `channel_sweep.py` | pi9696 | Channel-count sweep: per N, source + subscribe + 60 s take + per-second metrics (CPU per process, RAM, SD writes, UDP drops, temperature, throttling) + every-sample compare; optional control capture of the same source on the second host |
 | `arc_subscribe.py` | either | Subscribe RX 1..N with raw ARC requests (netaudio's encoder), for receivers whose subscription read-back netaudio cannot parse |
+| `channel_list_check.sh` | second host | Channel-list round trip: one RX (`inferno2pipe`) or TX (ALSA plugin) device per count from a given inferno tree, `netaudio channel list`, check every channel 1..N came back (U13) |
+| `arc_page_check.py` | second host | Feeds every RX/TX channel-list page in a pcap to netaudio's own page parser and prints which pages it accepts or rejects (U13) |
 
 ## Setup that matters
 
