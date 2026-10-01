@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
-"""Deterministic 24-bit-exact test signal for the inferno interop test.
+"""Deterministic 24-bit-exact test signal for the inferno interop tests.
 
-Output: raw s32le interleaved, 48 kHz, N channels (default 2), low 8 bits zero
-so a lossless PCM24 path must reproduce every sample exactly.
+Output: raw s32le interleaved, N channels, low 8 bits zero, so a lossless
+PCM24 path must reproduce every sample exactly.
 
-Layout, per 10 s block: 2 s sine burst (ch k: 1000*(k+1) Hz, -6 dBFS),
-then 8 s seeded white noise (-12 dBFS RMS, unique per block and channel).
+Per 10 s block and channel k: 2 s sine burst at 200 + 150*k Hz (-6 dBFS;
+stays under Nyquist up to 128 ch at 48 kHz), then 8 s white noise at
+-12 dBFS RMS seeded by (seed, k, block). Every block is unique, and a block's
+content does not depend on the file length or channel count, so captures can
+be aligned to the exact sample. Written block by block: a 128 ch / 200 s file
+(4.9 GB) never has to fit in RAM.
 """
 import argparse
 import numpy as np
@@ -18,19 +22,18 @@ p.add_argument("--channels", type=int, default=2)
 p.add_argument("--seed", type=int, default=9696)
 a = p.parse_args()
 
-rng = np.random.default_rng(a.seed)
-n = a.seconds * a.rate
-t = np.arange(n) / a.rate
-blk = 10 * a.rate
-tone = 2 * a.rate
-out = np.empty((n, a.channels), dtype=np.float64)
-for ch in range(a.channels):
-    x = rng.standard_normal(n) * 10 ** (-12 / 20)
-    s = np.sin(2 * np.pi * 1000 * (ch + 1) * t) * 10 ** (-6 / 20)
-    in_tone = (np.arange(n) % blk) < tone
-    x[in_tone] = s[in_tone]
-    out[:, ch] = x
+R, C = a.rate, a.channels
+blk, tone = 10 * R, 2 * R
 full = 2 ** 23 - 1
-q = np.clip(np.round(out * full), -full, full).astype(np.int32) << 8
-q.astype("<i4").tofile(a.out)
-print(f"wrote {a.out}: {a.seconds}s {a.rate}Hz {a.channels}ch s32le (24-bit exact), seed {a.seed}")
+with open(a.out, "wb") as f:
+    for b in range((a.seconds * R + blk - 1) // blk):
+        n = min(blk, a.seconds * R - b * blk)
+        t = (b * blk + np.arange(n)) / R
+        out = np.empty((n, C), dtype=np.int32)
+        for ch in range(C):
+            x = np.random.default_rng([a.seed, ch, b]).standard_normal(n) * 10 ** (-12 / 20)
+            m = min(tone, n)
+            x[:m] = np.sin(2 * np.pi * (200 + 150 * ch) * t[:m]) * 10 ** (-6 / 20)
+            out[:, ch] = np.clip(np.round(x * full), -full, full).astype(np.int32) << 8
+        out.astype("<i4").tofile(f)
+print(f"wrote {a.out}: {a.seconds}s {R}Hz {C}ch s32le (24-bit exact), seed {a.seed}")

@@ -1,7 +1,7 @@
 #!/bin/bash
 # One TX-path run: fresh ITEST-RX capture on .162, press Play on pi9696, wait
 # for the take to end, stop the capture, report XRUNs/restarts on the Pi side.
-# Usage: [RXLAT=ns] [ITEST_RX_HOST=user@host] [ITEST_WORK=dir] tx_test.sh <label>
+# Usage: [POST=s] [RXLAT=ns] [ITEST_RX_HOST=user@host] [ITEST_WORK=dir] tx_test.sh <label>
 # Expects the app's stderr in $W/app-sim.err and a WebUI session in $W/cookies.txt.
 set -u
 L=${1:-run}
@@ -18,7 +18,7 @@ curl -s -o /dev/null -b $W/cookies.txt -X POST http://127.0.0.1/api/input/button
 t0=$(date +%s)
 until ! curl -s -b $W/cookies.txt http://127.0.0.1/api/status | grep -q "Playing back" || [ $(( $(date +%s) - t0 )) -gt 240 ]; do sleep 2; done
 t1=$(date +%s)
-sleep 3
+sleep ${POST:-3}   # keep capturing after the take to see what TX sends once idle
 x1=$(grep -ac XRUN $W/app-sim.err); s1=$(grep -ac 'transmitter stopped' $W/app-sim.err)
 echo "[$L] playback wall time $((t1 - t0))s for a 60s file; Pi XRUN=$((x1 - x0)) transmitter_restarts=$((s1 - s0))"
 ssh -o BatchMode=yes $R "systemctl stop itest-rx; journalctl -u itest-rx --no-pager -o cat --since '-5min' | grep -cE 'timeout \(not receiving' | sed 's/^/[$L] RX media timeouts: /'"
