@@ -4762,6 +4762,7 @@ type fakeTxHolder struct {
 	closed   bool
 	maxCalls int // fail Writes after this many calls (0 = unlimited); bounds paused-pump tests
 	calls    int
+	stops    int
 }
 
 func (f *fakeTxHolder) Write(b []int32) (int, error) {
@@ -4776,6 +4777,13 @@ func (f *fakeTxHolder) Write(b []int32) (int, error) {
 	}
 	f.writes = append(f.writes, append([]int32(nil), b...))
 	return len(b), nil
+}
+
+func (f *fakeTxHolder) Stop() error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.stops++
+	return nil
 }
 
 func (f *fakeTxHolder) Close() error {
@@ -4959,11 +4967,42 @@ func TestPumpPlaybackPassthrough(t *testing.T) {
 	src := &chunkReader{data: raw, chunk: 7}
 	pumpPlaybackToTx(cmd, src, holder, 2)
 
-	if got := holder.flattened(); !equalInt32(got, want) {
-		t.Errorf("pump delivered %v, want %v", got, want)
+	got := holder.flattened()
+	if len(got) < len(want) || !equalInt32(got[:len(want)], want) {
+		t.Fatalf("pump delivered %v, want %v first", got, want)
+	}
+	// EOF: a silence tail covering the device buffer, then a stop (REPORT F3).
+	for i, s := range got[len(want):] {
+		if s != 0 {
+			t.Fatalf("tail sample %d = %d, want silence", i, s)
+		}
+	}
+	if len(got) == len(want) {
+		t.Error("no silence tail after EOF")
+	}
+	if holder.stops != 1 {
+		t.Errorf("TX stopped %d times after EOF, want 1", holder.stops)
 	}
 	if src.left() != 0 {
 		t.Errorf("pump left %d bytes unconsumed", src.left())
+	}
+}
+
+// A user stop ends the generation: TX stops at once, no tail.
+func TestPumpPlaybackStopSilencesTx(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	holder := &fakeTxHolder{}
+	cmd := exec.Command("true")
+	mutex.Lock()
+	playbackCmd, txHolder = nil, holder
+	currentState = StateIdle
+	mutex.Unlock()
+
+	pumpPlaybackToTx(cmd, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, 2)
+
+	if len(holder.writes) != 0 || holder.stops != 1 {
+		t.Errorf("after stop: %d writes, %d stops; want 0 writes, 1 stop", len(holder.writes), holder.stops)
 	}
 }
 
@@ -5047,6 +5086,9 @@ func TestPumpPlaybackStaleGenerationExits(t *testing.T) {
 
 	if len(holder.writes) != 0 {
 		t.Errorf("stale pump wrote %d chunks, want 0", len(holder.writes))
+	}
+	if holder.stops != 0 {
+		t.Errorf("stale pump stopped the device the live pump owns (%d stops)", holder.stops)
 	}
 }
 

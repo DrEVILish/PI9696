@@ -43,6 +43,8 @@ const (
 // in tests (the dev box has no inferno ALSA device).
 type txFrameWriter interface {
 	Write([]int32) (int, error)
+	// Stop drops queued frames and halts transmission until the next Write.
+	Stop() error
 	Close() error
 }
 
@@ -214,6 +216,11 @@ func warmupTxHolder(holder txFrameWriter, channels int) {
 		logWarnf("TX holder not ready (no clock overlay?): %v", err)
 		return
 	}
+	// Idle sends nothing (owner decision): the warmup proved the clock, it
+	// must not leave the transmitter running.
+	if err := holder.Stop(); err != nil {
+		logWarnf("TX holder stop after warmup: %v", err)
+	}
 	mutex.Lock()
 	if txHolder == holder {
 		txHolderReady = true
@@ -298,6 +305,35 @@ func buildPlaybackCmd(file string, pos time.Duration) (cmd *exec.Cmd, stdout io.
 	return playbackCmdFor(file, pos), nil, false
 }
 
+// finishTxPump makes TX go silent when a take ends or is stopped, and stops
+// transmitting so an idle holder sends nothing. Without it the plugin keeps
+// re-sending its last ring (~42 ms of the take's end) for as long as the
+// holder sits idle. At EOF one buffer of silence goes first so the take's
+// final frames still leave the device. A pump retired by a seek handoff
+// leaves the device alone: the new pump owns it.
+func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int, eof bool) {
+	mutex.Lock()
+	rate := sampleRates[sampleRateIdx]
+	mutex.Unlock()
+	if eof {
+		tail := (rate*alsapcm.LatencyUs/1_000_000 + txPumpFrames - 1) / txPumpFrames
+		zeros := make([]int32, txPumpFrames*channels)
+		for i := 0; i < tail; i++ {
+			if _, err := holder.Write(zeros); err != nil {
+				break
+			}
+		}
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if txHolder != holder || (playbackCmd != nil && playbackCmd != cmd) {
+		return
+	}
+	if err := holder.Stop(); err != nil {
+		logWarnf("TX stop after playback: %v", err)
+	}
+}
+
 // pumpPlaybackToTx moves decoded frames from ffmpeg's stdout to the TX
 // holder until its generation ends (seek handoff, stop, EOF). While paused
 // it writes silence without consuming the pipe: the full pipe back-pressures
@@ -317,6 +353,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 		paused := currentState == StatePaused
 		mutex.Unlock()
 		if !alive {
+			finishTxPump(cmd, holder, channels, false)
 			return
 		}
 		if paused {
@@ -350,6 +387,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 			}
 		}
 		if rerr != nil {
+			finishTxPump(cmd, holder, channels, true)
 			return
 		}
 	}
