@@ -1,0 +1,70 @@
+diff --git a/inferno_aoip/src/device_server/arc_server.rs b/inferno_aoip/src/device_server/arc_server.rs
+index 325ee4c..c480636 100644
+--- a/inferno_aoip/src/device_server/arc_server.rs
++++ b/inferno_aoip/src/device_server/arc_server.rs
+@@ -609,11 +609,20 @@ pub async fn run_server(
+           // received unknown opcode1 0x3014, content 000100000002
+           // whole packet: "27ff00104a1c30140000000100000002"
+           if let Some(channels_recv) = &subscriber {
++            // content: u16 count, then count x u32 big-endian rx channel ids
+             let content = request.content();
+-            let local_channel = make_u16(content[4], content[5]);
+-            let local_channel_index = (local_channel - 1) as usize;
+-            info!("disconnect requested: local channel {}", local_channel);
+-            channels_recv.unsubscribe(local_channel_index).await;
++            let count = if content.len() >= 2 { make_u16(content[0], content[1]) as usize } else { 0 };
++            for i in 0..count {
++              let o = 2 + 4 * i;
++              if o + 4 > content.len() { error!("0x3014: truncated channel list"); break; }
++              let local_channel = u32::from_be_bytes([content[o], content[o + 1], content[o + 2], content[o + 3]]);
++              if local_channel == 0 || local_channel as usize > self_info.rx_channels.len() {
++                error!("0x3014: disconnect for nonexisting channel {}", local_channel);
++                continue;
++              }
++              info!("disconnect requested: local channel {}", local_channel);
++              channels_recv.unsubscribe((local_channel - 1) as usize).await;
++            }
+             conn.respond(&[]).await;
+           }
+         }
+diff --git a/inferno_aoip/src/device_server/info_mcast_server.rs b/inferno_aoip/src/device_server/info_mcast_server.rs
+index 87c4826..78f85b1 100644
+--- a/inferno_aoip/src/device_server/info_mcast_server.rs
++++ b/inferno_aoip/src/device_server/info_mcast_server.rs
+@@ -98,6 +98,19 @@ impl<'s> Multicaster<'s> {
+     self.server.send(&dst, pkt).await;
+   }
+ 
++  // Audio capability status (class 0x0724): u16 0x0018, u16 count, u32 current,
++  // u32 0, u32 0x00020000, then count x u32 supported values.
++  async fn send_capability_status(&mut self, status: u8, current: u32, supported: &[u32]) {
++    let mut content = Vec::with_capacity(16 + 4 * supported.len());
++    content.extend_from_slice(&0x0018u16.to_be_bytes());
++    content.extend_from_slice(&(supported.len() as u16).to_be_bytes());
++    content.extend_from_slice(&current.to_be_bytes());
++    content.extend_from_slice(&0u32.to_be_bytes());
++    content.extend_from_slice(&0x00020000u32.to_be_bytes());
++    for v in supported { content.extend_from_slice(&v.to_be_bytes()); }
++    self.send(self.device_info_destination, 0xffff, [0x07, 0x24, 0x00, status, 0, 0, 0, 0], &content).await;
++  }
++
+   async fn send_board_info(&mut self) {
+     let mut content = [0u8; 200];
+     // Firmware version:
+@@ -411,6 +424,16 @@ pub async fn run_server(
+           [0x07, _, 0, 0x13, 0, 0, 0, _] => {
+             mcaster.send_network_info().await;
+           }
++          [0x07, _, 0, 0x81, 0, 0, 0, _] => {
++            // sample-rate probe (netaudio: probe_sample_rate) -> status 0x0080
++            let rate = mcaster.self_info.sample_rate;
++            mcaster.send_capability_status(0x80, rate, &[rate]).await;
++          }
++          [0x07, _, 0, 0x83, 0, 0, 0, _] => {
++            // encoding probe -> status 0x0082 (transmit encoding is fixed at 24)
++            let enc = mcaster.self_info.bits_per_sample as u32;
++            mcaster.send_capability_status(0x82, enc, &[16, 24, 32]).await;
++          }
+           [0x07, _, 0, 0x77, 0, 0, 0, _]=> {
+             mcaster.send(
+               mcaster.device_info_destination, 0xffff, [0x07, 0x2a, 0x00, 0x78, 0, 0, 0, 0],
