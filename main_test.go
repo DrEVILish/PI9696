@@ -2748,6 +2748,46 @@ func TestStartMonitorResetsOverallMeter(t *testing.T) {
 	}
 }
 
+// TestRecordingWaitsForMonitorExit (REPORT F6): the recorder must not open
+// the FIFO while the outgoing monitor can still read it, or the two split
+// frames and the take loses a chunk near its start.
+func TestRecordingWaitsForMonitorExit(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("real ffmpeg required for the monitor pipeline")
+	}
+	initTestHardware(t)
+	demoTestCleanup(t)
+	setDemoModeLocked(true)
+	resetTransportCleanup(t)
+	ensureMonitorDown(t)
+	mutex.Lock()
+	startMonitor()
+	mon, outgoing := monitoring, monitorDone
+	mutex.Unlock()
+	if !mon {
+		t.Fatal("monitor did not start")
+	}
+	time.Sleep(300 * time.Millisecond)
+	mutex.Lock()
+	startRecording()
+	rec, take := isRecording, recordingFile
+	exited := false
+	select {
+	case <-outgoing:
+		exited = true
+	default:
+	}
+	mutex.Unlock()
+	t.Cleanup(func() { os.Remove(take); os.Remove(filepath.Dir(take)) })
+	defer func() { mutex.Lock(); stopRecording(); mutex.Unlock() }()
+	if !rec {
+		t.Fatal("startRecording refused in demo mode")
+	}
+	if !exited {
+		t.Fatal("recorder started while the outgoing monitor was still running")
+	}
+}
+
 // TestDemoRecordTake verifies that a recorded take captures genuine
 // audio, not silent noise.
 func TestDemoRecordTake(t *testing.T) {
