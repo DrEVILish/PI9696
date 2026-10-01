@@ -484,7 +484,7 @@ func TestVariantMustBelongToItsTheme(t *testing.T) {
 	if v := currentThemeVariant(); v != "" {
 		t.Errorf("currentThemeVariant() = %q for a variant matrix doesn't list", v)
 	}
-	if got := displayHTMLTag("matrix", currentThemeVariant()); strings.Contains(string(got), "data-variant") {
+	if got := displayHTMLTag("matrix", currentThemeVariant(), ""); strings.Contains(string(got), "data-variant") {
 		t.Errorf("tag %s should carry no data-variant", got)
 	}
 	if themeHasVariant("lcars", "") || !themeHasVariant("lcars", "picard") || themeHasVariant("nope", "picard") {
@@ -512,5 +512,162 @@ func TestPreviewVariantWithoutPersisting(t *testing.T) {
 	}
 	if themeSlug != defaultThemeSlug || themeVariant != "" {
 		t.Errorf("preview must not persist: %q/%q", themeSlug, themeVariant)
+	}
+}
+
+// Theme tint (CONTRACT.md, required when a theme declares one): a colour
+// control beside the theme choice, rendered as an inline token on <html>,
+// stored per theme, cleared by choosing a preset, hidden otherwise.
+func resetThemeState() {
+	mutex.Lock()
+	themeSlug, themeVariant, themeTints = defaultThemeSlug, "", map[string]string{}
+	displayDensityIdx = 0
+	mutex.Unlock()
+}
+
+func postForm(t *testing.T, mux http.Handler, cookie *http.Cookie, path, form string) (int, string) {
+	t.Helper()
+	req := httptest.NewRequest("POST", path, strings.NewReader(form))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	return rr.Code, rr.Body.String()
+}
+
+func dashboardHTML(t *testing.T, mux http.Handler, cookie *http.Cookie, target string) string {
+	t.Helper()
+	req := httptest.NewRequest("GET", target, nil)
+	req.AddCookie(cookie)
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+	return rr.Body.String()
+}
+
+func TestTintControlOnlyForThemesThatDeclareOne(t *testing.T) {
+	defer resetThemeState()
+	resetThemeState()
+	if themeTintSpec("win7-aero") == nil || themeTintSpec("matrix") != nil {
+		t.Fatal("manifest: win7-aero should declare a tint and matrix none")
+	}
+	mux := newRemoteMux()
+	cookie := sessionCookie(t, mux)
+	themeSlug = "matrix"
+	if body := dashboardHTML(t, mux, cookie, "/"); !strings.Contains(body, `<div id="tint" hidden></div>`) || strings.Contains(body, `id="tintcolor"`) {
+		t.Error("a theme without tint must hide the control (keeping the swap target)")
+	}
+	themeSlug = "win7-aero"
+	body := dashboardHTML(t, mux, cookie, "/")
+	for _, want := range []string{
+		`<label class="label" for="tintcolor">Window Color</label>`,
+		`type="color" name="tint" value="#74b8fc"`,
+		`hx-post="/api/settings/tint"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("win7-aero dashboard missing %s", want)
+		}
+	}
+	if !regexp.MustCompile(`oninput="document.documentElement.style.setProperty\((&#34;|&quot;|")--aero-tint`).MatchString(body) {
+		t.Error("the colour input should preview the tint token live")
+	}
+}
+
+func TestTintStoredPerThemeAndRendered(t *testing.T) {
+	defer resetThemeState()
+	resetThemeState()
+	mux := newRemoteMux()
+	cookie := sessionCookie(t, mux)
+	themeSlug = "win7-aero"
+
+	code, body := postForm(t, mux, cookie, "/api/settings/tint", "tint=%236E3BA1")
+	if code != http.StatusOK || themeTints["win7-aero"] != "#6e3ba1" {
+		t.Fatalf("status %d, stored %q", code, themeTints["win7-aero"])
+	}
+	if !strings.Contains(body, `document.documentElement.style.setProperty("--aero-tint","#6e3ba1")`) {
+		t.Errorf("response should apply the tint at once:\n%s", body)
+	}
+	if !strings.Contains(body, `value="#6e3ba1"`) || !strings.Contains(body, `name="reset"`) {
+		t.Error("cell should show the custom colour and a Default button")
+	}
+	// Inline on <html>, sharing one style attribute with density.
+	displayDensityIdx = 1
+	if got := dashboardHTML(t, mux, cookie, "/"); !strings.Contains(got, `<html data-theme="win7-aero" style="--density:0.85;--aero-tint:#6e3ba1">`) {
+		t.Error("dashboard should render the tint token inline on <html> beside density")
+	}
+	displayDensityIdx = 0
+
+	// Malformed colours and themes without a tint are refused.
+	for _, form := range []string{"tint=red", "tint=%23abc", "tint=%236e3ba1%22onload", "tint="} {
+		if code, _ := postForm(t, mux, cookie, "/api/settings/tint", form); code != http.StatusBadRequest {
+			t.Errorf("%s accepted (status %d)", form, code)
+		}
+	}
+	themeSlug = "matrix"
+	if code, _ := postForm(t, mux, cookie, "/api/settings/tint", "tint=%23112233"); code != http.StatusBadRequest {
+		t.Error("a theme without tint must refuse one")
+	}
+	if strings.Contains(dashboardHTML(t, mux, cookie, "/"), "--aero-tint") {
+		t.Error("a theme without tint must not render another theme's token")
+	}
+	// Reset clears the custom colour.
+	themeSlug = "win7-aero"
+	_, body = postForm(t, mux, cookie, "/api/settings/tint", "reset=1")
+	if _, ok := themeTints["win7-aero"]; ok || !strings.Contains(body, `removeProperty("--aero-tint")`) || strings.Contains(body, `setProperty("--aero-tint"`) {
+		t.Errorf("reset should clear the stored tint and the inline token:\n%s", body)
+	}
+}
+
+func TestTintFollowsThemeAndPresetClearsIt(t *testing.T) {
+	defer resetThemeState()
+	resetThemeState()
+	mux := newRemoteMux()
+	cookie := sessionCookie(t, mux)
+
+	// Switching to the tinted theme shows the control and applies its colour.
+	themeTints["win7-aero"] = "#6e3ba1"
+	_, body := postForm(t, mux, cookie, "/api/settings/theme", "idx="+strconv.Itoa(themeChoiceIndex("win7-aero", "")))
+	if !strings.Contains(body, `<div id="tint" class="setting-cell" hx-swap-oob="outerHTML">`) ||
+		!strings.Contains(body, `setProperty("--aero-tint","#6e3ba1")`) {
+		t.Errorf("switching to win7-aero should swap in the tint control and apply the stored colour:\n%s", body)
+	}
+	// Leaving it hides the control and drops the token; the colour stays stored.
+	_, body = postForm(t, mux, cookie, "/api/settings/theme", "idx="+strconv.Itoa(themeChoiceIndex("matrix", "")))
+	if !strings.Contains(body, `<div id="tint" hidden hx-swap-oob="outerHTML"></div>`) ||
+		!strings.Contains(body, `removeProperty("--aero-tint")`) || strings.Contains(body, `setProperty("--aero-tint"`) {
+		t.Errorf("leaving win7-aero should hide the control and drop the token:\n%s", body)
+	}
+	if themeTints["win7-aero"] != "#6e3ba1" {
+		t.Error("the colour is stored per theme and survives switching away")
+	}
+	// Choosing a preset (a sub-theme) clears the custom colour so it shows.
+	postForm(t, mux, cookie, "/api/settings/theme", "idx="+strconv.Itoa(themeChoiceIndex("win7-aero", "")))
+	_, body = postForm(t, mux, cookie, "/api/settings/theme", "idx="+strconv.Itoa(themeChoiceIndex("win7-aero", "twilight")))
+	if _, ok := themeTints["win7-aero"]; ok {
+		t.Error("choosing a preset must clear the custom tint")
+	}
+	if !strings.Contains(body, `setAttribute("data-variant","twilight")`) || !strings.Contains(body, `removeProperty("--aero-tint")`) {
+		t.Errorf("preset should set data-variant and drop the inline tint:\n%s", body)
+	}
+}
+
+func TestTintPreviewAndPersistence(t *testing.T) {
+	defer resetThemeState()
+	resetThemeState()
+	mux := newRemoteMux()
+	cookie := sessionCookie(t, mux)
+	if !strings.Contains(dashboardHTML(t, mux, cookie, "/?preview=win7-aero&tint=%23ff8800"), `<html data-theme="win7-aero" style="--aero-tint:#ff8800">`) {
+		t.Error("preview should accept &tint=")
+	}
+	if len(themeTints) != 0 {
+		t.Error("preview must not persist a tint")
+	}
+	got := validThemeTints(map[string]string{
+		"win7-aero": "#ABCDEF", "matrix": "#123456", "nope": "#123456",
+	})
+	if len(got) != 1 || got["win7-aero"] != "#abcdef" {
+		t.Errorf("validThemeTints = %v", got)
+	}
+	if v := validThemeTints(map[string]string{"win7-aero": "url(x)"}); len(v) != 0 {
+		t.Errorf("malformed stored colour kept: %v", v)
 	}
 }

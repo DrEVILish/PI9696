@@ -3717,7 +3717,7 @@ func TestPersistRoundTripsAllFields(t *testing.T) {
 	origTag, origPrefix, origVU, origPeak := tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx
 	origTM := transportMode
 	origTheme, origMotion, origContrast, origDensity := themeSlug, displayMotion, displayContrast, displayDensityIdx
-	origVariant := themeVariant
+	origVariant, origTints := themeVariant, themeTints
 	origBright, origDim, origTimeout := oledBrightnessPct, autoDimEnabled, menuTimeoutIdx
 	origDemo, origHyper := demoMode, hyperdeckEnabled
 	origWifiEn, origSSID, origPwd := wifiEnabled, wifiSSID, wifiPassword
@@ -3728,7 +3728,7 @@ func TestPersistRoundTripsAllFields(t *testing.T) {
 		tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx = origTag, origPrefix, origVU, origPeak
 		transportMode = origTM
 		themeSlug, displayMotion, displayContrast, displayDensityIdx = origTheme, origMotion, origContrast, origDensity
-		themeVariant = origVariant
+		themeVariant, themeTints = origVariant, origTints
 		oledBrightnessPct, autoDimEnabled, menuTimeoutIdx = origBright, origDim, origTimeout
 		demoMode, hyperdeckEnabled = origDemo, origHyper
 		wifiEnabled, wifiSSID, wifiPassword = origWifiEn, origSSID, origPwd
@@ -3744,6 +3744,7 @@ func TestPersistRoundTripsAllFields(t *testing.T) {
 	transportMode = "text"
 	themeSlug, displayMotion, displayContrast, displayDensityIdx = "lcars", "reduced", "high", 2
 	themeVariant = "voyager"
+	themeTints = map[string]string{"win7-aero": "#6e3ba1"}
 	oledBrightnessPct, autoDimEnabled, menuTimeoutIdx = 42, false, 3
 	demoMode, hyperdeckEnabled = true, true
 	wifiEnabled, wifiSSID, wifiPassword = false, "TestNet", "pw123"
@@ -3757,7 +3758,7 @@ func TestPersistRoundTripsAllFields(t *testing.T) {
 	tagPresetIdx, filePrefix, vuRangeIdx, peakHoldIdx = 0, "", 3, 4
 	transportMode = "icon"
 	themeSlug, displayMotion, displayContrast, displayDensityIdx = "xbmc", "full", "standard", 0
-	themeVariant = ""
+	themeVariant, themeTints = "", map[string]string{}
 	oledBrightnessPct, autoDimEnabled, menuTimeoutIdx = 100, true, 2
 	demoMode, hyperdeckEnabled = false, false
 	wifiEnabled, wifiSSID, wifiPassword = true, "", ""
@@ -3783,6 +3784,7 @@ func TestPersistRoundTripsAllFields(t *testing.T) {
 	check("transportMode", transportMode, "text")
 	check("themeSlug", themeSlug, "lcars")
 	check("themeVariant", themeVariant, "voyager")
+	check("themeTints[win7-aero]", themeTints["win7-aero"], "#6e3ba1")
 	check("displayMotion", displayMotion, "reduced")
 	check("displayContrast", displayContrast, "high")
 	check("displayDensityIdx", displayDensityIdx, 2)

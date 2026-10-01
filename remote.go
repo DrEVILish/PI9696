@@ -528,7 +528,7 @@ func writeLoginPage(w http.ResponseWriter, d loginPageData) {
 	d.Logo = template.HTML(pi9696LogoSVG)
 	d.Theme, d.ThemeCSS = loginPageTheme()
 	d.CoreVersion = themeBuildVersion()
-	d.HTMLTag = displayHTMLTag(currentTheme(), currentThemeVariant())
+	d.HTMLTag = displayHTMLTag(currentTheme(), currentThemeVariant(), currentThemeTint(currentTheme()))
 	if err := loginPageTmpl.Execute(w, d); err != nil {
 		logDebugf("login render: %v", err)
 	}
@@ -625,6 +625,82 @@ var themeSlug = defaultThemeSlug
 // mutex.
 var themeVariant string
 
+// themeTints is the user-chosen tint colour per theme slug (CONTRACT.md
+// "Theme tint"): only themes whose manifest declares a tint, only #rrggbb.
+// Absent means the theme's default or the chosen preset shows. Guarded by
+// mutex.
+var themeTints = map[string]string{}
+
+var tintColorRE = regexp.MustCompile(`^#[0-9a-f]{6}$`)
+
+// normalizeTint returns a colour as lowercase #rrggbb, or "" if it isn't one.
+func normalizeTint(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if !tintColorRE.MatchString(v) {
+		return ""
+	}
+	return v
+}
+
+// validThemeTints keeps the entries of a loaded map that name a theme with
+// a tint and hold a valid colour.
+func validThemeTints(in map[string]string) map[string]string {
+	out := map[string]string{}
+	for slug, v := range in {
+		if themeTintSpec(slug) != nil {
+			if c := normalizeTint(v); c != "" {
+				out[slug] = c
+			}
+		}
+	}
+	return out
+}
+
+func copyThemeTints(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// themeTintSpec returns a theme's tint declaration, nil if it has none.
+func themeTintSpec(slug string) *themeTintEntry {
+	for _, t := range availableThemes() {
+		if t.Slug == slug {
+			return t.Tint
+		}
+	}
+	return nil
+}
+
+// currentThemeTint returns the stored tint colour for slug, "" when none
+// is stored or the theme declares no tint (a tint is never rendered for a
+// theme without one).
+func currentThemeTint(slug string) string {
+	if themeTintSpec(slug) == nil {
+		return ""
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	return themeTints[slug]
+}
+
+// tintTokens lists every tint token the manifest declares, so a theme
+// change can remove the previous theme's inline token.
+func tintTokens() []string {
+	var out []string
+	for _, t := range availableThemes() {
+		if t.Tint != nil {
+			out = append(out, t.Tint.Token)
+		}
+	}
+	return out
+}
+
 // Library display options (CONTRACT.md "User display options"): browser
 // switches an app may offer beside the theme, applied as documentElement
 // attributes/style. Guarded by the app mutex; persisted like every setting.
@@ -641,7 +717,7 @@ var displayDensityValues = [3]string{"1", "0.85", "1.15"}
 // inline custom property - the contract's documented override path, which
 // beats any theme). Built server-side because html/template refuses
 // dynamic content between a tag's attributes.
-func displayHTMLTag(theme, variant string) template.HTML {
+func displayHTMLTag(theme, variant, tint string) template.HTML {
 	mutex.Lock()
 	motion, contrast, density := displayMotion, displayContrast, displayDensityValues[displayDensityIdx]
 	mutex.Unlock()
@@ -656,8 +732,17 @@ func displayHTMLTag(theme, variant string) template.HTML {
 	if contrast == "high" {
 		b.WriteString(` data-contrast="high"`)
 	}
+	// One style attribute carries both inline overrides: density, and the
+	// theme tint token (inline beats the theme's root block and variants).
+	var style []string
 	if density != "1" {
-		b.WriteString(` style="--density:` + density + `"`)
+		style = append(style, "--density:"+density)
+	}
+	if spec := themeTintSpec(theme); spec != nil && normalizeTint(tint) != "" {
+		style = append(style, spec.Token+":"+normalizeTint(tint))
+	}
+	if len(style) > 0 {
+		b.WriteString(` style="` + html.EscapeString(strings.Join(style, ";")) + `"`)
 	}
 	b.WriteString(">")
 	return template.HTML(b.String())
@@ -678,6 +763,15 @@ type themeManifest struct {
 	// Variants are the theme's palette variants (sub-themes), offered in
 	// the picker beneath the theme. Absent on most themes.
 	Variants []themeVariantEntry `json:"variants"`
+	// Tint is the theme's user-chosen colour, if it declares one: the app
+	// must offer it next to the theme choice (CONTRACT.md "Theme tint").
+	Tint *themeTintEntry `json:"tint"`
+}
+
+type themeTintEntry struct {
+	Token   string `json:"token"`
+	Default string `json:"default"`
+	Label   string `json:"label"`
 }
 
 type themeVariantEntry struct {
@@ -985,6 +1079,12 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 			themeChanged = themeSlug != c.Slug
 			variantChanged = themeChanged || themeVariant != c.Variant
 			themeSlug, themeVariant = c.Slug, c.Variant
+			// A preset is a sub-theme: choosing one clears the theme's custom
+			// tint so the preset shows (CONTRACT.md "Theme tint" step 3).
+			if c.Variant != "" && themeTints[c.Slug] != "" {
+				delete(themeTints, c.Slug)
+				variantChanged = true
+			}
 			if variantChanged {
 				settingChanged()
 			}
@@ -992,9 +1092,17 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	themeFragmentTmpl.Execute(w, themePicker())
+	if variantChanged {
+		// The tint control follows the theme (shown only when it declares a
+		// tint) and the inline tint token follows the stored colour.
+		tv := currentTintView()
+		tv.OOB = true
+		w.Write([]byte("\n"))
+		tintFragmentTmpl.Execute(w, tv)
+	}
 	if variantChanged && !themeChanged {
 		// Same bundle, other palette: only the marker attribute changes.
-		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">%s;telePalette=null</script>", variantCarrier(currentThemeVariant()))
+		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">%s;%stelePalette=null</script>", variantCarrier(currentThemeVariant()), tintCarrier())
 	}
 	if themeChanged {
 		// Out-of-band swap of the <link> and the <html data-theme> marker so
@@ -1011,8 +1119,103 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		// executing in-swapped scripts, which multi-node responses don't
 		// guarantee. The sprite rewrite keeps every .icon <use> pointed
 		// at the new theme's icon set (same ids, theme-authored shapes).
-		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);%s;SPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null;document.querySelectorAll('.icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, variantCarrier(currentThemeVariant()), iconSpriteHref(active))
+		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);%s;%sSPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null;document.querySelectorAll('.icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, variantCarrier(currentThemeVariant()), tintCarrier(), iconSpriteHref(active))
 	}
+}
+
+// tintView is the theme tint setting cell (CONTRACT.md "Theme tint"):
+// shown only for a theme that declares a tint, as a plain colour input
+// posted like every other setting. OOB marks it as an out-of-band swap
+// riding a theme-picker response.
+type tintView struct {
+	Show   bool
+	OOB    bool
+	Token  string
+	Label  string
+	Value  string // colour shown: the stored one, else the theme default
+	Custom bool   // a custom colour is stored (Default resets it)
+}
+
+func currentTintView() tintView {
+	theme := currentTheme()
+	spec := themeTintSpec(theme)
+	if spec == nil {
+		return tintView{}
+	}
+	v := tintView{Show: true, Token: spec.Token, Label: spec.Label, Value: normalizeTint(spec.Default)}
+	if v.Label == "" {
+		v.Label = "Theme tint"
+	}
+	if c := currentThemeTint(theme); c != "" {
+		v.Value, v.Custom = c, true
+	}
+	return v
+}
+
+// With no custom colour the input shows what is in effect (a preset's
+// colour, read from the stylesheet once it has loaded), like the library's
+// own control. Dragging previews live; release saves.
+var tintFragmentTmpl = template.Must(template.New("tint").Parse(`{{if .Show}}<div id="tint" class="setting-cell"{{if .OOB}} hx-swap-oob="outerHTML"{{end}}>
+<div class="field-row">
+<form hx-post="/api/settings/tint" hx-target="#tint" hx-swap="outerHTML">
+<label class="label" for="tintcolor">{{.Label}}</label>
+<input id="tintcolor" class="tint-picker" type="color" name="tint" value="{{.Value}}" style="inline-size:2.4rem;block-size:2rem;padding:0;cursor:pointer" oninput="document.documentElement.style.setProperty({{.Token}},this.value)" onchange="this.form.requestSubmit()">
+{{if .Custom}}<button class="btn btn-secondary btn-sm" type="submit" name="reset" value="1">Default</button>{{else}}<script>(function(){var i=document.getElementById("tintcolor"),v=getComputedStyle(document.documentElement).getPropertyValue({{.Token}}).trim();if(/^#[0-9a-f]{6}$/i.test(v))i.value=v})()</script>{{end}}
+</form>
+</div>
+</div>{{else}}<div id="tint" hidden{{if .OOB}} hx-swap-oob="outerHTML"{{end}}></div>{{end}}`))
+
+// tintCarrier is the documentElement update that applies the active
+// theme's tint: drop every tint token, then set the stored colour, if any.
+func tintCarrier() string {
+	var b strings.Builder
+	for _, tok := range tintTokens() {
+		fmt.Fprintf(&b, "document.documentElement.style.removeProperty(%q);", tok)
+	}
+	theme := currentTheme()
+	if spec := themeTintSpec(theme); spec != nil {
+		if c := currentThemeTint(theme); c != "" {
+			fmt.Fprintf(&b, "document.documentElement.style.setProperty(%q,%q);", spec.Token, c)
+		}
+		// Show the colour now in effect (the custom one, or the preset's),
+		// read once the variant above has applied.
+		// The tint cell swapped in by the same response settles after this
+		// runs (htmx settle delay), and after a theme change the new bundle
+		// loads asynchronously: sync again after the settle and on load.
+		fmt.Fprintf(&b, `(function(){function s(){var i=document.getElementById("tintcolor"),v=getComputedStyle(document.documentElement).getPropertyValue(%q).trim();if(i&&/^#[0-9a-f]{6}$/i.test(v))i.value=v}s();setTimeout(s,100);var l=document.getElementById("themecss");if(l)l.addEventListener("load",s,{once:true})})();`, spec.Token)
+	}
+	return b.String()
+}
+
+// handleAPISettingsTint stores (or with reset=1 clears) the active theme's
+// tint colour. Only a theme that declares a tint accepts one, and only as
+// #rrggbb: the colour lands in an inline style on every page.
+func handleAPISettingsTint(w http.ResponseWriter, r *http.Request) {
+	theme := currentTheme()
+	if themeTintSpec(theme) == nil {
+		http.Error(w, "this theme has no tint", http.StatusBadRequest)
+		return
+	}
+	colour := ""
+	if r.FormValue("reset") == "" {
+		if colour = normalizeTint(r.FormValue("tint")); colour == "" {
+			http.Error(w, "tint must be #rrggbb", http.StatusBadRequest)
+			return
+		}
+	}
+	mutex.Lock()
+	if themeTints[theme] != colour {
+		if colour == "" {
+			delete(themeTints, theme)
+		} else {
+			themeTints[theme] = colour
+		}
+		settingChanged()
+	}
+	mutex.Unlock()
+	noteActivity()
+	tintFragmentTmpl.Execute(w, currentTintView())
+	fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">%stelePalette=null</script>", tintCarrier())
 }
 
 // variantCarrier is the documentElement update for a palette variant: set
@@ -1033,6 +1236,7 @@ type dashboardData struct {
 	IconSprite           string
 	HTMLTag              template.HTML
 	ThemeFragment        template.HTML
+	TintFragment         template.HTML
 	MotionFragment       template.HTML
 	ContrastFragment     template.HTML
 	DensityFragment      template.HTML
@@ -2353,6 +2557,7 @@ html[data-theme] body{background:transparent}
 
       <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-display" id="pane-display">
         {{.ThemeFragment}}
+        {{.TintFragment}}
         {{.MotionFragment}}
         {{.ContrastFragment}}
         {{.DensityFragment}}
@@ -2982,6 +3187,12 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 			activeVariant = pvv
 		}
 	}
+	// The tint follows the rendered theme: its stored colour, or for a
+	// preview &tint=%23rrggbb (as on the library's demo pages).
+	activeTint := currentThemeTint(activeTheme)
+	if pt := normalizeTint(r.URL.Query().Get("tint")); pt != "" && r.URL.Query().Get("preview") != "" {
+		activeTint = pt
+	}
 
 	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf, motionBuf, contrastBuf, densityBuf bytes.Buffer
 	selectFragmentTmpl.Execute(&vuBuf, vuRangeSelect())
@@ -2994,6 +3205,8 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	hyperdeckFragmentTmpl.Execute(&hyperdeckBuf, hyperdeckViewData())
 	selectFragmentTmpl.Execute(&logLevelBuf, logLevelSelect())
 	themeFragmentTmpl.Execute(&themeBuf, themePicker())
+	var tintBuf bytes.Buffer
+	tintFragmentTmpl.Execute(&tintBuf, currentTintView())
 	for _, opt := range displayOptions {
 		buf := displayOptBuf(opt.id, &motionBuf, &contrastBuf, &densityBuf)
 		if buf != nil {
@@ -3022,7 +3235,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		ThemeCSS:             activeThemeCSS,
 		CoreVersion:          themeBuildVersion(),
 		IconSprite:           iconSpriteHref(activeTheme),
-		HTMLTag:              displayHTMLTag(activeTheme, activeVariant),
+		HTMLTag:              displayHTMLTag(activeTheme, activeVariant, activeTint),
 		VURangeFragment:      template.HTML(vuBuf.String()),
 		PeakHoldFragment:     template.HTML(holdBuf.String()),
 		SampleRateFragment:   template.HTML(srBuf.String()),
@@ -3033,6 +3246,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		HyperdeckFragment:    template.HTML(hyperdeckBuf.String()),
 		LogLevelFragment:     template.HTML(logLevelBuf.String()),
 		ThemeFragment:        template.HTML(themeBuf.String()),
+		TintFragment:         template.HTML(tintBuf.String()),
 		MotionFragment:       template.HTML(motionBuf.String()),
 		ContrastFragment:     template.HTML(contrastBuf.String()),
 		DensityFragment:      template.HTML(densityBuf.String()),
@@ -4115,6 +4329,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/settings/peak-hold", requireAuth(handleAPISettingsPeakHold))
 	mux.HandleFunc("POST /api/settings/log-level", requireAuth(handleAPISettingsLogLevel))
 	mux.HandleFunc("POST /api/settings/theme", requireAuth(handleAPISettingsTheme))
+	mux.HandleFunc("POST /api/settings/tint", requireAuth(handleAPISettingsTint))
 	registerDisplayOptionRoutes(mux)
 	mux.HandleFunc("POST /api/settings/brightness", requireAuth(handleAPISettingsBrightness))
 	mux.HandleFunc("POST /api/settings/dim", requireAuth(handleAPISettingsAutoDim))
