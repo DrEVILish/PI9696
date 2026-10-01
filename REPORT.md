@@ -1,8 +1,96 @@
 # PI9696 inferno interop test — report
 
-**Date:** 2026-09-30 → 2026-10-01 · **Unit under test:** pi9696-test (192.0.2.69, Raspberry Pi 4, the target hardware) · **Build:** `main` at `5e4f395`, plus the fixes listed below.
+**Round 2:** 2026-10-01, the owner follow-ups below. **Round 1:** 2026-09-30, from "Round 1 summary" onward.
+**Unit under test:** pi9696-test (192.0.2.69, Raspberry Pi 4, the target hardware). **Second host:** the dev server (192.0.2.162, x86_64 VM); 192.0.2.55 is still unavailable.
 
-## Summary
+## Round 2 — summary
+
+| Request | Outcome |
+|---|---|
+| No recording until the clock is synced to the network | **Done** (`a341360`). A take starts only while statime reports a PTP slave within 1 ms of its master on 5 consecutive polls; otherwise OLED `NO CLOCK SYNC`, a web notice and a log line. Verified both ways on the unit (Status panel `Synced (PTP slave, 2µs)` vs `Not synced (statime unreachable)`) |
+| Channel-count test 1 → n at 48 kHz, 60 s takes, bit-exact/drops, system metrics | **Done, 1–128 ch.** **Every count records full length with no drops or slips.** Bit-exact 100% at 1–24 and 48 ch; ≥99.9956% at 32/64/96/128 (short mid-take bursts, see below). It took three fixes to get past 16 ch (U13, `65b26cd`, `arc_subscribe.py`) |
+| F6 (take-start jump) | **Fixed** (`7ca4d12`); confirmed by the sweep: no take-start errors at any channel count |
+| F8 (sample rate in netaudio) | **Investigated.** inferno ignores netaudio's rate/encoding probes (U2); patch verified (`device show` → 96 kHz). PI9696 additionally needs RX+TX as one instance (U8) |
+| F9 (bulk unsubscribe) | **Investigated: inferno's bug, not netaudio's** (U1). netaudio sends a correct list; inferno reads only the first id. Patch verified |
+| F10 (statime.service) | **Fixed** (`25de538`). Tracked unit + config, observation socket, `Conflicts=` with the stub, and `pi9696.service` no longer pulls in the stub |
+| Q1/Q2 (TX idle / silent at pause, end, stop) | **Done with one limit** (`61bde0a` → `b29761a`). No stale-audio loop any more; idle-at-boot sends nothing. After the first playback TX keeps streaming silence (±1 LSB dither) instead of nothing, because the only way to stop it deadlocks in the inferno plugin (U5) |
+| Q3 (upstream issues file) | **Done**: [INFERNO-UPSTREAM.md](INFERNO-UPSTREAM.md), 14 entries; verified patches in `inferno-patches/` |
+| Q4 (rate visible in netaudio) | **Recorded as a requirement**; blocked on U2 + U8 (above) |
+| Q5 (UI wording) | **Done** (`200bbcd`) |
+| F12 (order-dependent tests) | **Fixed and extended** (`fcc5c67`, `20117e1`, `91689b8`). Cause: the suite opened the real inferno TX device on hosts with the plugin. Shuffle runs found 3 more leaks and one **product bug** (blank display on the font fallback) |
+
+### Channel sweep (48 kHz, 60 s per count, final run)
+
+Source: `ITEST-SRC` on the second host (inferno ALSA plugin, built without TX
+dither so the reference is bit-exact), N channels of deterministic 24-bit
+signal. Unit: the `HEAD` build (SIM mode for the WebUI token), statime PTPv2 slave
+locked to the second host, `inferno2pipe` patched for U1/U2/U13 (scratch build via
+`PI9696_INFERNO_BIN`). Every sample of every channel is compared. *Control RX* is a second
+receiver on the source host recording the same source during the take.
+
+| Ch | Bit-exact | Drops / slips | Take | CPU (4 cores) | Rec ffmpeg (1 core = 100%) | App | iowait | MemAvail min | SD write | UDP in/s | inferno lost | Temp max | Throttled | Control RX |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | **100%** | 0 | 60.2 s | 12.5% | 1.1% | 38% | 0.0% | 3118 MB | 0.16 MB/s | 1521 | 0 | 54 °C | no | 100% |
+| 2 | **100%** | 0 | 60.2 s | 12.0% | 2.0% | 40% | 0.0% | 3141 MB | 0.29 MB/s | 1521 | 0 | 55 °C | no | 100% |
+| 4 | **100%** | 0 | 60.2 s | 11.9% | 3.7% | 37% | 0.0% | 3135 MB | 0.57 MB/s | 1519 | 0 | 55 °C | no | 100% |
+| 8 | **100%** | 0 | 60.3 s | 12.4% | 6.2% | 38% | 0.0% | 3126 MB | 1.13 MB/s | 1521 | 0 | 55 °C | no | 100% |
+| 16 | **100%** | 0 | 60.2 s | 15.0% | 12.5% | 39% | 0.7% | 3095 MB | 2.24 MB/s | 3038 | 0 | 56 °C | no | 99.983% |
+| 24 | **100%** | 0 | 60.1 s | 17.6% | 18.3% | 38% | 0.4% | 3067 MB | 2.85 MB/s | 4553 | 0 | 57 °C | no | 99.965% |
+| 32 | 99.9951% | 0 | 60.4 s | 19.4% | 22.2% | 37% | 1.6% | 3002 MB | 4.50 MB/s | 6071 | 0 | 59 °C | no | 99.934% |
+| 48 | **100%** | 0 | 60.1 s | 23.8% | 34.6% | 38% | 0.4% | 2999 MB | 6.13 MB/s | 9119 | 0 | 60 °C | no | 99.895% |
+| 64 | 99.99991% | 0 | 60.4 s | 30.7% | 47.7% | 39% | 3.9% | 2932 MB | 7.67 MB/s | 12149 | 0 | 62 °C | no | 99.871% |
+| 96 | 99.99981% | 0 | 60.3 s | 40.0% | 71.3% | 39% | 0.5% | 2839 MB | 10.2 MB/s | 18260 | 0 | 61 °C | no | 99.770% |
+| 128 | 99.9956% | 0 | 60.4 s | 60.8% | 106% | 43% | 2.3% | 2768 MB | 14.7 MB/s | 24542 | 236,672 | 65 °C | no | 99.683% |
+
+Notes on reading this:
+- **No count dropped or slipped a sample on the timeline**, and no take starts with an error (F6 fixed). The residual mismatches are short mid-take bursts: 32 ch two bursts (2656 and 1840 samples), 64 ch 160, 96 ch 384+128, 128 ch 16,384 plus 236,672 samples inferno reported as late ("reorder buffer timeout").
+- The **128 ch burst at 51 s coincides with a logged source-side dropout** (`tx lag … dropout occurs!` on the second host at 13:02:49). The control receiver, sitting on the source host itself, is *worse* than the unit at every count from 16 up. The 2-core VM source is the weakest link, so the 32/64/96 bursts cannot be pinned on the unit yet. Repeat with .55 or hardware as the source.
+- *App* CPU (~38%) is mostly SIM-mode rendering (a PNG of every frame), which the real service does not do. `inferno2pipe` CPU was not captured by the script (path mismatch); `top` showed its RX thread at ~20% of a core at 64 ch.
+- **Headroom at 128 ch / 48 kHz:** CPU 61% of 4 cores (the recording ffmpeg needs just over one core), 2.7 GB RAM free, SD at 14.7 MB/s average against a measured **26.9 MB/s sustained** (`dd`, UHS DDR50; 128 ch/48 kHz/24-bit needs 18.4 MB/s), 65 °C, never throttled. Projection, not measured: SD bandwidth caps 96 kHz at ~93 ch and 192 kHz at ~46 ch.
+
+### How the sweep got past 16 channels
+
+| Run | 1–16 ch | 24–48 ch | 64–128 ch | What it exposed |
+|---|---|---|---|---|
+| 1, stock inferno | 100% | 32 ch: only 16 subscribed | nothing subscribed | **U13**: inferno pages channel lists 32 per page, netaudio parses 16, so a >16-ch device cannot be read or routed (`malformed binary response`) |
+| 2, `inferno2pipe` patched (U13) | 100% | 32 ch 100% | 64+ still fails | netaudio's pre-read of *PI9696* (shared IP with `PI9696-TX`, U8) still fails; raw ARC answers instantly, so `arc_subscribe.py` was added |
+| 3, + raw-ARC subscribe | 99.9–100% | 99.5–99.9%, errors at take start | collapse (64: 15%; 96/128: nothing) | **ffmpeg `astats` metering can't keep up** (64 ch: recorder 0.76× realtime, monitor 0.43×; >64 ch monitor fails to start: resampler refuses >64 ch). FIFO fills, `inferno2pipe` blocks and its whole runtime stalls (**U14**): ARC silent, ~13k `RcvbufErrors`/s |
+| 4, + lean metering (`65b26cd`) | 100% | 100% / 99.995% | 99.996–99.99991% | table above. Recorder 1.6× realtime at 128 ch (was 0.22×) |
+
+**Still blocking >16 channels on a stock unit:** U13 needs to land in the
+inferno fork (the patch is verified), and netaudio still cannot pre-read PI9696
+above 32 channels while RX and TX are separate devices on one IP (U8).
+
+### Round 2 findings
+
+- **R1: recording gate.** With the stub clock (this LAN's boot default) the unit now refuses every take. statime.service is installed but disabled: with no PTPv1 leader on this LAN it would become Master and still not qualify. Recording on this unit therefore needs a PTP leader: hardware, or the PTPv2 two-host recipe in DEPLOYMENT.md.
+- **R2: `snd_pcm_drop` deadlock (U5).** The first Q2 implementation stopped the stream after playback; the inferno plugin's stop path can block forever under the app mutex, and the whole app froze (caught by the tests on the dev server). Replaced with a silence fill (`b29761a`).
+- **R3: display fallback bug** (`91689b8`). Without FiraCode fonts the panel rendered nothing after the first context switch (0 pt faces). Found by a shuffle-order test failure.
+- **R4: inferno2pipe faults now logged** (`b08d6da`): `inferno2pipe: N sample-loss events (...)` at Error level.
+- **R5: F2 is still open**: the playback pump stalls on the app mutex during `render()` (97–117 transmitter restarts per 60 s file in this round).
+- **R6: rare test intermittent.** `TestOLEDMonitoringRowToggles` failed in 1 of ~17 shuffled runs; not yet reproduced.
+
+### Round 2 commits (each revertible on its own)
+
+`a341360` clock gate · `25de538` statime deploy · `7ca4d12` F6 · `61bde0a`/`b29761a` TX silence (Q1/Q2) · `200bbcd` UI wording (Q5) · `b08d6da` inferno2pipe fault logging · `fcc5c67`/`20117e1` hermetic tests · `91689b8` display fallback · `65b26cd` lean metering · docs `945cf44` `138d361` `ce26d4a` `137cbe1` `6d2652c` · tools `be59f72`.
+
+### State left behind (round 2)
+
+- **Unit (.69):** `pi9696.service` on the `HEAD` build, stock inferno, stub clock (statime.service installed, disabled), config back to 2 ch / 48 kHz, PI9696's test subscriptions archived out of its inferno state (`/var/tmp/pi9696-work/archive/`), `/rec` empty, `/tmp` 1%. The scratch patched `inferno2pipe` and all captures are deleted. `gh` is still installed (flagged in round 1).
+- **Dev (.162):** test services stopped, stock inferno plugin restored, large sources deleted; patched builds kept in `/opt/inferno-src/inferno-f9` and `inferno-nodither`; sweep logs and metrics in `/var/tmp/pi9696-work/results-pi/`. The final sweep JSON is in `test/interop/results/`.
+
+### Next steps (round 2)
+
+1. Land **U13 + U1 + U2** in the inferno fork (`inferno-patches/0001-…`); without U13 no stock unit can be routed above 16 channels.
+2. **F2:** a lock-free TX pump and a shorter `render()` critical section (still the cause of transmitter restarts).
+3. **U8:** RX and TX as one inferno instance (`alsapcm.Open` both directions), which also unblocks netaudio's view of PI9696 and Q4.
+4. **U5** in the plugin, so TX can truly stop after playback (Q1).
+5. Re-run the sweep with **.55 or hardware as the source** to settle the residual bursts, and at 96/192 kHz to check the SD-bandwidth projection.
+6. A PTP leader on the test LAN, so the unit can record under the new gate without the two-host recipe.
+
+---
+
+## Round 1 summary
 
 | Area | Result |
 |---|---|
@@ -128,7 +216,7 @@ Each finding lists the ranked causes, how they were checked, and the fix.
 3. **Fix (not committed; it needs review):** take the pump off the app mutex. Publish `alive`/`paused` to the pump atomically, or a per-pump channel, keeping one writer per ALSA handle; the `TryLock` experiment is not safe as-is, because after a seek a stale pump could write alongside the new one. Separately, shrink `render()`'s critical section: snapshot state under the lock, draw outside it. A bigger buffer alone does not scale, because the plugin caps the buffer at 524,288 bytes, i.e. 1024 frames (21 ms) at 128 channels.
 4. **Related:** the same 95 ms holds delay every WebUI handler and the meter flush. Recording is unaffected: its path never takes the mutex.
 
-### F3 — Transmit is silent while idle, loses the start of each playback, and loops stale audio after it
+### F3 — Transmit is silent while idle, loses the start of each playback, and loops stale audio after it · **stale loop fixed `b29761a`; idle-silent is now the owner's design (Q1)**
 - **Idle:** `PI9696-TX` sends no media while nothing plays; the Pi sends about 3 UDP/s. A subscriber times out ("not receiving media packets") every ~8–10 s and resubscribes.
 - **Start of playback:** the first write after idle XRUNs and restarts the transmitter, so the receiver re-cycles. The first 4.5–28 s of a file were lost (4.5 s with the `TryLock` build, 28 s with the shipped build).
 - **After playback** (seen with the `TryLock` build): once the pump stops writing, nothing calls into ALSA, the underrun is never detected, and the transmitter keeps sending the last 2048-frame ring, a 42 ms loop of the take's end at about −12 dBFS, until the next write.
@@ -154,7 +242,7 @@ the in-process transmitter on a Pi 4 with software timestamps; (b) VM/bridge
 jitter on .162. **Next:** re-measure after F2 on real hardware at both ends, run
 `cyclictest` (as the upstream README advises), and try `TX_LATENCY_NS` 20 ms.
 
-### F6 — A take can start with a 50 ms discontinuity
+### F6 — A take can start with a 50 ms discontinuity · **fixed `7ca4d12` (round 2)**
 In the 187 s take the first 2400 frames are real audio, and then 2400 frames are
 missing: the outgoing monitor was still reading the FIFO (README Known
 Limitation 4, "sub-100 ms window"). It is intermittent (the 70 s take was clean) and
@@ -168,7 +256,7 @@ the old monitor's reaper skips its reset. After the 8 ch/96 kHz change (no media
 `/api/meter` showed peak −7.8 dB while all channels read −100, and the OLED
 waveform drew a phantom trace. The regression test fails on the old code.
 
-### F8 — The sample rate isn't visible in netaudio
+### F8 — The sample rate isn't visible in netaudio · **investigated round 2: INFERNO-UPSTREAM U2 + U8**
 netaudio sends conmon sample-rate/encoding/AES67 probes and inferno never answers
 ("deadline reached while waiting for … sample rates"). The column was blank for
 `ITEST-SRC` too, which is a lone device on its own IP, so the shared IP is ruled out. The
@@ -176,11 +264,11 @@ rate exists only in the TX channel mDNS records; an RX-only device such as `PI96
 publishes none. **Fix:** upstream (inferno would need to answer the probe), or have
 pi9696 publish its rate itself; see Q4.
 
-### F9 — netaudio bulk unsubscribe removes only the first channel
+### F9 — netaudio bulk unsubscribe removes only the first channel · **round 2: inferno bug (U1), patch verified**
 `subscription remove --rx rx:1@PI9696 --rx rx:2@PI9696` left RX 2 subscribed,
 which netaudio's own readback caught. Removing RX 2 on its own worked.
 
-### F10 — Clock traps
+### F10 — Clock traps · **statime.service and the `Wants=` trap fixed `25de538` (round 2)**
 - The stub publishes uptime (`CLOCK_MONOTONIC_RAW`, shift 0), so two stub hosts are days apart and inferno TX between them is unusable (packets stamped −159,446 s from the receiver's clock arrived as silence).
 - `systemctl mask --runtime pi9696-clock` has no effect: the unit file is in `/etc/systemd/system`, which wins over `/run`. Any start of `pi9696.service` pulls the stub back (`Wants=`), and it replaces statime's `/tmp/ptp-usrvclock`. This silently invalidated part of this run and cost a false lead.
 - statime cannot be a PTPv1 master, so two inferno hosts with no hardware device need PTPv2.
@@ -195,14 +283,14 @@ which netaudio's own readback caught. Removing RX 2 on its own worked.
 | `inferno2pipe` output | — | stdout/stderr discarded by the app, so subscription/media errors never reach the journal |
 | `/opt/pi9696/pi9696-test` | — | untracked binary from an earlier session, which was running as an orphaned sim on port 8080 for 7 h and holding the inferno ports |
 
-### F12 — Pre-existing test failures
+### F12 — Pre-existing test failures · **fixed `fcc5c67` `20117e1` (round 2)**
 `TestStopWhilePausedAwakensStoppedFFmpeg`, `TestSeekWhilePausedReapsOldFFmpeg`,
 `TestAutoDimStateTransitions` and `TestInfernoUpGateAndAudioPath` fail in every full run, on
 unmodified `HEAD` as well, on both .162 and the Pi, and all pass in isolation. The cause is shared
 state between tests (README "Testing gotcha"), which is unresolved. `gofmt -l` also flags
 `main.go` and `remote.go` on `HEAD`.
 
-### F13 — UI strings
+### F13 — UI strings · **wording done `200bbcd` (round 2); prefix left for review (Q6)**
 The dashboard's TX status and nine other user-facing strings (`txholder.go:186-357`,
 `main.go:3329`) still use the old protocol vendor name. Uptime is shown
 unrounded ("23.330199427s"). Empty-prefix takes are named `recording_…`; the
@@ -225,7 +313,7 @@ README pattern says `prefix_…` and doesn't state the default (Q6).
 7. **F12:** make the four tests order-independent.
 8. **Run the app's own receiver past 2 channels and at high rates** (only 2 ch/48 kHz audio and 8 ch/96 kHz visibility were exercised).
 
-## Questions for you (design behaviour not in the .md files)
+## Questions for you (round 1; answered 2026-10-01: Q1 no TX audio while not playing, Q2 silent at pause/end/stop, Q3 INFERNO-UPSTREAM.md, Q4 rate must be visible, Q5 yes, Q6 later)
 
 - **Q1.** While idle, should `PI9696-TX` stream silence continuously, so subscribers stay locked and a playback is heard from its first sample? Today it sends nothing.
 - **Q2.** When a playback ends or stops, should TX fall back to silence immediately? (Today the stale last ~42 ms can loop, F3.)
