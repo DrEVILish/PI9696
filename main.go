@@ -1000,6 +1000,8 @@ var (
 	// diskWarnUntil marks how long a "low disk" warning stays on the idle
 	// screen after a refused record press (see onButtonPress/lowDisk).
 	diskWarnUntil time.Time
+	// clockWarnUntil: same, for a record refused by the clock-sync gate.
+	clockWarnUntil time.Time
 	networkWasUp  bool
 	mutex         sync.Mutex
 
@@ -1105,6 +1107,7 @@ func main() {
 	go detectUSB()
 	go updateLoop()
 	go networkMonitorLoop(shutdownCh)
+	go clockSyncLoop(shutdownCh)
 	go peakHoldLoop()
 	go cpuUsageLoop()
 	go telemetryHistLoop()
@@ -1560,6 +1563,13 @@ func startRecordingGuarded() bool {
 			// warning on the idle screen instead (see renderIdleScreen).
 			diskWarnUntil = time.Now().Add(5 * time.Second)
 			logWarnf("Refusing to record: less than 30 minutes of space remains")
+			return false
+		}
+		if !recordingClockOKLocked() {
+			clockWarnUntil = time.Now().Add(5 * time.Second)
+			msg := "Clock not synced to the network - recording refused (" + clockSyncTextLocked(time.Now()) + ")"
+			logWarnf("%s", msg)
+			showWebNotice(msg)
 			return false
 		}
 		startRecording()
@@ -4277,6 +4287,14 @@ func renderIdleScreen() {
 		if blinkOn {
 			hwManager.SwitchToContext("selected")
 			hwManager.DrawCenteredText("LOW DISK <30m", "selected", 48)
+			hwManager.DrawCenteredText("cannot record", "details", 58)
+		}
+		return
+	}
+	if time.Now().Before(clockWarnUntil) {
+		if time.Now().UnixMilli()/500%2 == 0 {
+			hwManager.SwitchToContext("selected")
+			hwManager.DrawCenteredText("NO CLOCK SYNC", "selected", 48)
 			hwManager.DrawCenteredText("cannot record", "details", 58)
 		}
 		return
