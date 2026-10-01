@@ -2634,6 +2634,11 @@ func doStartInferno() {
 // SIGKILL, then give up and let systemd reap the cgroup rather than wedging
 // infernoWorker forever. Vars (like ffmpegStopGrace) so tests can shrink them.
 var infernoStopGrace = 5 * time.Second
+
+// monitorHandoffWait bounds how long startRecording (holding the app mutex)
+// waits for the outgoing monitor ffmpeg to exit. At 128ch/48kHz the 4 MB FIFO
+// holds ~170 ms, so the wait must stay short.
+var monitorHandoffWait = 500 * time.Millisecond
 var infernoKillGrace = 3 * time.Second
 
 // stopProcessGroup terminates a Setpgid child and any grandchildren it
@@ -2762,14 +2767,19 @@ func startRecording() {
 	}
 
 	// A named FIFO only supports one real reader at a time - concurrent
-	// readers would split audio frames between them and corrupt both
-	// streams. stopMonitor is fire-and-forget (SIGTERM, no wait - see its
-	// own comment), so there's a brief sub-100ms window where the outgoing
-	// monitor ffmpeg's read can still race the new recording ffmpeg's for
-	// the FIFO's first few frames; accepted as a minor startup blip rather
-	// than building a fully synchronous handoff.
+	// readers split frames between them. Wait for the outgoing monitor to
+	// exit before the recorder opens the FIFO: what Inferno writes meanwhile
+	// queues in the pipe, so the take starts contiguous. Measured before this
+	// handoff: 2400 frames to the take, the next 2400 to the dying monitor.
+	// SIGKILL, not stopMonitor's SIGTERM: a graceful ffmpeg exit takes ~300ms,
+	// longer than the FIFO holds at 128ch, and the monitor only feeds meters.
 	if monitoring {
-		stopMonitor()
+		outgoing := monitorDone
+		if monitorCmd != nil && monitorCmd.Process != nil {
+			if err := monitorCmd.Process.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
+				logWarnf("monitor handoff: SIGKILL failed: %v", err)
+			}
+		}
 		// Claim monitor ownership synchronously: the old ffmpeg exits
 		// asynchronously, and its reaping goroutine clears the meter
 		// slices when monitorCmd still points at it - which would wipe
@@ -2777,6 +2787,15 @@ func startRecording() {
 		// take meterless. Disowning first makes that check fail.
 		monitorCmd = nil
 		monitoring = false
+		if outgoing != nil {
+			select {
+			case <-outgoing:
+			case <-time.After(monitorHandoffWait):
+				// Typically an ffmpeg blocked on an empty FIFO, which ignores
+				// SIGTERM - nothing is flowing for the two readers to split.
+				logWarnf("monitor still running after %v; starting the take anyway", monitorHandoffWait)
+			}
+		}
 	}
 
 	recordStart = time.Now()
@@ -3120,6 +3139,9 @@ func startMonitor() {
 		cmd.Wait()
 		// Same orphan-stdout bound as the recording reaper above.
 		_ = stdout.Close()
+		// done means "the process has exited" - signalled before taking the
+		// mutex so startRecording can wait for it while holding the lock.
+		close(done)
 		mutex.Lock()
 		if monitorCmd == cmd {
 			monitorCmd = nil
@@ -3130,7 +3152,6 @@ func startMonitor() {
 			meterChannelRMS = nil
 		}
 		mutex.Unlock()
-		close(done)
 	}()
 }
 
