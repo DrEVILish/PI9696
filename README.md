@@ -245,8 +245,8 @@ go test ./...        # run all tests
 
 ### Testing
 
-- 128 tests in `main_test.go` (+ 10 `theme_test.go`, 9 `hyperdeck_test.go`, 8 `alsapcm/`, 7 `hardware/`, 2 `logging_test.go`)
-- The suite runs against a temp recordings tree (`TestMain`); still run it on the dev server, never on a unit - see DEPLOYMENT.md
+- 132 tests in `main_test.go` (+ 3 `clocksync_test.go`, 1 `inferno_log_test.go`, 10 `theme_test.go`, 9 `hyperdeck_test.go`, 8 `alsapcm/`, 8 `hardware/`, 2 `logging_test.go`)
+- The suite is hermetic: a temp recordings tree, no real inferno TX device (a host with the inferno ALSA plugin used to get a real holder, which broke 4 tests), the clock gate off, and per-test restore of audio settings, web notice and monitor (`initTestHardware`). It passes in source order and under `go test -shuffle=on`. Still run it on the dev server, never on a unit - see DEPLOYMENT.md
 - `test/interop/` measures a unit against a second inferno host sample-for-sample (REPORT.md)
 - Tests run the real HTTP handlers over `httptest` (auth, recordings API, ZIP download, settings)
 - Playback/seek tested against a fake `ffmpeg` via PATH shim
