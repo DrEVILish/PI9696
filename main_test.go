@@ -44,6 +44,7 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	RecordPath = recDir
+	clockSyncRequired = false
 	RawPath = filepath.Join(recDir, "raw")
 	go infernoWorker()
 	code := m.Run()

@@ -3040,6 +3040,7 @@ var configTmpl = template.Must(template.New("config").Parse(`
 <tr><td>Format</td><td>{{.Format}}</td></tr>
 <tr><td>Tag</td><td>{{.Tag}}</td></tr>
 <tr><td>Inferno</td><td>{{.Inferno}}</td></tr>
+<tr><td>Clock</td><td>{{.Clock}}</td></tr>
 <tr><td>Network</td><td>{{.Network}}</td></tr>
 </table>
 `))
@@ -3050,6 +3051,7 @@ type configView struct {
 	Format     string
 	Tag        string
 	Inferno    string
+	Clock      string
 	Network    string
 }
 
@@ -3076,6 +3078,7 @@ func renderConfigHTML() (string, error) {
 		Format:     "WAV",
 		Tag:        tagStatusText(),
 		Inferno:    getInfernoStatusText(),
+		Clock:      clockSyncTextLocked(time.Now()),
 	}
 	mutex.Unlock()
 
