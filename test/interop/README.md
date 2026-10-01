@@ -6,10 +6,12 @@ anything on the test unit: the analysis runs on the second host.
 
 | File | Runs on | Purpose |
 |---|---|---|
-| `gen_signal.py` | second host | Deterministic source: 24-bit-exact s32le, 1 kHz / 2 kHz bursts + seeded noise, unique per 10 s block |
-| `compare.py` | second host | Aligns a capture (WAV or raw s32le) to the source per segment; reports drops/repeats, bit-exact ratio, max error, channel mapping, tone level |
+| `gen_signal.py` | second host | Deterministic source: 24-bit-exact s32le, per-channel bursts at 200 + 150·k Hz + noise seeded by (seed, channel, block); streamed, so 128 ch × 300 s never sits in RAM |
+| `compare.py` | second host | Aligns a capture (WAV or raw s32le) to the source per segment; reports drops/repeats, bit-exact ratio (overall and channels with errors), max error, channel mapping, tone level. `--identity` verifies channel k against source k instead of an all-pairs search; the source is memory-mapped and WAVs are read in chunks |
 | `view_devices.sh` | either | Remote-controller view: netaudio device/channel list plus the per-channel mDNS `rate`/`nchan`/`enc` records |
 | `tx_test.sh` | pi9696 | One playback-out run: fresh `ITEST-RX` capture on the second host, Play, wait for the take, count TX XRUNs/restarts |
+| `channel_sweep.py` | pi9696 | Channel-count sweep: per N, source + subscribe + 60 s take + per-second metrics (CPU per process, RAM, SD writes, UDP drops, temperature, throttling) + every-sample compare; optional control capture of the same source on the second host |
+| `arc_subscribe.py` | either | Subscribe RX 1..N with raw ARC requests (netaudio's encoder), for receivers whose subscription read-back netaudio cannot parse |
 
 ## Setup that matters
 
@@ -38,5 +40,17 @@ anything on the test unit: the analysis runs on the second host.
 - The first alignment uses a 4 s window from the start of audio; a
   discontinuity inside that first window is reported as mismatched samples in
   segment 0, not as an offset change.
-- Captures must come from the same `--seconds`/`--seed` source file: the noise
-  on channel 2 depends on the total length.
+- Since the streaming rewrite, a block's content depends only on (seed,
+  channel, block), so any source length/channel count works, but captures
+  made before it need the old generator.
+
+## Above 16 channels
+
+Stock inferno pages its channel lists 32 per page and netaudio parses 16, so
+a stock receiver with more than 16 channels cannot be read or subscribed by
+netaudio (INFERNO-UPSTREAM.md U13). For the sweep, the unit runs a patched
+`inferno2pipe` from a scratch build (`PI9696_INFERNO_BIN=...`, the installed
+inferno is untouched), and PI9696 is subscribed with `arc_subscribe.py`, because
+netaudio's pre-read of its subscriptions still fails above 32 channels (the
+shared IP with `PI9696-TX`, U8). Wait up to ~60 s for every flow to come up
+before recording: the subscriber resolves them one at a time.
