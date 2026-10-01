@@ -24,6 +24,10 @@ p.add_argument("--work", default="/var/tmp/pi9696-work")
 p.add_argument("--base", default="http://127.0.0.1")
 p.add_argument("--keep-wav", action="store_true")
 p.add_argument("--control-bin", default="", help="inferno2pipe on the second host for a control capture of the same source (above 16 ch it needs the U13 paging patch)")
+p.add_argument("--src-env", action="append", default=[], metavar="KEY=VALUE",
+               help="extra environment for the source (repeatable), e.g. HOME=<dir> whose .asoundrc points pcm_type.inferno at a patched plugin")
+p.add_argument("--subscribe", choices=("netaudio", "arc"), default="netaudio",
+               help="netaudio subscription add (needs the U13 patch on the unit above 16 ch) or raw ARC via arc_subscribe.py")
 a = p.parse_args()
 
 W, RW = a.work, "/var/tmp/pi9696-work"
@@ -164,8 +168,9 @@ for n in [int(x) for x in a.channels.split(",")]:
         log(f"[{n}ch] source"); g = ssh(f"cd {RW} && ([ -s {srcf} ] || python3 gen_signal.py {srcf} --channels {n} --seconds {a.src_seconds})")
         if g.returncode:
             raise RuntimeError("gen_signal: " + g.stderr[-300:])
+        src_env = "".join(f"-E {e} " for e in a.src_env)
         ssh(f"systemctl stop itest-src 2>/dev/null; systemctl reset-failed itest-src 2>/dev/null; systemd-run -q --unit=itest-src -p WorkingDirectory={RW} "
-            f"-E INFERNO_NAME=ITEST-SRC -E INFERNO_TX_CHANNELS={n} -E INFERNO_RX_CHANNELS=0 -E INFERNO_SAMPLE_RATE=48000 -E RUST_LOG=warn "
+            f"{src_env}-E INFERNO_NAME=ITEST-SRC -E INFERNO_TX_CHANNELS={n} -E INFERNO_RX_CHANNELS=0 -E INFERNO_SAMPLE_RATE=48000 -E RUST_LOG=warn "
             f"aplay -D inferno -f S32_LE -r 48000 -c {n} {srcf}")
         t_src = time.time()
         log(f"[{n}ch] set unit channels")
@@ -180,11 +185,17 @@ for n in [int(x) for x in a.channels.split(",")]:
                 f"-E INFERNO_RX_CHANNELS={n} -E INFERNO_TX_CHANNELS=0 -E INFERNO_SAMPLE_RATE=48000 -E RUST_LOG=warn {a.control_bin} -c {n} -o {RW}/sweep_ctl_{n}ch.raw; "
                 f"sleep 5; timeout 180 netaudio --no-color subscription add --tx ITEST-SRC --rx ITEST-CTL >/dev/null 2>&1")
         log(f"[{n}ch] subscribe")
-        # Raw ARC, not netaudio: netaudio's pre-read of PI9696's subscriptions
-        # fails above 32 channels (see arc_subscribe.py); the meters confirm it.
-        sub = subprocess.run(["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "arc_subscribe.py"),
-                              "192.168.10.69", "4440", "ITEST-SRC", str(n)], capture_output=True, text=True, timeout=120)
-        r["subscribe"] = (sub.stdout or sub.stderr).strip().splitlines()[-1:]
+        if a.subscribe == "netaudio":
+            # the controller workflow; a stock receiver above 16 ch fails here (U13)
+            sub = subprocess.run(["netaudio", "--no-color", "subscription", "add", "--tx", "ITEST-SRC", "--rx", "PI9696"],
+                                 capture_output=True, text=True, timeout=300)
+            out = sub.stdout + sub.stderr
+            r["subscribe"] = [f"netaudio rc={sub.returncode} verified={out.count('(verified)')} already={out.count('already subscribed')}"]
+        else:
+            # raw ARC: for receivers netaudio cannot read (see arc_subscribe.py); the meters confirm it
+            sub = subprocess.run(["python3", os.path.join(os.path.dirname(os.path.abspath(__file__)), "arc_subscribe.py"),
+                                  "192.168.10.69", "4440", "ITEST-SRC", str(n)], capture_output=True, text=True, timeout=120)
+            r["subscribe"] = (sub.stdout or sub.stderr).strip().splitlines()[-1:]
         deadline, live = time.time() + 150, 0
         while time.time() < deadline:
             m = json.loads(http("/api/meter"))
