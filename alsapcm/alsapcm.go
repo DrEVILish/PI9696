@@ -80,12 +80,6 @@ static void pcm_prepare(snd_pcm_t *pcm, int *out_err) {
 	int err = snd_pcm_prepare(pcm);
 	*out_err = err < 0 ? err : 0;
 }
-
-static void pcm_drop_prepare(snd_pcm_t *pcm, int *out_err) {
-	int err = snd_pcm_drop(pcm);
-	if (err == 0) err = snd_pcm_prepare(pcm);
-	*out_err = err < 0 ? err : 0;
-}
 */
 import "C"
 
@@ -248,21 +242,6 @@ func (d *Device) Write(buf []int32) (int, error) {
 		}
 	}
 	return 0, fmt.Errorf("alsapcm: write did not recover")
-}
-
-// Stop discards queued playback frames and leaves the stream prepared but
-// not running. On the inferno plugin that stops the transmitter, so nothing
-// (in particular not the stale ring) goes out until the next Write starts it.
-func (d *Device) Stop() error {
-	if d.closed || d.play == nil {
-		return nil
-	}
-	var rc C.int
-	C.pcm_drop_prepare(d.play, &rc)
-	if rc != 0 {
-		return fmt.Errorf("alsapcm: stop: %w", alsaErr(rc))
-	}
-	return nil
 }
 
 // recoverable reports whether an ALSA error is a transient overrun that

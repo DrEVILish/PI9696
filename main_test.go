@@ -4762,7 +4762,6 @@ type fakeTxHolder struct {
 	closed   bool
 	maxCalls int // fail Writes after this many calls (0 = unlimited); bounds paused-pump tests
 	calls    int
-	stops    int
 }
 
 func (f *fakeTxHolder) Write(b []int32) (int, error) {
@@ -4777,13 +4776,6 @@ func (f *fakeTxHolder) Write(b []int32) (int, error) {
 	}
 	f.writes = append(f.writes, append([]int32(nil), b...))
 	return len(b), nil
-}
-
-func (f *fakeTxHolder) Stop() error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.stops++
-	return nil
 }
 
 func (f *fakeTxHolder) Close() error {
@@ -4971,24 +4963,23 @@ func TestPumpPlaybackPassthrough(t *testing.T) {
 	if len(got) < len(want) || !equalInt32(got[:len(want)], want) {
 		t.Fatalf("pump delivered %v, want %v first", got, want)
 	}
-	// EOF: a silence tail covering the device buffer, then a stop (REPORT F3).
-	for i, s := range got[len(want):] {
+	// EOF: the plugin's whole ring is overwritten with silence, so what it
+	// keeps re-sending once idle is silence, not the take's end (REPORT F3).
+	tail := got[len(want):]
+	for i, s := range tail {
 		if s != 0 {
 			t.Fatalf("tail sample %d = %d, want silence", i, s)
 		}
 	}
-	if len(got) == len(want) {
-		t.Error("no silence tail after EOF")
-	}
-	if holder.stops != 1 {
-		t.Errorf("TX stopped %d times after EOF, want 1", holder.stops)
+	if frames := len(tail) / 2; frames < txSilenceFrames(48000) {
+		t.Errorf("silence tail %d frames, want >= %d (the device ring)", frames, txSilenceFrames(48000))
 	}
 	if src.left() != 0 {
 		t.Errorf("pump left %d bytes unconsumed", src.left())
 	}
 }
 
-// A user stop ends the generation: TX stops at once, no tail.
+// A user stop ends the generation: TX goes silent (ring of zeros).
 func TestPumpPlaybackStopSilencesTx(t *testing.T) {
 	initTestHardware(t)
 	saveTxGlobals(t)
@@ -5001,8 +4992,14 @@ func TestPumpPlaybackStopSilencesTx(t *testing.T) {
 
 	pumpPlaybackToTx(cmd, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, 2)
 
-	if len(holder.writes) != 0 || holder.stops != 1 {
-		t.Errorf("after stop: %d writes, %d stops; want 0 writes, 1 stop", len(holder.writes), holder.stops)
+	got := holder.flattened()
+	for _, s := range got {
+		if s != 0 {
+			t.Fatalf("after stop TX wrote nonzero sample %d", s)
+		}
+	}
+	if len(got)/2 < txSilenceFrames(48000) {
+		t.Errorf("after stop wrote %d silent frames, want >= %d", len(got)/2, txSilenceFrames(48000))
 	}
 }
 
@@ -5086,9 +5083,6 @@ func TestPumpPlaybackStaleGenerationExits(t *testing.T) {
 
 	if len(holder.writes) != 0 {
 		t.Errorf("stale pump wrote %d chunks, want 0", len(holder.writes))
-	}
-	if holder.stops != 0 {
-		t.Errorf("stale pump stopped the device the live pump owns (%d stops)", holder.stops)
 	}
 }
 
@@ -5310,5 +5304,15 @@ func TestMeterResponseCarriesTxStatus(t *testing.T) {
 	mutex.Unlock()
 	if got := currentMeterResponse().TXStatus; got != "Inferno TX ready (PI9696-TX)" {
 		t.Errorf("meter TXStatus = %q, want ready line", got)
+	}
+}
+
+func TestTxSilenceFramesCoversRing(t *testing.T) {
+	// The inferno plugin reported a 2048-frame ring at 48kHz (40ms hint).
+	if got := txSilenceFrames(48000); got < 2048+txPumpFrames {
+		t.Errorf("txSilenceFrames(48000) = %d, want >= %d", got, 2048+txPumpFrames)
+	}
+	if got := txSilenceFrames(192000); got < 8192 {
+		t.Errorf("txSilenceFrames(192000) = %d, want >= 8192", got)
 	}
 }
