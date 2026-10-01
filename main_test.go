@@ -4908,7 +4908,7 @@ func TestBuildPlaybackCmdSelection(t *testing.T) {
 	mutex.Unlock()
 	cmd, stdout, via := buildPlaybackCmd("take.wav", 0)
 	if via || stdout != nil {
-		t.Error("no holder: buildPlaybackCmd selected Dante")
+		t.Error("no holder: buildPlaybackCmd selected inferno")
 	}
 	if !strings.Contains(strings.Join(cmd.Args, " "), "default") {
 		t.Errorf("no holder: local cmd = %q, want the default-ALSA command", cmd.Args)
@@ -4920,7 +4920,7 @@ func TestBuildPlaybackCmdSelection(t *testing.T) {
 	mutex.Unlock()
 	_, _, via = buildPlaybackCmd("take.wav", 0)
 	if via {
-		t.Error("unready holder: buildPlaybackCmd selected Dante")
+		t.Error("unready holder: buildPlaybackCmd selected inferno")
 	}
 
 	// Ready: decode-to-stdout for the pump.
@@ -4929,7 +4929,7 @@ func TestBuildPlaybackCmdSelection(t *testing.T) {
 	mutex.Unlock()
 	cmd, stdout, via = buildPlaybackCmd("take.wav", 5*time.Second)
 	if !via || stdout == nil {
-		t.Fatal("ready holder: buildPlaybackCmd did not select Dante")
+		t.Fatal("ready holder: buildPlaybackCmd did not select inferno")
 	}
 	args := strings.Join(cmd.Args, " ")
 	for _, want := range []string{"-f s32le", "-ac 2", "-ar 48000", "-ss 5.000"} {
@@ -5230,10 +5230,10 @@ func TestTxStatusText(t *testing.T) {
 		wantShort string
 		wantLong  string
 	}{
-		{"ready", &fakeTxHolder{}, true, false, "ready", "Dante TX ready (PI9696-TX)"},
-		{"no clock", &fakeTxHolder{}, false, false, "no clock", "Dante TX: waiting for clock"},
-		{"demo", nil, false, true, "off", "Dante TX off (demo mode)"},
-		{"absent", nil, false, false, "off", "Dante TX unavailable (no device)"},
+		{"ready", &fakeTxHolder{}, true, false, "ready", "Inferno TX ready (PI9696-TX)"},
+		{"no clock", &fakeTxHolder{}, false, false, "no clock", "Inferno TX: waiting for clock"},
+		{"demo", nil, false, true, "off", "Inferno TX off (demo mode)"},
+		{"absent", nil, false, false, "off", "Inferno TX unavailable (no device)"},
 	} {
 		mutex.Lock()
 		txHolder, txHolderReady = tc.holder, tc.ready
@@ -5272,7 +5272,7 @@ func TestAudioMenuTxRowClick(t *testing.T) {
 // element the meter tick updates and the JS that updates it.
 func TestTxStatusDashboardWiring(t *testing.T) {
 	var buf bytes.Buffer
-	v := statusView{Format: "WAV", SampleRate: 48, Channels: 2, TXStatus: "Dante TX ready (PI9696-TX)"}
+	v := statusView{Format: "WAV", SampleRate: 48, Channels: 2, TXStatus: "Inferno TX ready (PI9696-TX)"}
 	if err := statusTmpl.Execute(&buf, v); err != nil {
 		t.Fatalf("status render: %v", err)
 	}
@@ -5308,7 +5308,7 @@ func TestMeterResponseCarriesTxStatus(t *testing.T) {
 	txHolder, txHolderReady = &fakeTxHolder{}, true
 	deviceName = "PI9696"
 	mutex.Unlock()
-	if got := currentMeterResponse().TXStatus; got != "Dante TX ready (PI9696-TX)" {
+	if got := currentMeterResponse().TXStatus; got != "Inferno TX ready (PI9696-TX)" {
 		t.Errorf("meter TXStatus = %q, want ready line", got)
 	}
 }

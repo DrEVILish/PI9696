@@ -185,7 +185,7 @@ func ensureTxHolder() {
 		// Dante playback is unavailable and takes fall back to local ALSA.
 		// A clock-less Dante LAN is the other case, but that fails at
 		// warmup, not here.
-		logInfof("TX holder unavailable (%v) - Dante playback off, local fallback", err)
+		logInfof("TX holder unavailable (%v) - Inferno playback off, local fallback", err)
 		return
 	}
 	mutex.Lock()
@@ -238,13 +238,13 @@ func txStatusLocked() (short, long string) {
 	name := sanitizeDanteName(deviceName) + "-TX"
 	switch {
 	case txHolder != nil && txHolderReady:
-		return "ready", "Dante TX ready (" + name + ")"
+		return "ready", "Inferno TX ready (" + name + ")"
 	case txHolder != nil:
-		return "no clock", "Dante TX: waiting for clock"
+		return "no clock", "Inferno TX: waiting for clock"
 	case demoMode:
-		return "off", "Dante TX off (demo mode)"
+		return "off", "Inferno TX off (demo mode)"
 	default:
-		return "off", "Dante TX unavailable (no device)"
+		return "off", "Inferno TX unavailable (no device)"
 	}
 }
 
@@ -299,7 +299,7 @@ func buildPlaybackCmd(file string, pos time.Duration) (cmd *exec.Cmd, stdout io.
 		if c, out, err := dantePlaybackCmdFor(file, pos); err == nil {
 			return c, out, true
 		} else {
-			logWarnf("Dante playback unavailable (%v), falling back to local ALSA", err)
+			logWarnf("Inferno playback unavailable (%v), falling back to local ALSA", err)
 		}
 	}
 	return playbackCmdFor(file, pos), nil, false
@@ -391,8 +391,8 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 			return
 		}
 	}
-	logErrorf("Dante playback output failed - stopping take")
-	showWebNotice("Dante playback output failed - take stopped")
+	logErrorf("Inferno playback output failed - stopping take")
+	showWebNotice("Inferno playback output failed - take stopped")
 	if cmd.Process != nil {
 		signalTERM(cmd.Process, "playback (TX sink failed)")
 	}

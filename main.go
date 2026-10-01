@@ -3357,7 +3357,7 @@ func startPlayback() {
 	if !demoMode && txHolder != nil && !txHolderReady {
 		logErrorf("startPlayback refused: TX clock not ready")
 		showSysNotice("TX no clock")
-		showWebNotice("Dante TX clock not ready - playback refused, retrying clock")
+		showWebNotice("Inferno TX clock not ready - playback refused, retrying clock")
 		go ensureTxHolder()
 		return
 	}
