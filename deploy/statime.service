@@ -1,0 +1,22 @@
+[Unit]
+Description=statime PTP clock for Inferno (PI9696)
+Documentation=https://github.com/teodly/statime
+# The network clock. Recording is refused until this reports a locked slave
+# (see clocksync.go). Mutually exclusive with the single-host stub
+# (pi9696-clock.service): both would serve /tmp/ptp-usrvclock.
+Conflicts=pi9696-clock.service
+After=network-online.target
+Wants=network-online.target
+Before=pi9696.service
+
+[Service]
+Type=simple
+# /run/statime holds the observation socket the recording gate polls.
+RuntimeDirectory=statime
+WorkingDirectory=__PI9696_DIR__/statime
+ExecStart=__PI9696_DIR__/statime/target/release/statime -c __PI9696_DIR__/deploy/statime.toml
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+# statime (teodly/statime, inferno-dev) for PI9696 - the network clock that
+# the recording gate checks (clocksync.go). Installed at
+# __PI9696_DIR__/deploy/statime.toml by deploy/statime.service.
+#
+# PTPv1 is what hardware inferno-network devices lead with. On a LAN with no
+# hardware leader, statime cannot be a PTPv1 master ("not implemented yet") -
+# see DEPLOYMENT.md "Two inferno hosts, no hardware device" for the PTPv2
+# master/slave recipe.
+loglevel = "info"
+sdo-id = 0
+domain = 0
+# Above the 249 hardware devices use, so a hardware leader always wins BMCA.
+priority1 = 251
+virtual-system-clock = true
+virtual-system-clock-base = "monotonic_raw"
+# The usrvclock overlay inferno reads (/tmp/ptp-usrvclock). Only a slave
+# exports: a master never steers its clock.
+usrvclock-export = true
+
+[[port]]
+interface = "eth0"
+network-mode = "ipv4"
+# auto: the Pi 5's /dev/ptp0 when present, software timestamping on a Pi 4.
+hardware-clock = "auto"
+protocol-version = "PTPv1"
+
+[observability]
+# Port state + offset_from_master, read once a second by the recording gate.
+observation-path = "/run/statime/observation.sock"

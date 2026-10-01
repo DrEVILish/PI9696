@@ -8,12 +8,11 @@ After=network.target sound.target local-fs.target
 Wants=sound.target
 RequiresMountsFor=/rec
 # Inferno refuses to transmit without a clock overlay exported on the usrvclock
-# socket (/tmp/ptp-usrvclock by default). The clock source is a separate unit:
-# statime on a LAN with a PTP grandmaster, or a stub where there is none. See
-# DEPLOYMENT.md. Wants, not Requires, so a missing clock still leaves the
-# WebUI and the receiver path usable.
-Wants=pi9696-clock.service
-After=pi9696-clock.service
+# socket (/tmp/ptp-usrvclock by default). The clock is a separate, separately
+# enabled unit: statime.service (network PTP; required for recording) or
+# pi9696-clock.service (single-host stub). Ordering only - no Wants=: pulling
+# the stub in from here would replace a running statime on every app restart.
+After=pi9696-clock.service statime.service
 
 [Service]
 Type=simple
