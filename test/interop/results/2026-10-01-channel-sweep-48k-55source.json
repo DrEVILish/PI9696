@@ -1,0 +1,1129 @@
+{
+ "round": 3,
+ "date": "2026-10-01",
+ "source": "192.0.2.55 (Pi 4) ITEST-SRC, inferno ALSA plugin with U13 + test-only no-dither patches, aplay --buffer-time=2000000 from 48 ch",
+ "unit": "192.0.2.69 HEAD 75425c8 SIM mode, inferno2pipe with U13 patch, statime PTPv2 slave to 192.0.2.55",
+ "subscribe": "netaudio subscription add --tx ITEST-SRC --rx PI9696",
+ "note": "1-32 ch from the first run (control receiver on .55 included); 48-128 ch from the rerun with the deeper source buffer and no control",
+ "results": [
+  {
+   "channels": 1,
+   "subscribe": [
+    "netaudio rc=0 verified=1 already=0"
+   ],
+   "channels_with_signal_before_take": 1,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 38.34,
+     "max": 65.0,
+     "min": 29.0
+    },
+    "app_rss_mb": {
+     "avg": 27.67,
+     "max": 28.6,
+     "min": 25.1
+    },
+    "cpu_total_pct": {
+     "avg": 12.26,
+     "max": 23.4,
+     "min": 8.3
+    },
+    "disk_write_mb_s": {
+     "avg": 0.15,
+     "max": 3.72,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 1.12,
+     "max": 4.0,
+     "min": 0.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 48.24,
+     "max": 48.4,
+     "min": 45.8
+    },
+    "iowait_pct": {
+     "avg": 0.12,
+     "max": 1.5,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 0.45,
+     "max": 0.69,
+     "min": 0.3
+    },
+    "memavail_mb": {
+     "avg": 3184.0,
+     "max": 3188,
+     "min": 3180
+    },
+    "softirq_pct": {
+     "avg": 0.46,
+     "max": 5.6,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 53.99,
+     "max": 55.504,
+     "min": 52.582
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 1520.73,
+     "max": 1533,
+     "min": 1516
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_162345_ch1_48kHz.wav",
+   "wav_bytes": 8675464,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.245,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   },
+   "control": {
+    "verdict": "PASS",
+    "capture_seconds": 95.753,
+    "bit_exact_ratio": 1.0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "error": null
+   }
+  },
+  {
+   "channels": 2,
+   "subscribe": [
+    "netaudio rc=0 verified=1 already=1"
+   ],
+   "channels_with_signal_before_take": 2,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 38.74,
+     "max": 61.0,
+     "min": 29.0
+    },
+    "app_rss_mb": {
+     "avg": 27.65,
+     "max": 28.9,
+     "min": 25.6
+    },
+    "cpu_total_pct": {
+     "avg": 12.1,
+     "max": 20.1,
+     "min": 8.5
+    },
+    "disk_write_mb_s": {
+     "avg": 0.29,
+     "max": 10.75,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 1.93,
+     "max": 8.0,
+     "min": 0.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 49.36,
+     "max": 49.6,
+     "min": 45.9
+    },
+    "iowait_pct": {
+     "avg": 0.09,
+     "max": 0.7,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 0.37,
+     "max": 0.59,
+     "min": 0.23
+    },
+    "memavail_mb": {
+     "avg": 3180.24,
+     "max": 3186,
+     "min": 3174
+    },
+    "softirq_pct": {
+     "avg": 0.16,
+     "max": 3.3,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 54.61,
+     "max": 55.991,
+     "min": 53.069
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 1520.56,
+     "max": 1541,
+     "min": 1516
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_162558_ch2_48kHz.wav",
+   "wav_bytes": 17350792,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.245,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   },
+   "control": {
+    "verdict": "FAIL",
+    "capture_seconds": 98.451,
+    "bit_exact_ratio": 0.9148724489795919,
+    "channels_with_errors": 1,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "error": null
+   }
+  },
+  {
+   "channels": 4,
+   "subscribe": [
+    "netaudio rc=0 verified=2 already=2"
+   ],
+   "channels_with_signal_before_take": 4,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 37.18,
+     "max": 57.0,
+     "min": 29.0
+    },
+    "app_rss_mb": {
+     "avg": 28.03,
+     "max": 29.0,
+     "min": 26.6
+    },
+    "cpu_total_pct": {
+     "avg": 12.43,
+     "max": 23.5,
+     "min": 9.0
+    },
+    "disk_write_mb_s": {
+     "avg": 0.56,
+     "max": 12.58,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 3.6,
+     "max": 16.0,
+     "min": 0.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 51.6,
+     "max": 51.9,
+     "min": 46.3
+    },
+    "iowait_pct": {
+     "avg": 0.13,
+     "max": 2.5,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 0.47,
+     "max": 0.64,
+     "min": 0.29
+    },
+    "memavail_mb": {
+     "avg": 3171.85,
+     "max": 3183,
+     "min": 3167
+    },
+    "softirq_pct": {
+     "avg": 0.18,
+     "max": 3.3,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 55.0,
+     "max": 56.478,
+     "min": 54.043
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 1519.79,
+     "max": 1533,
+     "min": 1515
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_162819_ch4_48kHz.wav",
+   "wav_bytes": 34701448,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.245,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   },
+   "control": {
+    "verdict": "FAIL",
+    "capture_seconds": 102.221,
+    "bit_exact_ratio": 0.9192116013071896,
+    "channels_with_errors": 2,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "error": null
+   }
+  },
+  {
+   "channels": 8,
+   "subscribe": [
+    "netaudio rc=0 verified=4 already=4"
+   ],
+   "channels_with_signal_before_take": 8,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 41.39,
+     "max": 64.0,
+     "min": 29.0
+    },
+    "app_rss_mb": {
+     "avg": 28.08,
+     "max": 29.1,
+     "min": 26.9
+    },
+    "cpu_total_pct": {
+     "avg": 14.24,
+     "max": 27.2,
+     "min": 9.4
+    },
+    "disk_write_mb_s": {
+     "avg": 1.13,
+     "max": 23.07,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 6.84,
+     "max": 26.0,
+     "min": 0.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 54.85,
+     "max": 55.2,
+     "min": 47.1
+    },
+    "iowait_pct": {
+     "avg": 0.09,
+     "max": 5.0,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 0.73,
+     "max": 0.89,
+     "min": 0.27
+    },
+    "memavail_mb": {
+     "avg": 3178.03,
+     "max": 3189,
+     "min": 3172
+    },
+    "softirq_pct": {
+     "avg": 0.22,
+     "max": 5.5,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 55.12,
+     "max": 56.478,
+     "min": 54.043
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 1522.34,
+     "max": 1539,
+     "min": 1516
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_163045_ch8_48kHz.wav",
+   "wav_bytes": 69501064,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.331,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   },
+   "control": {
+    "verdict": "FAIL",
+    "capture_seconds": 99.111,
+    "bit_exact_ratio": 0.9120202020202021,
+    "channels_with_errors": 4,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "error": null
+   }
+  },
+  {
+   "channels": 16,
+   "subscribe": [
+    "netaudio rc=0 verified=8 already=8"
+   ],
+   "channels_with_signal_before_take": 16,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 37.81,
+     "max": 61.0,
+     "min": 29.0
+    },
+    "app_rss_mb": {
+     "avg": 28.47,
+     "max": 30.0,
+     "min": 26.9
+    },
+    "cpu_total_pct": {
+     "avg": 16.41,
+     "max": 28.4,
+     "min": 9.6
+    },
+    "disk_write_mb_s": {
+     "avg": 2.25,
+     "max": 37.75,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 12.09,
+     "max": 20.0,
+     "min": 7.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 53.32,
+     "max": 53.4,
+     "min": 48.6
+    },
+    "iowait_pct": {
+     "avg": 0.35,
+     "max": 11.2,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 0.93,
+     "max": 1.08,
+     "min": 0.71
+    },
+    "memavail_mb": {
+     "avg": 3150.27,
+     "max": 3164,
+     "min": 3138
+    },
+    "softirq_pct": {
+     "avg": 0.68,
+     "max": 6.3,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 56.08,
+     "max": 57.452,
+     "min": 55.017
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 3037.48,
+     "max": 3076,
+     "min": 3029
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_163337_ch16_48kHz.wav",
+   "wav_bytes": 138805384,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.245,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   },
+   "control": {
+    "verdict": "FAIL",
+    "capture_seconds": 96.519,
+    "bit_exact_ratio": 0.9138125,
+    "channels_with_errors": 9,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "error": null
+   }
+  },
+  {
+   "channels": 24,
+   "subscribe": [
+    "netaudio rc=0 verified=8 already=16"
+   ],
+   "channels_with_signal_before_take": 24,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 36.85,
+     "max": 46.0,
+     "min": 31.0
+    },
+    "app_rss_mb": {
+     "avg": 28.52,
+     "max": 30.2,
+     "min": 26.7
+    },
+    "cpu_total_pct": {
+     "avg": 17.05,
+     "max": 31.2,
+     "min": 13.9
+    },
+    "disk_write_mb_s": {
+     "avg": 3.36,
+     "max": 37.22,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 18.16,
+     "max": 37.0,
+     "min": 12.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 56.37,
+     "max": 56.5,
+     "min": 50.0
+    },
+    "iowait_pct": {
+     "avg": 0.46,
+     "max": 17.5,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 0.86,
+     "max": 0.99,
+     "min": 0.48
+    },
+    "memavail_mb": {
+     "avg": 3100.98,
+     "max": 3118,
+     "min": 3089
+    },
+    "softirq_pct": {
+     "avg": 0.58,
+     "max": 6.6,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 57.29,
+     "max": 58.426,
+     "min": 55.504
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 4548.05,
+     "max": 4569,
+     "min": 4543
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_163701_ch24_48kHz.wav",
+   "wav_bytes": 207618184,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.075,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   },
+   "control": {
+    "verdict": "FAIL",
+    "capture_seconds": 101.249,
+    "bit_exact_ratio": 0.940303264604811,
+    "channels_with_errors": 17,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "error": null
+   }
+  },
+  {
+   "channels": 32,
+   "subscribe": [
+    "netaudio rc=0 verified=8 already=24"
+   ],
+   "channels_with_signal_before_take": 32,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 38.44,
+     "max": 60.0,
+     "min": 32.0
+    },
+    "app_rss_mb": {
+     "avg": 29.66,
+     "max": 31.2,
+     "min": 27.8
+    },
+    "cpu_total_pct": {
+     "avg": 20.39,
+     "max": 29.6,
+     "min": 15.4
+    },
+    "disk_write_mb_s": {
+     "avg": 4.0,
+     "max": 37.74,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 22.76,
+     "max": 33.0,
+     "min": 15.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 58.78,
+     "max": 59.1,
+     "min": 58.2
+    },
+    "iowait_pct": {
+     "avg": 0.05,
+     "max": 2.6,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 0.66,
+     "max": 1.08,
+     "min": 0.41
+    },
+    "memavail_mb": {
+     "avg": 3096.39,
+     "max": 3127,
+     "min": 3080
+    },
+    "softirq_pct": {
+     "avg": 1.03,
+     "max": 5.7,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 57.99,
+     "max": 59.4,
+     "min": 56.965
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 6068.66,
+     "max": 6147,
+     "min": 6057
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_164054_ch32_48kHz.wav",
+   "wav_bytes": 278397064,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.416,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   },
+   "control": {
+    "verdict": "FAIL",
+    "capture_seconds": 90.115,
+    "bit_exact_ratio": 0.965732421875,
+    "channels_with_errors": 24,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "error": null
+   }
+  },
+  {
+   "channels": 48,
+   "subscribe": [
+    "netaudio rc=0 verified=0 already=48"
+   ],
+   "channels_with_signal_before_take": 48,
+   "clock": "Synced (PTP slave, -1\u00b5s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 38.03,
+     "max": 46.0,
+     "min": 33.0
+    },
+    "app_rss_mb": {
+     "avg": 30.96,
+     "max": 32.1,
+     "min": 29.5
+    },
+    "cpu_total_pct": {
+     "avg": 23.49,
+     "max": 38.3,
+     "min": 18.1
+    },
+    "disk_write_mb_s": {
+     "avg": 6.01,
+     "max": 37.75,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 34.07,
+     "max": 40.0,
+     "min": 23.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 65.71,
+     "max": 75.0,
+     "min": 62.7
+    },
+    "iowait_pct": {
+     "avg": 1.88,
+     "max": 40.4,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 1.19,
+     "max": 1.51,
+     "min": 0.94
+    },
+    "memavail_mb": {
+     "avg": 3004.53,
+     "max": 3025,
+     "min": 2984
+    },
+    "softirq_pct": {
+     "avg": 0.85,
+     "max": 8.7,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 59.13,
+     "max": 60.374,
+     "min": 56.965
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 9113.03,
+     "max": 9192,
+     "min": 9087
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_170245_ch48_48kHz.wav",
+   "wav_bytes": 415236232,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.075,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   }
+  },
+  {
+   "channels": 64,
+   "subscribe": [
+    "netaudio rc=0 verified=0 already=64"
+   ],
+   "channels_with_signal_before_take": 64,
+   "clock": "Synced (PTP slave, 1\u00b5s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 38.21,
+     "max": 45.0,
+     "min": 33.0
+    },
+    "app_rss_mb": {
+     "avg": 31.43,
+     "max": 33.1,
+     "min": 29.7
+    },
+    "cpu_total_pct": {
+     "avg": 30.26,
+     "max": 45.4,
+     "min": 22.8
+    },
+    "disk_write_mb_s": {
+     "avg": 5.36,
+     "max": 36.18,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 46.5,
+     "max": 55.0,
+     "min": 35.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 65.97,
+     "max": 66.0,
+     "min": 65.8
+    },
+    "iowait_pct": {
+     "avg": 0.3,
+     "max": 11.6,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 1.21,
+     "max": 1.3,
+     "min": 1.12
+    },
+    "memavail_mb": {
+     "avg": 2991.45,
+     "max": 3016,
+     "min": 2976
+    },
+    "softirq_pct": {
+     "avg": 2.61,
+     "max": 12.8,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 59.01,
+     "max": 59.887,
+     "min": 57.939
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 12143.82,
+     "max": 12299,
+     "min": 12115
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_170529_ch64_48kHz.wav",
+   "wav_bytes": 556793992,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.416,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   }
+  },
+  {
+   "channels": 96,
+   "subscribe": [
+    "netaudio rc=0 verified=32 already=64"
+   ],
+   "channels_with_signal_before_take": 96,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 40.15,
+     "max": 47.0,
+     "min": 32.0
+    },
+    "app_rss_mb": {
+     "avg": 32.12,
+     "max": 33.8,
+     "min": 30.2
+    },
+    "cpu_total_pct": {
+     "avg": 38.66,
+     "max": 66.5,
+     "min": 11.8
+    },
+    "disk_write_mb_s": {
+     "avg": 10.18,
+     "max": 36.44,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 71.07,
+     "max": 82.0,
+     "min": 53.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 84.38,
+     "max": 84.4,
+     "min": 84.3
+    },
+    "iowait_pct": {
+     "avg": 0.83,
+     "max": 29.7,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 1.72,
+     "max": 1.93,
+     "min": 1.55
+    },
+    "memavail_mb": {
+     "avg": 2879.13,
+     "max": 2940,
+     "min": 2848
+    },
+    "softirq_pct": {
+     "avg": 2.14,
+     "max": 13.7,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 59.84,
+     "max": 61.348,
+     "min": 58.913
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 18227.21,
+     "max": 18583,
+     "min": 18161
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_171359_ch96_48kHz.wav",
+   "wav_bytes": 841089160,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.843,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   }
+  },
+  {
+   "channels": 128,
+   "subscribe": [
+    "netaudio rc=0 verified=32 already=96"
+   ],
+   "channels_with_signal_before_take": 128,
+   "clock": "Synced (PTP slave, 0s)",
+   "throttled": "throttled=0x0",
+   "inferno_lost_samples_during_take": 0,
+   "metrics": {
+    "app_cpu_pct": {
+     "avg": 43.34,
+     "max": 53.0,
+     "min": 31.0
+    },
+    "app_rss_mb": {
+     "avg": 33.66,
+     "max": 35.2,
+     "min": 31.7
+    },
+    "cpu_total_pct": {
+     "avg": 58.09,
+     "max": 79.6,
+     "min": 10.6
+    },
+    "disk_write_mb_s": {
+     "avg": 14.6,
+     "max": 37.51,
+     "min": 0.0
+    },
+    "ffmpeg_rec_cpu_pct": {
+     "avg": 103.31,
+     "max": 176.0,
+     "min": 57.0
+    },
+    "ffmpeg_rec_rss_mb": {
+     "avg": 84.05,
+     "max": 90.8,
+     "min": 82.6
+    },
+    "iowait_pct": {
+     "avg": 1.12,
+     "max": 49.5,
+     "min": 0.0
+    },
+    "load1": {
+     "avg": 1.73,
+     "max": 2.04,
+     "min": 1.15
+    },
+    "memavail_mb": {
+     "avg": 2749.62,
+     "max": 2845,
+     "min": 2714
+    },
+    "softirq_pct": {
+     "avg": 4.64,
+     "max": 15.4,
+     "min": 0.0
+    },
+    "temp_c": {
+     "avg": 62.29,
+     "max": 64.27,
+     "min": 59.887
+    },
+    "udp_in_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    },
+    "udp_in_per_s": {
+     "avg": 24474.89,
+     "max": 25355,
+     "min": 24229
+    },
+    "udp_rcvbuf_err": {
+     "avg": 0.0,
+     "max": 0,
+     "min": 0
+    }
+   },
+   "wav": "/rec/2026-10-01/recording_20261001_172616_ch128_48kHz.wav",
+   "wav_bytes": 1113587848,
+   "compare": {
+    "verdict": "PASS",
+    "capture_seconds": 60.416,
+    "bit_exact_ratio": 1.0,
+    "max_abs_error_lsb24": 0,
+    "channels_with_errors": 0,
+    "offset_changes": [],
+    "silent_segments_inside_audio": 0,
+    "leading_silence_s": 0.0,
+    "channel_mapping_problems": {},
+    "error": null
+   }
+  }
+ ]
+}

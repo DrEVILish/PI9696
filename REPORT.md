@@ -1,7 +1,62 @@
 # PI9696 inferno interop test — report
 
-**Round 2:** 2026-10-01, the owner follow-ups below. **Round 1:** 2026-09-30, from "Round 1 summary" onward.
-**Unit under test:** pi9696-test (192.0.2.69, Raspberry Pi 4, the target hardware). **Second host:** the dev server (192.0.2.162, x86_64 VM); 192.0.2.55 is still unavailable.
+**Round 3:** 2026-10-01 evening, the owner's U13 challenge and the .55 source. **Round 2:** 2026-10-01, from "Round 2 — summary". **Round 1:** 2026-09-30, from "Round 1 summary" onward.
+**Unit under test:** pi9696-test (192.0.2.69, Raspberry Pi 4, the target hardware). **Second hosts:** the dev server (192.0.2.162, x86_64 VM) and, from round 3, 192.0.2.55 (Raspberry Pi 4, Debian 12).
+
+## Round 3 — summary
+
+| Item | Outcome |
+|---|---|
+| Owner: "U13 is not true, unless it's an inferno bug" | **The owner was right that U13 overstated it; it is an inferno bug, but a different one.** Stock *transmitters* route fine above 16 ch; *receivers* do not (RX pages 32 where netaudio takes 16), and any short last page is padded, which netaudio rejects (stock TX at 33, 48, 65, 127 ch). Corrected patch (`5be335c`) verified at RX/TX 1–128 ch and on the unit through netaudio; details in "Correction: U13" below and INFERNO-UPSTREAM.md U13 |
+| U8 as the cause of the >32 ch pre-read failure | **Withdrawn.** It was the padding half of U13. A 64-ch patched receiver sharing 192.0.2.69 with PI9696 and PI9696-TX subscribes and verifies through netaudio |
+| U7 (plugin buffer cap) | **Withdrawn** (`450cddd`): the plugin allows 65,536 frames at any channel count. This also undoes the round-2 argument against a deeper TX buffer for F2 (the owner's `7f9ae62` on `origin/main`) |
+| Channel sweep with .55 as the source | **1–128 ch, every count 100% bit-exact, no drops or slips, zero inferno sample losses**, subscribed with plain `netaudio subscription add` (every channel verified). The round-2 residual bursts at 32/64/96/128 were the VM source |
+| Interop tooling | `channel_list_check.sh`, `arc_page_check.py` (`8375a8a`); sweep subscribes via netaudio and takes source env/aplay options (`75425c8`, `6842da6`) |
+
+### Channel sweep, round 3 (48 kHz, 60 s per count, .55 as source)
+
+Source: `ITEST-SRC` on 192.0.2.55, built from the fork with the U13 patch
+and the test-only no-dither patch (loaded from a private `.asoundrc`; the
+host's installed plugin is untouched), N channels of the deterministic 24-bit
+signal. Clock: statime PTPv2 master on .55 (with the stub for its own
+inferno), statime PTPv2 slave on the unit (gate: `Synced (PTP slave, 0–1 µs)`
+at every take). Unit: `HEAD` build in SIM mode, `inferno2pipe` with the U13
+patch. Subscription: `netaudio subscription add --tx ITEST-SRC --rx PI9696`.
+Every sample of every channel compared. Data:
+`test/interop/results/2026-10-01-channel-sweep-48k-55source.json`.
+
+| Ch | Bit-exact | Drops / slips | Take | CPU (4 cores) | Rec ffmpeg (1 core = 100%) | App | iowait | MemAvail min | SD write | UDP in/s | UDP rcvbuf err | inferno lost | Temp max | Throttled |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | **100%** | 0 | 60.2 s | 12.3% | 1.1% | 38% | 0.1% | 3180 MB | 0.15 MB/s | 1521 | 0 | 0 | 56 °C | no |
+| 2 | **100%** | 0 | 60.2 s | 12.1% | 1.9% | 39% | 0.1% | 3174 MB | 0.29 MB/s | 1521 | 0 | 0 | 56 °C | no |
+| 4 | **100%** | 0 | 60.2 s | 12.4% | 3.6% | 37% | 0.1% | 3167 MB | 0.56 MB/s | 1520 | 0 | 0 | 56 °C | no |
+| 8 | **100%** | 0 | 60.3 s | 14.2% | 6.8% | 41% | 0.1% | 3172 MB | 1.13 MB/s | 1522 | 0 | 0 | 56 °C | no |
+| 16 | **100%** | 0 | 60.2 s | 16.4% | 12.1% | 38% | 0.3% | 3138 MB | 2.25 MB/s | 3037 | 0 | 0 | 57 °C | no |
+| 24 | **100%** | 0 | 60.1 s | 17.1% | 18.2% | 37% | 0.5% | 3089 MB | 3.36 MB/s | 4548 | 0 | 0 | 58 °C | no |
+| 32 | **100%** | 0 | 60.4 s | 20.4% | 22.8% | 38% | 0.1% | 3080 MB | 4.00 MB/s | 6069 | 0 | 0 | 59 °C | no |
+| 48 | **100%** | 0 | 60.1 s | 23.5% | 34.1% | 38% | 1.9% | 2984 MB | 6.01 MB/s | 9113 | 0 | 0 | 60 °C | no |
+| 64 | **100%** | 0 | 60.4 s | 30.3% | 46.5% | 38% | 0.3% | 2976 MB | 5.36 MB/s | 12144 | 0 | 0 | 60 °C | no |
+| 96 | **100%** | 0 | 60.8 s | 38.7% | 71.1% | 40% | 0.8% | 2848 MB | 10.18 MB/s | 18227 | 0 | 0 | 61 °C | no |
+| 128 | **100%** | 0 | 60.4 s | 58.1% | 103% | 43% | 1.1% | 2714 MB | 14.6 MB/s | 24475 | 0 | 0 | 64 °C | no |
+
+Notes:
+- **What changed against round 2:** only the source (.55 instead of the VM) and the U13 fix (netaudio instead of raw ARC). The unit build and metering are the same, and its numbers (CPU, ffmpeg, RAM, temperature) match round 2 within noise. The bursts and the 236,672 lost samples at 128 ch in round 2 are gone, so they came from the VM source.
+- **SD write** is the 60 s average; the round-2 projection (SD caps 96 kHz at ~93 ch, 192 kHz at ~46 ch) still stands unmeasured.
+- **First attempt at 48 ch failed at the source**, not the unit: .55's `aplay` underran 109 times (gaps of 0.4–37 s), and both the unit and a control receiver on .55 saw it. .55 runs a signage browser and was swapping, so a stall of a few hundred ms is enough to drain a 341 ms default buffer. With `--buffer-time=2000000` (65,536 frames) the source never underran; 48–128 ch above are from that rerun, without the control receiver (its capture doubles .55's SD traffic).
+- **Control receiver "FAIL" at 2–32 ch is a harness artifact.** The control capture on .55 starts ~35 s before the take, before its own netaudio subscription has finished, and every mismatch falls in its first 12–17 s (e.g. 8 ch: 18 mismatched 1 s segments, all between 0 and 17 s, 91.2% overall); after that it is bit-exact. `channel_sweep.py` should compare the control over the take window only.
+
+### State left behind (round 3)
+
+- **Unit (.69):** `pi9696.service` back on the `HEAD` build with stock inferno and the stub clock (statime installed, disabled), config 2 ch / 48 kHz, `/rec` empty, PI9696's 128 sweep subscriptions archived to `/var/tmp/pi9696-work/archive/rx_subscriptions.round3.toml`. Kept: the patched receiver build `/var/tmp/pi9696-work/inferno-u13/` (U13+U1+U2) and `statime-slave-ptpv2.toml` for the next run. `gh` stays installed (owner decision).
+- **.55:** test units stopped, the host's inferno plugin and stubs untouched; sweep sources deleted; kept in `/var/tmp/pi9696-work/`: the patched source tree `inferno-src/` (U13 + test-only no-dither), a statime build, `statime-master.toml`, and the compare JSONs.
+- **Dev (.162):** test devices and the stub stopped; the patched tree `/opt/inferno-src/inferno-u13/` and the U13 captures in `/var/tmp/pi9696-work/u13/` kept.
+
+### Next steps (round 3)
+
+1. Land `inferno-patches/0001-…` (U13 + U1 + U2) in the inferno fork; it is the only thing between a stock unit and >16-channel routing.
+2. Merge `origin/main` (`db52405` docs, `7f9ae62` TX buffer 120 ms) and re-measure F2 with `tx_test.sh`; with U7 withdrawn, a deeper buffer is a legitimate fix.
+3. Compare the control receiver over the take window only (harness fix).
+4. 96/192 kHz sweep from .55 to check the SD-bandwidth projection.
 
 ## Round 2 — summary
 
