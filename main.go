@@ -2850,13 +2850,10 @@ func startRecording() {
 		args = append(args, "-metadata", "comment="+tag)
 	}
 
-	// astats+ametadata=print is a pass-through filter chain - it reads
-	// samples and prints level stats without altering them (verified
-	// against a real FIFO: file duration/size identical with and without
-	// it) - piped to this process's own stdout (file=-) rather than mixed
-	// into ffmpeg's stderr logging, so the parsing goroutine below only
-	// ever sees clean "key=value" lines.
-	args = append(args, "-af", "astats=metadata=1:reset=1,ametadata=print:file=-")
+	// The meter chain is pass-through (samples unchanged - see
+	// meterFilterChain), printing to this process's own stdout (file=-)
+	// rather than ffmpeg's stderr, so the parser only sees key=value lines.
+	args = append(args, "-af", meterFilterChain(sampleRate))
 
 	args = append(args, recordingFile)
 
@@ -2972,6 +2969,20 @@ func startRecording() {
 // "lavfi.astats.3.Peak_level=-6.020600" for channel 3 - distinct from the
 // "lavfi.astats.Overall.*" lines, which stay a plain prefix check below
 // since they don't need a captured index.
+// meterFilterChain is the level-meter pass-through shared by the recorder
+// and the input monitor. Measured on a Pi 4 (10 s of audio), the old chain -
+// astats computing every statistic and printing per 1024-sample frame - was
+// the channel-count ceiling: recorder 0.76x realtime at 64 ch and 0.22x at
+// 128, monitor 0.43x at 64. Only Peak and RMS are needed, at 10 Hz:
+// asetnsamples re-chunks to 100 ms frames (pad=0 so the take is not padded;
+// verified bit-identical), and astats measures just those two. Result: 3.1x
+// realtime at 64 ch, 1.6x at 128, scaling linearly.
+func meterFilterChain(sampleRate int) string {
+	return fmt.Sprintf("asetnsamples=n=%d:pad=0,"+
+		"astats=metadata=1:reset=1:measure_perchannel=Peak_level+RMS_level:measure_overall=Peak_level+RMS_level,"+
+		"ametadata=print:file=-", sampleRate/10)
+}
+
 var meterChannelLineRe = regexp.MustCompile(`^lavfi\.astats\.(\d+)\.(Peak|RMS)_level=(.+)$`)
 
 // sanitizeMeterDB clamps a parsed astats level to a JSON-safe value. ffmpeg's
@@ -3102,7 +3113,11 @@ func startMonitor() {
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRates[sampleRateIdx]),
 		"-ac", fmt.Sprintf("%d", channelCount),
 		"-i", audioFifoPath(),
-		"-af", "astats=metadata=1:reset=1,ametadata=print:file=-",
+		"-af", meterFilterChain(sampleRates[sampleRateIdx]),
+		// 32-bit to the null muxer: its default pcm_s16le makes ffmpeg insert
+		// a resampler, which refuses more than 64 channels - the monitor then
+		// never ran, nothing drained the FIFO, and inferno2pipe stalled.
+		"-c:a", "pcm_s32le",
 		"-f", "null", "-")
 
 	stdout, err := cmd.StdoutPipe()
