@@ -2584,6 +2584,9 @@ func doStartInferno() {
 
 	cmd := exec.Command(binary, "-c", fmt.Sprintf("%d", channels), "-o", path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if stderr, err := cmd.StderrPipe(); err == nil {
+		go consumeInfernoStderr(stderr)
+	}
 	// Scrubbed base environment (see scrubbedInfernoEnv): the TX holder's
 	// INFERNO_* instance keys live in this process's env and must not leak
 	// into the pipe server. RATE/NAME are appended explicitly below, and -c
