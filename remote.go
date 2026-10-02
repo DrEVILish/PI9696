@@ -35,7 +35,7 @@ import (
 )
 
 // remoteToken gates every route except /login. It's generated fresh at each
-// process startup (never persisted to disk) and shown on the OLED via
+// process startup (never persisted to disk), printed to the journal, and shown on the OLED via
 // Settings -> Remote Access, so reading it requires physical/console access
 // to the device - the same trust model as the rest of this app's local-only
 // controls, just extended to the LAN.
@@ -590,6 +590,7 @@ func handleAPIRotateToken(w http.ResponseWriter, r *http.Request) {
 	newToken := remoteToken
 	mutex.Unlock()
 	logInfof("access token rotated, all sessions revoked")
+	fmt.Fprintln(os.Stderr, "remote access code (rotated):", formatToken(newToken))
 	http.SetCookie(w, &http.Cookie{Name: remoteSessionCookie, Path: "/", MaxAge: -1})
 	http.Redirect(w, r, "/login#t="+newToken, http.StatusSeeOther)
 }

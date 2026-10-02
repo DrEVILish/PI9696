@@ -1114,13 +1114,12 @@ func main() {
 	bootTime = time.Now()
 
 	remoteToken = generateRemoteToken()
-	// Sim mode has no hardware input path, so the OLED's Remote Access screen
-	// (the only place the token is displayed) is unreachable - print it
-	// directly to stderr instead (not through the leveled logger, which
-	// defaults to Error-only). Real hardware keeps the token OLED-only.
-	if isSimMode() {
-		fmt.Fprintln(os.Stderr, "sim mode: remote access token", formatToken(remoteToken))
-	}
+	// Printed to stderr (the journal under systemd), not through the leveled
+	// logger, which defaults to Error-only. The journal is readable only by
+	// root/adm/systemd-journal, i.e. people who already have the hardware or
+	// a root shell - the same trust boundary as the OLED's Remote Access
+	// screen. Sim mode has no OLED input path, so this is its only display.
+	fmt.Fprintln(os.Stderr, "remote access code:", formatToken(remoteToken))
 
 	setupHardwareCallbacks()
 	go infernoWorker()
