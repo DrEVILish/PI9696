@@ -149,7 +149,7 @@ Playback path:
 
 ### Auth & Security
 
-- Token (8-char, shown on OLED) → session cookie (12 h, server-side)
+- Token (8-char, shown on OLED and printed to the journal at startup/rotation: `journalctl -u pi9696 -b | grep "access code"`; root/adm only) → session cookie (12 h, server-side)
 - Login rate-limited per IP; token compared in constant time
 - Downloads whitelisted against recording list (no arbitrary file access)
 
@@ -223,7 +223,7 @@ go run ./cmd/simcheck        # render all OLED screens to /tmp/pi9696_shots/
 
 Sim facts:
 - Every frame dumped to `/tmp/pi9696_sim_frame.png` (override: `PI9696_SIM_OUT`)
-- Token printed to stderr: `sim mode: remote access token XX XX XXXX`
+- Token printed to stderr: `remote access code: XXXX XXXX`
 - Config path: `/tmp/pi9696-config.json` (vs `/etc/pi9696/config.json` on real Pi)
 - Recording requires `inferno/target/release/inferno2pipe` (build with `cargo build --release` in `inferno/`) and a running clock source — see DEPLOYMENT.md
 
