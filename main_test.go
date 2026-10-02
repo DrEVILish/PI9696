@@ -5368,3 +5368,28 @@ func TestTxSilenceFramesCoversRing(t *testing.T) {
 		t.Errorf("txSilenceFrames(192000) = %d, want >= 8192", got)
 	}
 }
+
+// render() holds the app mutex for the whole frame, so nothing it calls may
+// take the mutex again: Go mutexes are not re-entrant, and a nested Lock
+// wedges the render goroutine on itself and, behind it, every WebUI request,
+// input event and meter tick. The Audio menu's TX row did exactly that
+// (txStatusShort locked), hanging the unit whenever the menu was on screen.
+// Render every OLED state once under a deadline so any re-lock fails here.
+func TestRenderEveryStateDoesNotRelockMutex(t *testing.T) {
+	initTestHardware(t)
+	origState, origMode, origEditing := currentState, menuMode, editingParameter
+	t.Cleanup(func() { currentState, menuMode, editingParameter = origState, origMode, origEditing })
+	t.Setenv("PI9696_SIM_OUT", filepath.Join(t.TempDir(), "frame.png"))
+	for st := StateIdle; st <= StateLogging; st++ {
+		mutex.Lock()
+		currentState, editingParameter = st, false
+		mutex.Unlock()
+		done := make(chan struct{})
+		go func() { render(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("render() in state %d did not return: it re-locks the app mutex", st)
+		}
+	}
+}

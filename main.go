@@ -5158,7 +5158,7 @@ func renderAudioMenu() {
 		{Label: "Channel Count →", Value: fmt.Sprintf("%d", channelCount)},
 		{Label: "Tag →", Value: tagStatusText()},
 		{Label: "Prefix →", Value: prefixStatusText()},
-		{Label: "TX", Value: txStatusShort()},
+		{Label: "TX", Value: txStatusShortLocked()},
 		{Label: "← Back", Value: ""},
 	}
 	totalItems := len(items)
