@@ -4440,7 +4440,11 @@ func startRemoteServer(ip string) (*http.Server, error) {
 		return nil, err
 	}
 
-	srv := &http.Server{Handler: newRemoteMux()}
+	// ErrorLog bypasses slog: net/http reports recovered handler panics
+	// through it, and the default (log -> slog at Info) is dropped by the
+	// Error-only default level - a panic holding the app mutex would then
+	// wedge the whole WebUI with nothing in the journal.
+	srv := &http.Server{Handler: newRemoteMux(), ErrorLog: log.New(os.Stderr, "http: ", 0)}
 	go func() {
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			logErrorf("Remote control server error: %v", err)
