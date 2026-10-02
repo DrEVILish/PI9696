@@ -243,10 +243,11 @@ func txStatusLocked() (short, long string) {
 	}
 }
 
-// txStatusShort is the OLED form; it locks, unlike txStatusLocked.
-func txStatusShort() string {
-	mutex.Lock()
-	defer mutex.Unlock()
+// txStatusShortLocked is the OLED form. Caller holds the app mutex: its
+// only caller is renderAudioMenu, under render()'s lock. (It used to take
+// the mutex itself, which self-deadlocked the render tick - and with it the
+// whole UI - whenever the Audio menu was on screen.)
+func txStatusShortLocked() string {
 	short, _ := txStatusLocked()
 	return short
 }
