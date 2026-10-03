@@ -371,15 +371,24 @@ func TestInfernoWorkerDoesNotKillActiveRecording(t *testing.T) {
 }
 
 func TestMeterReaderParsesAstatsOutput(t *testing.T) {
+	// Meter globals are shared with monitor reapers left running by earlier
+	// tests, so every access here takes the app mutex like production does.
+	mutex.Lock()
 	origPeak, origRMS := meterPeakDB, meterRMSDB
-	t.Cleanup(func() { meterPeakDB, meterRMSDB = origPeak, origRMS })
+	gen := meterGen
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		meterPeakDB, meterRMSDB = origPeak, origRMS
+		mutex.Unlock()
+	})
 
 	input := "frame:0    pts:0       pts_time:0\n" +
 		"lavfi.astats.Overall.Peak_level=-18.063656\n" +
 		"lavfi.astats.Overall.RMS_level=-21.091526\n" +
 		"lavfi.astats.Overall.DC_offset=0.001483\n"
 
-	meterReader(strings.NewReader(input), meterGen)
+	meterReader(strings.NewReader(input), gen)
 
 	mutex.Lock()
 	peak, rms := meterPeakDB, meterRMSDB
@@ -2986,6 +2995,11 @@ func TestDemoTogglePersists(t *testing.T) {
 // TestDemoWebUIToggle verifies that toggling demo mode from the WebUI
 // works correctly.
 func TestDemoWebUIToggle(t *testing.T) {
+	// setDemoModeLocked's contract is "caller holds the app mutex"; the
+	// generator goroutine it starts takes that mutex, so calling it bare
+	// races (caught by -race).
+	mutex.Lock()
+	defer mutex.Unlock()
 	origDemoMode := demoMode
 	setDemoModeLocked(true)
 	if demoMode != true {
@@ -2995,12 +3009,17 @@ func TestDemoWebUIToggle(t *testing.T) {
 	if demoMode != false {
 		t.Fatal("setDemoModeLocked(false) did not set demoMode to false")
 	}
-	demoMode = origDemoMode
+	setDemoModeLocked(origDemoMode)
 }
 
 // TestDemoSystemOptionsToggle verifies that toggling demo mode from
 // the OLED System Options menu works correctly.
 func TestDemoSystemOptionsToggle(t *testing.T) {
+	// setDemoModeLocked's contract is "caller holds the app mutex"; the
+	// generator goroutine it starts takes that mutex, so calling it bare
+	// races (caught by -race).
+	mutex.Lock()
+	defer mutex.Unlock()
 	origDemoMode := demoMode
 	setDemoModeLocked(true)
 	if demoMode != true {
@@ -3010,7 +3029,7 @@ func TestDemoSystemOptionsToggle(t *testing.T) {
 	if demoMode != false {
 		t.Fatal("setDemoModeLocked(false) did not set demoMode to false")
 	}
-	demoMode = origDemoMode
+	setDemoModeLocked(origDemoMode)
 }
 
 // TestMeterDeckFlagsDriveReelAnimation locks the contract the reel-to-reel
