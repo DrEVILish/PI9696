@@ -1270,6 +1270,7 @@ type dashboardData struct {
 	AutoDimFragment      template.HTML
 	MonitorFragment      template.HTML
 	DemoFragment         template.HTML
+	DeviceNameFragment   template.HTML
 	WifiEnabled          bool
 	WifiSSID             string
 	WifiPassword         string
@@ -1631,7 +1632,7 @@ func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
 
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
 <div class="field-row">
-<form hx-post="/api/settings/channels" hx-target="#channelcount" hx-swap="outerHTML">
+<form hx-post="/api/settings/channels" hx-target="#channelcount" hx-swap="outerHTML" hx-sync="this:drop">
 <label class="label" for="channelsInput">Channels</label>
 <input id="channelsInput" class="input" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
 <span class="hint field-hint">1–{{.Max}}</span>
@@ -1655,7 +1656,7 @@ var filePrefixFragmentTmpl = template.Must(template.New("fileprefix").Parse(`<di
 <form hx-post="/api/settings/prefix" hx-target="#fileprefix" hx-swap="outerHTML" hx-status:400="target:#prefix-error">
 <label class="label" for="filePrefixInput">Prefix</label>
 <div class="input-group">
-<input id="filePrefixInput" class="input" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 -]+" title="Letters, numbers, spaces and - only (no underscores)">
+<input id="filePrefixInput" class="input" name="prefix" type="text" value="{{.Prefix}}" maxlength="32" placeholder="recording" pattern="[A-Za-z0-9 \-]+" title="Letters, numbers, spaces and - only (no underscores)">
 <button type="submit" class="btn btn-secondary">Save</button>
 </div>
 <span class="hint field-hint">file_YYYYMMDD…</span>
@@ -1803,7 +1804,10 @@ func handleAPISettingsSampleRate(w http.ResponseWriter, r *http.Request) {
 func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(r.FormValue("count")); err == nil {
 		mutex.Lock()
-		if n >= 1 && n <= MaxChannelCount {
+		// Unchanged is a no-op: Enter in the number box fires both its
+		// change handler and the form submit, and a repeat save of the same
+		// value must not queue a second Inferno restart or config write.
+		if n >= 1 && n <= MaxChannelCount && n != channelCount {
 			channelCount = n
 			// Relaunch Inferno with the new channel count if it's running
 			// (the worker's restart path re-starts monitoring too), so the
@@ -2544,18 +2548,7 @@ html[data-theme] body{background:transparent}
       </div>
       <div class="settings-panes scroll">
       <section class="settings-group field-group settings-pane is-active" role="tabpanel" aria-labelledby="tab-device" id="pane-device">
-        <div id="devicename" class="setting-cell">
-          <div class="field-row">
-            <form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
-              <label class="label" for="deviceNameInput">Unit Name</label>
-              <div class="input-group">
-                <input id="deviceNameInput" class="input" name="name" value="{{.DeviceName}}" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-                <button type="submit" class="btn btn-secondary">Save</button>
-              </div>
-            </form>
-          </div>
-          <div id="devicename-error"></div>
-        </div>
+        {{.DeviceNameFragment}}
       </section>
 
       <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-audio" id="pane-audio">
@@ -3218,29 +3211,30 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		activeTint = pt
 	}
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf, motionBuf, contrastBuf, densityBuf bytes.Buffer
-	selectFragmentTmpl.Execute(&vuBuf, vuRangeSelect())
-	selectFragmentTmpl.Execute(&holdBuf, peakHoldSelect())
-	selectFragmentTmpl.Execute(&srBuf, sampleRateSelect())
-	channelCountFragmentTmpl.Execute(&chBuf, currentChannelCountView())
-	selectFragmentTmpl.Execute(&tagBuf, tagSelect())
-	filePrefixFragmentTmpl.Execute(&prefixBuf, filePrefixView())
-	transportFragmentTmpl.Execute(&transportBuf, transportOptionsView())
-	hyperdeckFragmentTmpl.Execute(&hyperdeckBuf, hyperdeckViewData())
-	selectFragmentTmpl.Execute(&logLevelBuf, logLevelSelect())
-	themeFragmentTmpl.Execute(&themeBuf, themePicker())
+	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf, motionBuf, contrastBuf, densityBuf, nameBuf bytes.Buffer
+	renderFragment(&vuBuf, selectFragmentTmpl, vuRangeSelect())
+	renderFragment(&holdBuf, selectFragmentTmpl, peakHoldSelect())
+	renderFragment(&srBuf, selectFragmentTmpl, sampleRateSelect())
+	renderFragment(&chBuf, channelCountFragmentTmpl, currentChannelCountView())
+	renderFragment(&tagBuf, selectFragmentTmpl, tagSelect())
+	renderFragment(&prefixBuf, filePrefixFragmentTmpl, filePrefixView())
+	renderFragment(&transportBuf, transportFragmentTmpl, transportOptionsView())
+	renderFragment(&hyperdeckBuf, hyperdeckFragmentTmpl, hyperdeckViewData())
+	renderFragment(&logLevelBuf, selectFragmentTmpl, logLevelSelect())
+	renderFragment(&themeBuf, themeFragmentTmpl, themePicker())
 	var tintBuf bytes.Buffer
-	tintFragmentTmpl.Execute(&tintBuf, currentTintView())
+	renderFragment(&tintBuf, tintFragmentTmpl, currentTintView())
 	for _, opt := range displayOptions {
 		buf := displayOptBuf(opt.id, &motionBuf, &contrastBuf, &densityBuf)
 		if buf != nil {
 			selectFragmentTmpl.Execute(buf, settingSelect(opt.id, opt.post, opt.label, "", func() optionsView { return optionsView{Options: opt.options, Idx: opt.get()} }))
 		}
 	}
-	brightnessFragmentTmpl.Execute(&brightnessBuf, brightnessViewData())
-	autoDimFragmentTmpl.Execute(&autoDimBuf, autoDimViewData())
-	demoFragmentTmpl.Execute(&demoBuf, demoViewData())
-	monitorFragmentTmpl.Execute(&monitorBuf, monitorViewData())
+	renderFragment(&brightnessBuf, brightnessFragmentTmpl, brightnessViewData())
+	renderFragment(&autoDimBuf, autoDimFragmentTmpl, autoDimViewData())
+	renderFragment(&demoBuf, demoFragmentTmpl, demoViewData())
+	renderFragment(&nameBuf, deviceNameFragmentTmpl, deviceNameNow())
+	renderFragment(&monitorBuf, monitorFragmentTmpl, monitorViewData())
 
 	// Generate WiFi QR code as base64 PNG for the settings modal
 	var qrBase64 string
@@ -3250,7 +3244,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 			qrBase64 = base64.StdEncoding.EncodeToString(png)
 		}
 	}
-	wifiQRFragmentTmpl.Execute(&qrBuf, wifiQRView{wifiEn, wifiS, wifiP, qrBase64})
+	renderFragment(&qrBuf, wifiQRFragmentTmpl, wifiQRView{wifiEn, wifiS, wifiP, qrBase64})
 
 	renderFragment(w, dashboardTmpl, dashboardData{
 		DeviceName:           name,
@@ -3278,6 +3272,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		AutoDimFragment:      template.HTML(autoDimBuf.String()),
 		MonitorFragment:      template.HTML(monitorBuf.String()),
 		DemoFragment:         template.HTML(demoBuf.String()),
+		DeviceNameFragment:   template.HTML(nameBuf.String()),
 		WifiEnabled:          wifiEn,
 		WifiSSID:             wifiS,
 		WifiPassword:         wifiP,
@@ -3304,6 +3299,13 @@ func isValidDeviceName(name string) bool {
 		}
 	}
 	return true
+}
+
+// deviceNameNow reads the device name under the app mutex.
+func deviceNameNow() string {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return deviceName
 }
 
 func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
@@ -3334,13 +3336,26 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	// the name is editable exactly once per page load. Markup mirrors the
 	// dashboard row exactly (label/id/button), plus the error target and
 	// an OOB clear of any stale validation error on success.
-	fmt.Fprintf(w, `<div id="devicename" class="setting-cell"><div class="field-row"><form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
-<label for="deviceNameInput">Unit Name</label>
-<input id="deviceNameInput" name="name" value="%s" maxlength="32" pattern="[A-Za-z0-9 _-]+" title="Letters, numbers, spaces, - and _ only">
-<button type="submit" class="btn btn-secondary">Save</button>
-</form></div><div id="devicename-error"></div></div>
-<div id="devicename-error" hx-swap-oob="innerHTML"></div>`, template.HTMLEscapeString(current))
+	renderFragment(w, deviceNameFragmentTmpl, current)
+	fmt.Fprint(w, "\n<div id=\"devicename-error\" hx-swap-oob=\"innerHTML\"></div>")
 }
+
+// deviceNameFragmentTmpl is the Unit Name row, rendered by both the
+// dashboard and the save response. The save used to return its own
+// hand-written copy that had drifted (no label/input classes or input
+// group), so the field lost its styling after every rename.
+var deviceNameFragmentTmpl = template.Must(template.New("devicename").Parse(`<div id="devicename" class="setting-cell">
+<div class="field-row">
+<form hx-post="/api/device-name" hx-target="#devicename" hx-swap="outerHTML" hx-status:400="target:#devicename-error">
+<label class="label" for="deviceNameInput">Unit Name</label>
+<div class="input-group">
+<input id="deviceNameInput" class="input" name="name" value="{{.}}" maxlength="32" pattern="[A-Za-z0-9 _\-]+" title="Letters, numbers, spaces, - and _ only">
+<button type="submit" class="btn btn-secondary">Save</button>
+</div>
+</form>
+</div>
+<div id="devicename-error"></div>
+</div>`))
 
 // handleDisplayPNG mirrors the OLED - encoded from the supersampled canvas
 // (see TTFDisplay.EncodePNG), not a separate HTML/CSS reimplementation of
