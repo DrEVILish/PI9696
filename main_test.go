@@ -5488,3 +5488,48 @@ func TestUSBIdentityWithoutDiskseqRefuses(t *testing.T) {
 		t.Fatal("identity without diskseq succeeded; format must refuse")
 	}
 }
+
+// A demo FIFO that cannot be created must back off, not retry on every
+// 100 ms render tick (which logged an error ten times a second), and must
+// recover once the retry window passes.
+func TestDemoGeneratorBacksOffAfterFifoFailure(t *testing.T) {
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	origDemo, origRaw, origRetry := demoMode, RawPath, demoGenRetryAt
+	RawPath = filepath.Join(blocker, "raw") // under a regular file: Mkfifo fails
+	demoMode, demoGenRetryAt = true, time.Time{}
+	syncDemoGeneratorLocked()
+	failedRunning, retryAt := demoGenRunning, demoGenRetryAt
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		demoMode = false
+		syncDemoGeneratorLocked()
+		RawPath, demoMode, demoGenRetryAt = origRaw, origDemo, origRetry
+		mutex.Unlock()
+	})
+	if failedRunning {
+		t.Fatal("generator reported running after its FIFO could not be created")
+	}
+	if !retryAt.After(time.Now()) {
+		t.Fatal("FIFO failure set no retry back-off: the render tick would retry every 100 ms")
+	}
+
+	mutex.Lock()
+	RawPath = t.TempDir() // storage fixed, but still inside the back-off
+	syncDemoGeneratorLocked()
+	early := demoGenRunning
+	demoGenRetryAt = time.Now().Add(-time.Second) // window elapsed
+	syncDemoGeneratorLocked()
+	recovered := demoGenRunning
+	mutex.Unlock()
+	if early {
+		t.Fatal("generator restarted inside the back-off window")
+	}
+	if !recovered {
+		t.Fatal("generator did not restart after the back-off window")
+	}
+}
