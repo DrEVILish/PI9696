@@ -5671,3 +5671,36 @@ func TestMdnsRenameReapsOldChildOnce(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// Delete All used to drop os.Remove errors, reporting success while takes
+// survived. A take that cannot be removed (here a non-empty directory with
+// a .wav name, which fails even as root) must be counted and surfaced, and
+// the deletable ones still removed.
+func TestDeleteAllRecordingsReportsFailures(t *testing.T) {
+	dir := t.TempDir()
+	ok := filepath.Join(dir, "recording_20260101_120000_ch2_48kHz.wav")
+	stuck := filepath.Join(dir, "recording_20260101_120001_ch2_48kHz.wav")
+	if err := os.WriteFile(ok, []byte("RIFF"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(stuck, "keep"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	origRec, origNotice, origUntil := RecordPath, sysNotice, sysNoticeUntil
+	RecordPath = dir
+	failed := deleteAllRecordings()
+	notice := sysNotice
+	RecordPath, sysNotice, sysNoticeUntil = origRec, origNotice, origUntil
+	mutex.Unlock()
+
+	if failed != 1 {
+		t.Fatalf("failed = %d, want 1 (the undeletable take)", failed)
+	}
+	if !strings.Contains(notice, "DELETE FAILED") {
+		t.Fatalf("no operator notice for the failed delete (notice %q)", notice)
+	}
+	if _, err := os.Stat(ok); !os.IsNotExist(err) {
+		t.Fatal("deletable take was not removed")
+	}
+}
