@@ -2557,86 +2557,7 @@ html[data-theme] body{background:transparent}
         <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-config" id="tab-config">Config</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-network" id="tab-network">Network</button>
       </div>
-      <div class="settings-panes scroll">
-      <section class="settings-group field-group settings-pane is-active" role="tabpanel" aria-labelledby="tab-device" id="pane-device">
-        {{.DeviceNameFragment}}
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-audio" id="pane-audio">
-        {{.SampleRateFragment}}
-        {{.ChannelCountFragment}}
-        {{.MonitorFragment}}
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-metering" id="pane-metering">
-        {{.VURangeFragment}}
-        {{.PeakHoldFragment}}
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-metadata" id="pane-metadata">
-        {{.PrefixFragment}}
-        {{.TagFragment}}
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-transport" id="pane-transport">
-        {{.TransportFragment}}
-        {{.HyperdeckFragment}}
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-display" id="pane-display">
-        {{.ThemeFragment}}
-        {{.TintFragment}}
-        {{.MotionFragment}}
-        {{.ContrastFragment}}
-        {{.DensityFragment}}
-        {{.BrightnessFragment}}
-        {{.AutoDimFragment}}
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-demo" id="pane-demo">
-        {{.DemoFragment}}
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-logging" id="pane-logging">
-        {{.LogLevelFragment}}
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-config" id="pane-config">
-        <div class="field-row field-row--pair">
-          <button hx-post="/api/config/export" hx-target="#config-msg" class="btn btn-secondary">Export to USB</button>
-          <button hx-post="/api/config/import" hx-target="#config-msg" class="btn btn-secondary">Import from USB</button>
-        </div>
-        <div class="field-row" id="config-msg"></div>
-      </section>
-
-      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-network" id="pane-network">
-        <div id="wifi-settings">
-          {{.WifiQRFragment}}
-          <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML" hx-status:400="target:#wifi-error">
-            <div class="field-row field-row--pair">
-              <span class="field">
-                <label for="wifiSsid">SSID</label>
-                <input id="wifiSsid" class="input" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
-              </span>
-              <span class="field">
-                <label for="wifiPass">Password</label>
-                <input id="wifiPass" class="input" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
-              </span>
-            </div>
-            <div class="field-row">
-              <label class="label" for="wifiEnabled">Access Point</label>
-              <label class="switch" for="wifiEnabled">
-                <input id="wifiEnabled" name="enabled" type="checkbox" {{if .WifiEnabled}}checked{{end}}>
-                <span class="switch-track"><span class="switch-thumb"></span></span>
-                <span class="switch-readout" data-on="ONLINE" data-off="OFFLINE"></span>
-              </label>
-            </div>
-            <button type="submit" class="btn btn-secondary">Save WiFi</button>
-          </form>
-          <div id="wifi-error"></div>
-        </div>
-      </section>
-      </div>
+      {{template "settingsPanes" .}}
     </div>
   </div>
 </div>
@@ -2661,7 +2582,16 @@ html[data-theme] body{background:transparent}
 
 var settingsBtn = document.getElementById('settingsBtn');
 var settingsModal = document.getElementById('settingsModal');
-settingsBtn.addEventListener('click', function() { settingsModal.classList.add('open'); });
+// Re-render the panes from the unit on every open (see handleSettingsPanes),
+// keeping the selected tab. htmx swaps them so fragment scripts run and the
+// new forms are wired.
+settingsBtn.addEventListener('click', function() {
+  settingsModal.classList.add('open');
+  var cur = document.querySelector('.settings-tabs .tab.is-active');
+  var pane = cur ? cur.dataset.pane : 'pane-device';
+  htmx.ajax('GET', '/api/settings/panes', { target: '#settingsPanes', swap: 'outerHTML' })
+    .then(function() { selectSettingsTab(pane, false); });
+});
 document.getElementById('settingsClose').addEventListener('click', function() { settingsModal.classList.remove('open'); });
 settingsModal.addEventListener('click', function(e) { if (e.target === settingsModal) settingsModal.classList.remove('open'); });
 
@@ -3187,9 +3117,106 @@ watchConnLamp(document.getElementById('teleSock'));
 var oledSeq = -1;
 connectMeterSocket();
 </script>
-</body></html>`))
+</body></html>
+{{define "settingsPanes"}}      <div class="settings-panes scroll" id="settingsPanes">
+      <section class="settings-group field-group settings-pane is-active" role="tabpanel" aria-labelledby="tab-device" id="pane-device">
+        {{.DeviceNameFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-audio" id="pane-audio">
+        {{.SampleRateFragment}}
+        {{.ChannelCountFragment}}
+        {{.MonitorFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-metering" id="pane-metering">
+        {{.VURangeFragment}}
+        {{.PeakHoldFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-metadata" id="pane-metadata">
+        {{.PrefixFragment}}
+        {{.TagFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-transport" id="pane-transport">
+        {{.TransportFragment}}
+        {{.HyperdeckFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-display" id="pane-display">
+        {{.ThemeFragment}}
+        {{.TintFragment}}
+        {{.MotionFragment}}
+        {{.ContrastFragment}}
+        {{.DensityFragment}}
+        {{.BrightnessFragment}}
+        {{.AutoDimFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-demo" id="pane-demo">
+        {{.DemoFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-logging" id="pane-logging">
+        {{.LogLevelFragment}}
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-config" id="pane-config">
+        <div class="field-row field-row--pair">
+          <button hx-post="/api/config/export" hx-target="#config-msg" class="btn btn-secondary">Export to USB</button>
+          <button hx-post="/api/config/import" hx-target="#config-msg" class="btn btn-secondary">Import from USB</button>
+        </div>
+        <div class="field-row" id="config-msg"></div>
+      </section>
+
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-network" id="pane-network">
+        <div id="wifi-settings">
+          {{.WifiQRFragment}}
+          <form hx-post="/api/settings/wifi" hx-target="#wifiqr" hx-swap="outerHTML" hx-status:400="target:#wifi-error">
+            <div class="field-row field-row--pair">
+              <span class="field">
+                <label for="wifiSsid">SSID</label>
+                <input id="wifiSsid" class="input" name="ssid" value="{{.WifiSSID}}" maxlength="32" required>
+              </span>
+              <span class="field">
+                <label for="wifiPass">Password</label>
+                <input id="wifiPass" class="input" name="password" type="password" value="{{.WifiPassword}}" minlength="8" maxlength="63" required>
+              </span>
+            </div>
+            <div class="field-row">
+              <label class="label" for="wifiEnabled">Access Point</label>
+              <label class="switch" for="wifiEnabled">
+                <input id="wifiEnabled" name="enabled" type="checkbox" {{if .WifiEnabled}}checked{{end}}>
+                <span class="switch-track"><span class="switch-thumb"></span></span>
+                <span class="switch-readout" data-on="ONLINE" data-off="OFFLINE"></span>
+              </label>
+            </div>
+            <button type="submit" class="btn btn-secondary">Save WiFi</button>
+          </form>
+          <div id="wifi-error"></div>
+        </div>
+      </section>
+      </div>{{end}}`))
 
 func handleDashboard(w http.ResponseWriter, r *http.Request) {
+	renderFragment(w, dashboardTmpl, buildDashboardData(r))
+}
+
+// handleSettingsPanes re-renders just the settings panes. The dashboard
+// fetches it each time the settings sheet opens: the panes were otherwise
+// rendered once at page load, so a change made on the front panel, another
+// browser or a HyperDeck controller left an open dashboard showing the old
+// value until a reload.
+func handleSettingsPanes(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	if err := dashboardTmpl.ExecuteTemplate(w, "settingsPanes", buildDashboardData(r)); err != nil {
+		logErrorf("render settingsPanes: %v", err)
+	}
+}
+
+// buildDashboardData snapshots everything the dashboard template renders.
+func buildDashboardData(r *http.Request) dashboardData {
 	mutex.Lock()
 	name := deviceName
 	wifiEn := wifiEnabled
@@ -3257,7 +3284,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	renderFragment(&qrBuf, wifiQRFragmentTmpl, wifiQRView{wifiEn, wifiS, wifiP, qrBase64})
 
-	renderFragment(w, dashboardTmpl, dashboardData{
+	return dashboardData{
 		DeviceName:           name,
 		Logo:                 template.HTML(pi9696LogoSVG),
 		Theme:                activeTheme,
@@ -3289,7 +3316,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 		WifiPassword:         wifiP,
 		WifiQRFragment:       template.HTML(qrBuf.String()),
 		TransportIcon:        transportIcon,
-	})
+	}
 }
 
 // isValidDeviceName restricts the web-settable unit name to a small safe
@@ -4368,6 +4395,7 @@ func newRemoteMux() *http.ServeMux {
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	}))
 	mux.HandleFunc("GET /", requireAuth(handleDashboard))
+	mux.HandleFunc("GET /api/settings/panes", requireAuth(handleSettingsPanes))
 	mux.HandleFunc("GET /api/status", requireAuth(handleAPIStatus))
 	mux.HandleFunc("GET /api/telemetry", requireAuth(handleAPITelemetry))
 	mux.HandleFunc("GET /api/meter", requireAuth(handleAPIMeter))

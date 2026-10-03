@@ -6104,3 +6104,38 @@ func TestPatternAttributesValidUnderVFlag(t *testing.T) {
 	}
 }
 
+// The settings sheet re-fetches its panes on every open, so a change made
+// elsewhere (front panel, another browser) shows without a reload. The
+// endpoint must render the live values, keep the pane ids the tab rail
+// keys on, and stay behind auth.
+func TestSettingsPanesEndpointRendersLiveValues(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	orig := channelCount
+	channelCount = 7
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		channelCount = orig
+		mutex.Unlock()
+	})
+	rec := httptest.NewRecorder()
+	handleSettingsPanes(rec, httptest.NewRequest("GET", "/api/settings/panes", nil))
+	body := rec.Body.String()
+	if !strings.HasPrefix(strings.TrimSpace(body), `<div class="settings-panes scroll" id="settingsPanes">`) {
+		t.Fatalf("panes endpoint does not render the #settingsPanes container: %.120q", body)
+	}
+	if !strings.Contains(body, `id="channelsInput"`) || !strings.Contains(body, `value="7"`) {
+		t.Error("panes endpoint does not show the live channel count")
+	}
+	for _, id := range []string{"pane-device", "pane-audio", "pane-display", "pane-network"} {
+		if !strings.Contains(body, `id="`+id+`"`) {
+			t.Errorf("panes endpoint lost %s", id)
+		}
+	}
+	unauth := httptest.NewRecorder()
+	newRemoteMux().ServeHTTP(unauth, httptest.NewRequest("GET", "/api/settings/panes", nil))
+	if unauth.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated panes request: %d, want 401", unauth.Code)
+	}
+}

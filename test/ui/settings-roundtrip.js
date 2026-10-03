@@ -120,6 +120,28 @@ const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor', 'brigh
     await page.locator('#channelsInput').fill(String(start)); await page.locator('#channelsInput').press('Enter');
     await page.waitForTimeout(800);
   }
+  // A change made elsewhere (front panel, another browser, HyperDeck) must
+  // show when the settings sheet is next opened, without a reload, and in
+  // the main window's Status panel.
+  {
+    await page.goto(BASE + '/'); await page.waitForTimeout(500);
+    await open('audio');
+    const start = Number(await page.locator('#channelsInput').inputValue());
+    await page.click('#settingsClose'); await page.waitForTimeout(200);
+    const other = start === 3 ? 6 : 3;
+    await page.request.post(BASE + '/api/settings/channels', { form: { count: String(other) } });
+    await page.waitForTimeout(4500);   // let the telemetry push refresh the main window
+    await page.click('#settingsBtn'); await page.waitForTimeout(800);
+    await page.click('#tab-audio'); await page.waitForTimeout(200);
+    const shown = Number(await page.locator('#channelsInput').inputValue());
+    const mainText = await page.locator('#config').innerText();
+    const mainOK = new RegExp('\\b' + other + '\\s*ch|Channels\\W+' + other + '\\b', 'i').test(mainText);
+    const bad = shown !== other || !mainOK;
+    results.push({ ctl: 'audio/channelsInput changed elsewhere', before: start, target: other, now: shown, mainWindow: mainOK, bad });
+    console.log((bad ? 'MISMATCH ' : 'ok       ') + JSON.stringify(results[results.length - 1]));
+    if (!mainOK) console.log('main window text:', JSON.stringify(mainText.slice(0, 300)));
+    await page.request.post(BASE + '/api/settings/channels', { form: { count: String(start) } });
+  }
   console.log('errors:', JSON.stringify(errors));
   await browser.close();
   const bad = results.filter(r => r.bad).length;
