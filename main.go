@@ -2452,12 +2452,28 @@ func setDemoModeLocked(on bool) bool {
 		logWarnf("demo: refusing toggle during active transport (BUSY - STOP FIRST)")
 		return false
 	}
+	leaving := demoMode && !on
 	demoMode = on
 	demoGenRetryAt = time.Time{} // an explicit toggle retries at once
 	syncDemoGeneratorLocked()
+	if leaving && demoExitNeedsInfernoLocked() {
+		// Nothing else would start it: the network loop only starts
+		// Inferno on a link-up edge and skips demo mode, so a unit booted
+		// in demo and switched live sat with no RX or TX ("TX unavailable
+		// (no device)") until a link flap or a restart.
+		logInfof("demo: off, starting Inferno server")
+		enqueueInferno(infernoCmdStart)
+	}
 	settingChanged()
 	logInfof("demo: mode %v", map[bool]string{true: "ON (simulated audio)", false: "off"}[on])
 	return true
+}
+
+// demoExitNeedsInfernoLocked reports whether leaving demo mode must start
+// the real Inferno server: the link is up and it is not already running.
+// Callers hold the app mutex.
+func demoExitNeedsInfernoLocked() bool {
+	return networkWasUp && infernoState != InfernoRunning
 }
 
 // demoGenLoop synthesizes s32le PCM into the demo FIFO: per-channel sine

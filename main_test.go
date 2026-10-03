@@ -6169,3 +6169,28 @@ func TestTxHolderRefusesWhenOldPortsNeverRelease(t *testing.T) {
 		t.Fatalf("stuck ports: holder=%v ready=%v status=%q, want no holder and \"failed\"", txHolder != nil, txHolderReady, short)
 	}
 }
+
+// Leaving demo mode must bring the real input chain up: the network loop
+// only starts Inferno on a link-up edge (and skips demo), so a unit booted
+// in demo and switched live had no RX or TX until a flap or restart.
+func TestDemoExitStartsInfernoWhenLinkUp(t *testing.T) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	origUp, origState := networkWasUp, infernoState
+	defer func() { networkWasUp, infernoState = origUp, origState }()
+	for _, c := range []struct {
+		up    bool
+		state InfernoState
+		want  bool
+	}{
+		{true, InfernoStopped, true},
+		{true, InfernoFailed, true},
+		{true, InfernoRunning, false},  // already up
+		{false, InfernoStopped, false}, // no link: the network loop starts it on link-up
+	} {
+		networkWasUp, infernoState = c.up, c.state
+		if got := demoExitNeedsInfernoLocked(); got != c.want {
+			t.Errorf("link up=%v state=%v: start Inferno on demo exit = %v, want %v", c.up, c.state, got, c.want)
+		}
+	}
+}
