@@ -254,6 +254,7 @@ test/gotest.sh       # vet + the full suite under -race (the standard check)
 - 143 tests in `main_test.go` (+ 3 `clocksync_test.go`, 1 `inferno_log_test.go`, 18 `theme_test.go`, 10 `hyperdeck_test.go`, 8 `alsapcm/`, 10 `hardware/`, 3 `logging_test.go`)
 - Run it with `test/gotest.sh`, which adds `-race`: the suite is race-clean, and some regression tests (login-page device-name read, mDNS child reaping) only catch their bug under the race detector
 - The suite is hermetic: a temp recordings tree, no real inferno TX device (a host with the inferno ALSA plugin used to get a real holder, which broke 4 tests), the clock gate off, and per-test restore of audio settings, web notice and monitor (`initTestHardware`). It passes in source order and under `go test -shuffle=on`. Still run it on the dev server, never on a unit - see DEPLOYMENT.md
+- `test/ui/settings-roundtrip.js` (Playwright, dev box, SIM instance only) changes every settings control like a user, Enter included, and fails if a field ever shows a value other than the saved one
 - `test/interop/` measures a unit against a second inferno host sample-for-sample (REPORT.md)
 - Tests run the real HTTP handlers over `httptest` (auth, recordings API, ZIP download, settings)
 - Playback/seek tested against a fake `ffmpeg` via PATH shim
