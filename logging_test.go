@@ -1,6 +1,10 @@
 package main
 
 import (
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -47,5 +51,30 @@ func TestDisabledLogSkipsFormatting(t *testing.T) {
 	logErrorf("msg %s", p)
 	if !called {
 		t.Fatal("enabled level skipped formatting")
+	}
+}
+
+// The standard log package carries lifecycle lines and every log.Fatalf
+// reason. slog.SetDefault bridges it at Info, which the Error-only default
+// drops, so those messages vanished; setupLogs must route std log to the
+// sinks regardless of the slog threshold.
+func TestStdLogWrittenAtDefaultLevel(t *testing.T) {
+	orig := currentLogLevel()
+	path := filepath.Join(t.TempDir(), "app.log")
+	setupLogs(path)
+	t.Cleanup(func() {
+		setupLogs("")
+		applyLogLevel(orig)
+	})
+	if currentLogLevel() != LogError {
+		t.Fatalf("setupLogs should leave the Error-only default, got %d", currentLogLevel())
+	}
+	log.Println("std log lifecycle line")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "std log lifecycle line") {
+		t.Fatalf("std log output dropped at the default level; log file: %q", data)
 	}
 }

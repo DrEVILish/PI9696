@@ -18,6 +18,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 )
@@ -69,6 +70,13 @@ func setupLogs(path string) {
 		}
 	}
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: &slogLevel})))
+	// SetDefault also points the standard log package at slog, at Info -
+	// below the Error-only default, so log.Println lifecycle lines
+	// ("Shutting down...", "Restarting system via menu") and every
+	// log.Fatalf message were silently dropped (Fatalf still exited, with no
+	// reason recorded). Un-bridge it: std log writes the same sinks, always.
+	log.SetOutput(w)
+	log.SetFlags(log.LstdFlags)
 }
 
 // openLogFileSink best-effort adds the app's on-device log file as a second
