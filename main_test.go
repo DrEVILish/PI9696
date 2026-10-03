@@ -6145,3 +6145,27 @@ func TestSettingsPanesEndpointRendersLiveValues(t *testing.T) {
 		t.Errorf("unauthenticated panes request: %d, want 401", unauth.Code)
 	}
 }
+
+// Ports the previous instance never releases mean any new open fails - and
+// its sockets would satisfy the "bound" check, passing a dead instance as
+// ready. A reopen must not open at all, and must report TX failed.
+func TestTxHolderRefusesWhenOldPortsNeverRelease(t *testing.T) {
+	ports := txHolderTestSetup(t)
+	ports.set(len(txPorts)) // stuck previous instance
+	opens := 0
+	setTxSeams(func() {
+		openTxDevice = func(string, int, int) (txFrameWriter, error) {
+			opens++
+			return &fakeTxHolder{}, nil
+		}
+	})
+	ensureTxHolder()
+	mutex.Lock()
+	defer mutex.Unlock()
+	if opens != 0 {
+		t.Fatalf("opened %d instance(s) while the old one still held the ports", opens)
+	}
+	if short, _ := txStatusLocked(); txHolder != nil || txHolderReady || short != "failed" {
+		t.Fatalf("stuck ports: holder=%v ready=%v status=%q, want no holder and \"failed\"", txHolder != nil, txHolderReady, short)
+	}
+}
