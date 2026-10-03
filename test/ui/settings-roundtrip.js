@@ -9,12 +9,15 @@
 // changes settings, including the device name):
 //   PI9696_SIM=1 PI9696_REMOTE_PORT=18080 ./pi9696 &   # note the access code
 //   PI9696_URL=http://127.0.0.1:18080 PI9696_TOKEN=XXXXXXXX node test/ui/settings-roundtrip.js
-// WiFi fields and the tint colour picker are skipped (WiFi needs all fields
-// at once; the tint has its own check).
+// Switches are toggled by click. WiFi fields, the brightness slider and the
+// tint colour picker are skipped (WiFi needs all fields at once; the other
+// two have no Enter and their own checks). A change the server refuses must
+// leave the field showing the server's value; every action must send exactly
+// one save.
 const { chromium } = require('playwright');
 const fs = require('fs');
 const BASE = process.env.PI9696_URL || 'http://127.0.0.1:18080';
-const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor']);
+const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor', 'brightnessRange']);
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
@@ -40,13 +43,14 @@ const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor']);
       sel: e.id ? '#' + e.id : `${e.tagName.toLowerCase()}[name="${e.name}"]`,
       container: (e.closest('[id]:not(form)') || {}).id || ''
     })));
-    for (const c of ids) if (c.type !== 'hidden' && c.type !== 'checkbox' && c.type !== 'range' && c.type !== 'color' && !SKIP.has(c.id)) controls.push({ pane, ...c });
+    for (const c of ids) if (c.type !== 'hidden' && c.type !== 'range' && c.type !== 'color' && !SKIP.has(c.id)) controls.push({ pane, ...c });
   }
   console.log('controls:', controls.map(c => `${c.pane}/${c.id || c.container + '>' + c.name}`).join(' '));
   const valueOf = async (c) => page.evaluate(({ pane, container, name, id }) => {
     const root = document.getElementById('pane-' + pane);
     const el = id ? document.getElementById(id) : (document.getElementById(container) || root).querySelector(`[name="${name}"]`);
     if (!el) return null;
+    if (el.type === 'checkbox') return el.checked ? 'on' : 'off';
     return el.tagName === 'SELECT' ? el.options[el.selectedIndex].text : el.value;
   }, c);
   const results = [];
@@ -57,7 +61,10 @@ const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor']);
     const before = await valueOf(c);
     let target;
     posts.length = 0;
-    if (c.tag === 'SELECT') {
+    if (c.type === 'checkbox') {
+      target = before === 'on' ? 'off' : 'on';
+      await page.locator(`label.switch[for="${c.id}"]`).click(); // the input itself is visually hidden
+    } else if (c.tag === 'SELECT') {
       const opts = await loc.evaluate(el => [...el.options].map(o => o.text));
       target = opts.find(o => o !== before);
       await loc.focus();
@@ -76,13 +83,20 @@ const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor']);
     const later = await valueOf(c);
     await page.goto(BASE + '/'); await page.waitForTimeout(500); await open(c.pane);
     const server = await valueOf(c);
-    const bad = now !== target || later !== target || server !== target;
-    results.push({ ctl: `${c.pane}/${c.id || c.container + '>' + c.name}`, before, target, now, later, server, posts: posts.slice(), bad });
+    // The field must always agree with what the server stored (a refused
+    // change, e.g. monitoring with no source, legitimately stays put), and a
+    // single user action must send a single save.
+    const refused = server !== target;
+    const bad = now !== server || later !== server || posts.length !== 1;
+    results.push({ ctl: `${c.pane}/${c.id || c.container + '>' + c.name}`, before, target, now, later, server, refused, posts: posts.slice(), bad });
     console.log((bad ? 'MISMATCH ' : 'ok       ') + JSON.stringify(results[results.length - 1]));
     // restore
     await open(c.pane);
-    if (c.tag === 'SELECT') { await loc.selectOption({ label: before }); }
-    else { await loc.fill(before); await loc.press('Enter'); }
+    if (!refused) {
+      if (c.type === 'checkbox') { await page.locator(`label.switch[for="${c.id}"]`).click(); }
+      else if (c.tag === 'SELECT') { await loc.selectOption({ label: before }); }
+      else { await loc.fill(before); await loc.press('Enter'); }
+    }
     await page.waitForTimeout(800);
   }
   console.log('errors:', JSON.stringify(errors));

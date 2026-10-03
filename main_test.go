@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -5987,5 +5988,95 @@ func TestEnsureTxHolderSerialized(t *testing.T) {
 	wg.Wait()
 	if m := maxInflight.Load(); m > 1 {
 		t.Fatalf("%d TX instances were opened concurrently", m)
+	}
+}
+
+// Saving the channel count it already has must not restart Inferno or write
+// the config: Enter in the number box used to send the save twice.
+func TestChannelsSaveUnchangedIsNoOp(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	origCh, origDirty := channelCount, configDirty
+	channelCount, configDirty = 3, false
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		channelCount, configDirty = origCh, origDirty
+		mutex.Unlock()
+	})
+	req := httptest.NewRequest("POST", "/api/settings/channels", strings.NewReader("count=3"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handleAPISettingsChannels(rec, req)
+	mutex.Lock()
+	dirty := configDirty
+	mutex.Unlock()
+	if dirty {
+		t.Error("re-saving the unchanged channel count marked the config dirty")
+	}
+	if !strings.Contains(rec.Body.String(), `value="3"`) {
+		t.Errorf("response does not show the current count: %s", rec.Body.String())
+	}
+}
+
+// The Unit Name row is rendered by the dashboard and by the save response;
+// the save used to return a drifted copy without the field styling. Both
+// must now be byte-identical for the same name.
+func TestDeviceNameRowSameInDashboardAndSave(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	orig := deviceName
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		deviceName = orig
+		persistConfig()
+		mutex.Unlock()
+	})
+	form := url.Values{"name": {"Row Check"}}
+	req := httptest.NewRequest("POST", "/api/device-name", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	saved := httptest.NewRecorder()
+	handleAPIDeviceName(saved, req)
+	dash := httptest.NewRecorder()
+	handleDashboard(dash, httptest.NewRequest("GET", "/", nil))
+	var row bytes.Buffer
+	renderFragment(&row, deviceNameFragmentTmpl, "Row Check")
+	if !strings.Contains(saved.Body.String(), row.String()) {
+		t.Error("save response does not carry the shared Unit Name row")
+	}
+	if !strings.Contains(dash.Body.String(), row.String()) {
+		t.Error("dashboard does not carry the shared Unit Name row")
+	}
+	if !strings.Contains(row.String(), `class="input"`) {
+		t.Error("Unit Name row lost its input styling")
+	}
+}
+
+// Browsers compile pattern= with the regex v flag, where a bare "-" inside
+// a character class is a syntax error: the pattern was silently ignored, so
+// the browser never checked the device name or prefix. Every class "-" must
+// be escaped.
+func TestPatternAttributesValidUnderVFlag(t *testing.T) {
+	initTestHardware(t)
+	rec := httptest.NewRecorder()
+	handleDashboard(rec, httptest.NewRequest("GET", "/", nil))
+	pats := regexp.MustCompile(`pattern="([^"]*)"`).FindAllStringSubmatch(rec.Body.String(), -1)
+	if len(pats) < 2 {
+		t.Fatalf("found %d pattern attributes, want the device name and prefix", len(pats))
+	}
+	for _, m := range pats {
+		for _, class := range regexp.MustCompile(`\[([^\]]*)\]`).FindAllStringSubmatch(m[1], -1) {
+			c := class[1]
+			for i := 0; i < len(c); i++ {
+				if c[i] == '\\' {
+					i++
+					continue
+				}
+				if c[i] == '-' && (i == 0 || i == len(c)-1) {
+					t.Errorf("pattern %q: unescaped '-' at the edge of [%s] is invalid with the v flag", m[1], c)
+				}
+			}
+		}
 	}
 }
