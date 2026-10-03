@@ -11,12 +11,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -5531,5 +5533,51 @@ func TestDemoGeneratorBacksOffAfterFifoFailure(t *testing.T) {
 	}
 	if !recovered {
 		t.Fatal("generator did not restart after the back-off window")
+	}
+}
+
+// The login page read deviceName with no lock while a WebUI rename wrote it
+// under the app mutex: a data race (meaningful under go test -race, which
+// the dev test run uses). Drive both concurrently through the real handlers.
+func TestLoginPageDeviceNameRaceFree(t *testing.T) {
+	mutex.Lock()
+	orig := deviceName
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		deviceName = orig
+		persistConfig()
+		mutex.Unlock()
+	})
+	stop := make(chan struct{})
+	renamed := make(chan struct{})
+	var renames atomic.Int64
+	go func() {
+		defer close(renamed)
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			form := url.Values{"name": {fmt.Sprintf("Race Unit %d", i%2)}}
+			req := httptest.NewRequest("POST", "/api/device-name", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			handleAPIDeviceName(httptest.NewRecorder(), req)
+			renames.Add(1)
+		}
+	}()
+	// Run until the renamer has completed a good number of writes, so the
+	// two genuinely interleave rather than one finishing first.
+	deadline := time.Now().Add(3 * time.Second)
+	for n := 0; time.Now().Before(deadline) && renames.Load() < 200; n++ {
+		handleLoginGet(httptest.NewRecorder(), httptest.NewRequest("GET", "/login", nil))
+	}
+	close(stop)
+	<-renamed
+	rec := httptest.NewRecorder()
+	handleLoginGet(rec, httptest.NewRequest("GET", "/login", nil))
+	if !strings.Contains(rec.Body.String(), "Race Unit") {
+		t.Error("login page does not show the renamed device")
 	}
 }

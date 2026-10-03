@@ -268,7 +268,8 @@ func requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			// Redirect bare, without the query: the access-QR prefill token
 			// travels in the fragment (/#t=...), which browsers preserve
 			// across this 303 and never send to the server - keeping it
-			// out of history, proxy logs, and the login POST.
+			// out of server and proxy logs and the login POST (it does
+			// stay in the browser's own history).
 			http.Redirect(w, r, "/login", http.StatusSeeOther)
 			return
 		}
@@ -524,7 +525,12 @@ func handleLoginGet(w http.ResponseWriter, r *http.Request) {
 // writeLoginPage fills in the page-invariant fields (name, logo, theme) and
 // renders; error/box state rides in d.
 func writeLoginPage(w http.ResponseWriter, d loginPageData) {
+	// Snapshot under the app mutex: a WebUI rename writes deviceName under
+	// it, and reading a string mid-write is a data race. No caller holds the
+	// mutex here (loginPageTheme below takes it too).
+	mutex.Lock()
 	d.DeviceName = deviceName
+	mutex.Unlock()
 	d.Logo = template.HTML(pi9696LogoSVG)
 	d.Theme, d.ThemeCSS = loginPageTheme()
 	d.CoreVersion = themeBuildVersion()
