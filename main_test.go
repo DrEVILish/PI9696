@@ -5412,3 +5412,79 @@ func TestRenderEveryStateDoesNotRelockMutex(t *testing.T) {
 		}
 	}
 }
+
+// fakeUSBDisk builds a fake /dev node plus the sysfs layout the kernel uses
+// for a partition (/sys/class/block/sdz1 -> .../block/sdz/sdz1, diskseq on
+// the parent disk) and points sysClassBlock at it. Returns the device path
+// and a function that sets the disk's diskseq.
+func fakeUSBDisk(t *testing.T) (string, func(seq string)) {
+	t.Helper()
+	root := t.TempDir()
+	devDir := filepath.Join(root, "dev")
+	diskDir := filepath.Join(root, "devices", "usb1", "block", "sdz")
+	partDir := filepath.Join(diskDir, "sdz1")
+	classDir := filepath.Join(root, "class", "block")
+	for _, d := range []string{devDir, partDir, classDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	device := filepath.Join(devDir, "sdz1")
+	if err := os.WriteFile(device, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(partDir, filepath.Join(classDir, "sdz1")); err != nil {
+		t.Fatal(err)
+	}
+	orig := sysClassBlock
+	sysClassBlock = classDir
+	t.Cleanup(func() { sysClassBlock = orig })
+	setSeq := func(seq string) {
+		if err := os.WriteFile(filepath.Join(diskDir, "diskseq"), []byte(seq+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setSeq("41")
+	return device, setSeq
+}
+
+// formatUSB's post-umount check used to re-read /proc/mounts, which never
+// lists a mountpoint that was just unmounted, so every format aborted. The
+// identity check must hold for an unmounted device (the fake node is in no
+// mount table) and must still catch a swapped or pulled stick.
+func TestUSBIdentitySurvivesUmountButNotSwap(t *testing.T) {
+	device, setSeq := fakeUSBDisk(t)
+	id, err := usbDeviceIdentity(device)
+	if err != nil {
+		t.Fatalf("identity of fake partition: %v", err)
+	}
+	if id != "sdz1@41" {
+		t.Fatalf("identity = %q, want sdz1@41 (partition name + parent diskseq)", id)
+	}
+	if !usbStillSameDevice(device, id) {
+		t.Fatal("same, unmounted stick reported as changed: format would always abort")
+	}
+	setSeq("42") // a different stick enumerated under the same name
+	if usbStillSameDevice(device, id) {
+		t.Fatal("swapped stick (new diskseq) not detected: format would wipe it")
+	}
+	setSeq("41")
+	if err := os.Remove(device); err != nil {
+		t.Fatal(err)
+	}
+	if usbStillSameDevice(device, id) {
+		t.Fatal("pulled stick (node gone) not detected")
+	}
+}
+
+// A device with no diskseq anywhere (old kernel, odd driver) must refuse
+// rather than format unverified.
+func TestUSBIdentityWithoutDiskseqRefuses(t *testing.T) {
+	device, _ := fakeUSBDisk(t)
+	if err := os.Remove(filepath.Join(filepath.Dir(filepath.Dir(sysClassBlock)), "devices", "usb1", "block", "sdz", "diskseq")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := usbDeviceIdentity(device); err == nil {
+		t.Fatal("identity without diskseq succeeded; format must refuse")
+	}
+}
