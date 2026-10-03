@@ -67,19 +67,21 @@ submodules, and they must be initialised too).
 cd /opt/pi9696
 git clone https://github.com/DrEVILish/inferno inferno
 cd inferno
-git checkout v0.5.4                      # 04c0efe, an ancestor of dev
+git checkout 06993a1                     # fork dev: v0.5.4 + 13 dev commits + the #49 fixes
 git submodule update --init --recursive  # searchfire, alsa-sys-all, usrvclock-rs
 cargo build --release                    # ~7 min on a Pi 4
 ```
 
-### Why this tag
+### Why this commit
 
-`origin/HEAD` is `dev`, whose `inferno2pipe` takes a *different* CLI
-(`sample_rate=... save_to_file N`) and cannot be invoked the way the app
-invokes it. The 2023-era `master` branch has the right CLI but is three years
-stale. `v0.5.4` is the only recent tag that both keeps the
+The fork's `dev` at `06993a1` is `v0.5.4` (`04c0efe`), the 13 later `dev`
+commits (tests, dependency bumps, configurable TX dither with the old 32-bit
+default) and the malformed-packet fixes (INFERNO-UPSTREAM.md U15).
+`inferno2pipe` is unchanged since `v0.5.4`, so it keeps the
 `-c <channels> -o <path>` + `INFERNO_SAMPLE_RATE`/`INFERNO_NAME` contract the
-app depends on *and* carries the modern transmit support.
+app depends on. (An earlier note here said `dev`'s `inferno2pipe` took a
+different CLI; that is not true of the fork's `dev`.) Pin a commit, not the
+branch, so a rebuild is reproducible; move the pin deliberately.
 
 ### What gets built
 

@@ -1,7 +1,7 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `v0.5.4` / `04c0efe` from the `DrEVILish/inferno` fork)
+AoIP stack, pinned at `06993a1` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
@@ -248,10 +248,11 @@ hardware device before reporting.
 
 ## U15 — Malformed packets panic server tasks (teodly/inferno#49)
 
-**Where it is fixed:** the owner's fork, `DrEVILish/inferno`, branch
-`fix/issue-49-malformed-packets` on top of `dev` (`9767558`). Seven commits,
-each revertible on its own. As with every inferno change, nothing goes
-upstream.
+**Where it is fixed:** the owner's fork, `DrEVILish/inferno`: the seven
+commits of `fix/issue-49-malformed-packets` were fast-forwarded into `dev`
+(`9767558` -> `06993a1`) on 2026-10-03, and the test unit runs that build.
+Each commit is revertible on its own. As with every inferno change, nothing
+goes upstream.
 
 The upstream issue lists four handlers. An audit of every place inferno parses
 network input found more, all fixed:
@@ -272,5 +273,4 @@ pass on the Pi and the dev server (92 on `dev`), the `loopback_trx`
 integration test passes on the dev server, and netaudio channel lists and
 bulk subscribe behave as on stock. Not changed: 0x3014 still removes only the
 first listed channel (U1), and channel lists above 16 RX channels still need
-U13; both are next. The unit still runs stock `v0.5.4`; switching it to the
-fork's `dev` plus these fixes is a separate, tested step.
+U13; both are next.
