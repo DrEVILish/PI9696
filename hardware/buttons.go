@@ -152,7 +152,8 @@ func (bm *ButtonManager) readButton(button *Button) {
 		button.lastChange = now
 
 		if button.callback != nil {
-			go button.callback(button.buttonType)
+			cb, bt := button.callback, button.buttonType
+			postInput(func() { cb(bt) })
 		}
 	} else if !currentState && button.pressed {
 		// Button released

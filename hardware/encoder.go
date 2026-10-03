@@ -206,12 +206,14 @@ func (e *Encoder) readButton() {
 		if holdTime >= 3*time.Second {
 			// Long press (3+ seconds)
 			if e.callbacks.onHold != nil {
-				go e.callbacks.onHold()
+				cb := e.callbacks.onHold
+				postInput(cb)
 			}
 		} else if holdTime >= 50*time.Millisecond {
 			// Normal click (debounced)
 			if e.callbacks.onClick != nil {
-				go e.callbacks.onClick()
+				cb := e.callbacks.onClick
+				postInput(cb)
 			}
 		}
 	} else {
@@ -232,7 +234,7 @@ func (e *Encoder) handleRotation(direction int) {
 	e.mutex.Unlock()
 
 	if callback != nil {
-		go callback(direction)
+		postInput(func() { callback(direction) })
 	}
 }
 
