@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -140,7 +141,15 @@ func scrubbedInfernoEnv() []string {
 // `go ensureTxHolder()`. While a take plays the holder is frozen (the pump
 // owns it) and the reopen is deferred to the playback reaper via
 // txReopenPending.
+//
+// Calls are serialized (txReconcileMu): several triggers fire together (an
+// Inferno restart, a rename, a take ending), and two concurrent reopens
+// each started an inferno instance on the same ports - the loser panicked
+// with "address already in use" inside the plugin while the app, whose
+// warm-up write still succeeded, reported TX ready.
 func ensureTxHolder() {
+	txReconcileMu.Lock()
+	defer txReconcileMu.Unlock()
 	mutex.Lock()
 	if demoMode {
 		mutex.Unlock()
@@ -172,20 +181,15 @@ func ensureTxHolder() {
 	txHolder = nil
 	txHolderDevice = ""
 	txHolderReady = false
+	txHolderFailed = false
 	if old != nil {
 		old.Close()
 		txWriteLocks.Delete(old)
 	}
 	mutex.Unlock()
 
-	applyTxInfernoEnv(txInfernoEnv(name, rate, channels))
-	holder, err := openTxDevice("inferno", rate, channels)
-	if err != nil {
-		// No inferno ALSA device (dev box, sim, plugin not installed):
-		// Dante playback is unavailable and takes fall back to local ALSA.
-		// A clock-less Dante LAN is the other case, but that fails at
-		// warmup, not here.
-		logInfof("TX holder unavailable (%v) - Inferno playback off, local fallback", err)
+	holder, ok := openVerifiedTxHolder(name, rate, channels)
+	if !ok {
 		return
 	}
 	mutex.Lock()
@@ -202,6 +206,119 @@ func ensureTxHolder() {
 	txHolderDevice = want
 	mutex.Unlock()
 	warmupTxHolder(holder, channels)
+}
+
+// txReconcileMu serializes ensureTxHolder (see there). Never taken with the
+// app mutex held; ensureTxHolder takes the app mutex inside it.
+var txReconcileMu sync.Mutex
+
+// txHolderFailed: the last reopen gave up because the TX instance never
+// bound its ports. Guarded by the app mutex; shown by txStatusLocked so the
+// UI says so instead of reporting ready or "no device".
+var txHolderFailed bool
+
+// txPorts are the UDP ports the TX instance binds: INFERNO_ALT_PORT and the
+// next three (arc, cmc, flows control, info request - inferno's
+// settings.rs ALT_PORT handling).
+var txPorts = []int{txAltPort, txAltPort + 1, txAltPort + 2, txAltPort + 3}
+
+// txPortsInUse counts how many txPorts some socket on this host holds, or -1
+// when that cannot be determined (the checks are then skipped). A seam:
+// the test suite replaces it so it never depends on the host's sockets.
+var txPortsInUse = procTxPortsInUse
+
+var procNetUDPPath = "/proc/net/udp"
+
+// procTxPortsInUse reads the kernel's UDP socket table rather than probing
+// with a bind: a probe bind could itself steal a port from an instance that
+// is starting up.
+func procTxPortsInUse() int {
+	data, err := os.ReadFile(procNetUDPPath)
+	if err != nil {
+		return -1
+	}
+	want := map[int]bool{}
+	for _, p := range txPorts {
+		want[p] = true
+	}
+	seen := map[int]bool{}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines[min(1, len(lines)):] {
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			continue
+		}
+		_, hexPort, ok := strings.Cut(f[1], ":")
+		if !ok {
+			continue
+		}
+		if port, err := strconv.ParseInt(hexPort, 16, 32); err == nil && want[int(port)] {
+			seen[int(port)] = true
+		}
+	}
+	return len(seen)
+}
+
+// txPortWait bounds each wait for the TX ports to be released or bound. A
+// var so tests can shrink it.
+var txPortWait = 3 * time.Second
+
+// waitTxPorts polls until exactly want of the TX ports are held, reporting
+// whether that happened within txPortWait. An unknown count is success.
+func waitTxPorts(want int) bool {
+	deadline := time.Now().Add(txPortWait)
+	for {
+		n := txPortsInUse()
+		if n < 0 || n == want {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+const txOpenAttempts = 3
+
+// openVerifiedTxHolder opens the TX device and confirms its inferno instance
+// actually came up. The plugin's close only asks the previous instance to
+// shut down, so a reopen straight after it raced the old sockets: the new
+// instance panicked on "address already in use" and died, yet the ALSA
+// handle still opened and accepted writes, so the app reported TX ready with
+// nothing on the network. Now: wait for the old ports to be released, open,
+// and require the new instance to hold all of them; retry, then give up
+// visibly. Called without the app mutex.
+//
+// An open error means no inferno ALSA device at all (dev box, sim, plugin
+// not installed): TX playback is unavailable and takes fall back to local
+// ALSA. A clock-less network is the other case, but that fails at warmup.
+func openVerifiedTxHolder(name string, rate, channels int) (txFrameWriter, bool) {
+	first, last := txPorts[0], txPorts[len(txPorts)-1]
+	for attempt := 1; ; attempt++ {
+		if !waitTxPorts(0) {
+			logWarnf("TX holder: UDP %d-%d still held %s after the previous instance closed", first, last, txPortWait)
+		}
+		applyTxInfernoEnv(txInfernoEnv(name, rate, channels))
+		holder, err := openTxDevice("inferno", rate, channels)
+		if err != nil {
+			logInfof("TX holder unavailable (%v) - Inferno playback off, local fallback", err)
+			return nil, false
+		}
+		if waitTxPorts(len(txPorts)) {
+			return holder, true
+		}
+		holder.Close()
+		if attempt >= txOpenAttempts {
+			logErrorf("TX holder: inferno instance never bound UDP %d-%d (%d attempts) - Inferno TX off", first, last, attempt)
+			mutex.Lock()
+			txHolderFailed = true
+			showWebNotice("Inferno TX failed to start (ports busy) - see log")
+			mutex.Unlock()
+			return nil, false
+		}
+		logWarnf("TX holder: inferno instance did not bind its ports (attempt %d of %d), retrying", attempt, txOpenAttempts)
+	}
 }
 
 // warmupTxHolder pushes one chunk of silence through a freshly opened holder.
@@ -236,6 +353,8 @@ func txStatusLocked() (short, long string) {
 		return "ready", "Inferno TX ready (" + name + ")"
 	case txHolder != nil:
 		return "no clock", "Inferno TX: waiting for clock"
+	case txHolderFailed && !demoMode:
+		return "failed", "Inferno TX failed to start (ports busy) - see log"
 	case demoMode:
 		return "off", "Inferno TX off (demo mode)"
 	default:
