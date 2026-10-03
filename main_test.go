@@ -5704,3 +5704,46 @@ func TestDeleteAllRecordingsReportsFailures(t *testing.T) {
 		t.Fatal("deletable take was not removed")
 	}
 }
+
+// startRecording stands the input monitor down before it creates the take.
+// Its failure returns used to leave the monitor down (meters dark until
+// something else restarted it), and the take directory's MkdirAll error was
+// ignored entirely. A failed start must restore metering and tell the
+// operator.
+func TestFailedRecordStartRestoresMonitor(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("real ffmpeg required for the monitor")
+	}
+	initTestHardware(t)
+	demoTestCleanup(t)
+	resetTransportCleanup(t)
+	blocker := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(blocker, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+	mutex.Lock()
+	setDemoModeLocked(true)
+	mutex.Unlock()
+	ensureMonitorDown(t)
+	mutex.Lock()
+	startMonitor()
+	monBefore := monitoring
+	origRec, origNotice, origUntil := RecordPath, sysNotice, sysNoticeUntil
+	RecordPath = filepath.Join(blocker, "rec") // take dir cannot be created
+	startRecording()
+	rec, mon, notice := isRecording, monitoring, sysNotice
+	RecordPath, sysNotice, sysNoticeUntil = origRec, origNotice, origUntil
+	mutex.Unlock()
+	if !monBefore {
+		t.Fatal("monitor did not start in demo mode")
+	}
+	if rec {
+		t.Fatal("recording reported started with an uncreatable take directory")
+	}
+	if !mon {
+		t.Fatal("failed record start left the input monitor down")
+	}
+	if !strings.Contains(notice, "RECORD FAILED") {
+		t.Fatalf("no operator notice for the failed start (notice %q)", notice)
+	}
+}

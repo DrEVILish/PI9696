@@ -2409,7 +2409,9 @@ func demoFifoName() string {
 }
 
 func startDemoGeneratorLocked() {
-	os.MkdirAll(RawPath, 0755)
+	if err := os.MkdirAll(RawPath, 0755); err != nil {
+		logErrorf("demo: cannot create %s: %v", RawPath, err)
+	}
 	path := demoFifoName()
 	os.Remove(path)
 	if err := syscall.Mkfifo(path, 0666); err != nil {
@@ -2598,8 +2600,11 @@ func doStartInferno() {
 	path := fmt.Sprintf("%s/%s", RawPath, baseFileName)
 	mutex.Unlock()
 
-	// Ensure directories exist
-	os.MkdirAll(RawPath, 0755)
+	// Ensure directories exist. A failure here surfaces as the Mkfifo error
+	// below; log the cause, which that error alone does not name.
+	if err := os.MkdirAll(RawPath, 0755); err != nil {
+		logErrorf("Cannot create %s for the Inferno FIFO: %v", RawPath, err)
+	}
 
 	// Remove old FIFO if exists
 	os.Remove(path)
@@ -2869,15 +2874,27 @@ func startRecording() {
 	// list (Round 3 design: prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav); an
 	// unset prefix keeps the historical "recording_..." default.
 	stem := fmt.Sprintf("%s_%s_ch%d_%dkHz", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000)
+	// Past this point the input monitor has been stood down for the take.
+	// Every failure must bring it back, or the meters stay dark until
+	// something else restarts it - and must tell the operator, since the
+	// take simply never starts.
+	fail := func(format string, args ...any) {
+		logErrorf(format, args...)
+		showSysNotice("RECORD FAILED - SEE LOG")
+		maybeResumeInputMonitorLocked()
+	}
 	path, err := uniqueRecordingFile(recordingSubdir(recordStart), stem)
 	if err != nil {
-		logErrorf("Cannot start recording: %v", err)
+		fail("Cannot start recording: %v", err)
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		// Unchecked before: ffmpeg then failed to open its output, and the
+		// take started and died with only ffmpeg's own error to go on.
+		fail("Cannot start recording: create %s: %v", filepath.Dir(path), err)
 		return
 	}
 	recordingFile = path
-
-	// Create recording directory
-	os.MkdirAll(filepath.Dir(recordingFile), 0755)
 
 	// Start FFmpeg to convert raw stream from existing Inferno FIFO to final
 	// output. "-fflags nobuffer" was previously here, but on this ffmpeg
@@ -2922,12 +2939,12 @@ func startRecording() {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		logErrorf("Failed to attach FFmpeg stdout: %v", err)
+		fail("Failed to attach FFmpeg stdout: %v", err)
 		return
 	}
 
 	if err := cmd.Start(); err != nil {
-		logErrorf("Failed to start FFmpeg: %v", err)
+		fail("Failed to start FFmpeg: %v", err)
 		return
 	}
 
