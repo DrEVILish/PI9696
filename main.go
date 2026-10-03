@@ -4030,6 +4030,14 @@ func formatUSB() {
 		logErrorf("Cannot format USB: %v", err)
 		return
 	}
+	// Pin the stick's identity while it is still mounted: after the umount
+	// below the mount table no longer names it, so the post-umount check
+	// must compare something that survives the umount but not a swap.
+	identity, err := usbDeviceIdentity(device)
+	if err != nil {
+		logErrorf("Cannot format USB: %v", err)
+		return
+	}
 
 	// umount, then wipe and create a filesystem: exFAT first (no 4GB file
 	// ceiling, which matters at high channel counts), FAT32 fallback when
@@ -4048,8 +4056,11 @@ func formatUSB() {
 	}
 	// Re-verify AFTER umount: a pull/reinsert in that window can hand the
 	// /dev name to a different stick, and mkfs on the stale path would wipe
-	// it. Abort unless the same device is still mounted here.
-	if cur, err := usbDevicePath(); err != nil || cur != device {
+	// it. This used to re-read /proc/mounts, which can never list the
+	// mountpoint just unmounted - every format aborted here, leaving the
+	// stick unmounted and unformatted. The kernel's diskseq changes for
+	// every newly attached disk, so it tells "same stick" from "same name".
+	if !usbStillSameDevice(device, identity) {
 		logErrorf("format USB: device changed during umount (was %s), aborting", device)
 		return
 	}
@@ -4114,6 +4125,42 @@ func usbDevicePath() (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no device mounted at %s", USBMountPoint)
+}
+
+// sysClassBlock is the sysfs block-device directory; a var so tests can
+// point usbDeviceIdentity at a fake tree.
+var sysClassBlock = "/sys/class/block"
+
+// usbDeviceIdentity names the physical disk behind a block device node as
+// "<kernel name>@<diskseq>". diskseq (Linux 5.15+) is a per-boot counter
+// the kernel bumps for every disk it attaches, so a stick pulled and
+// replaced - even one that reuses the same /dev/sdX name - gets a new
+// value. Partitions carry no diskseq of their own; theirs is the parent
+// disk's. Works whether or not the device is mounted.
+func usbDeviceIdentity(device string) (string, error) {
+	real, err := filepath.EvalSymlinks(device)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", device, err)
+	}
+	name := filepath.Base(real)
+	sys, err := filepath.EvalSymlinks(filepath.Join(sysClassBlock, name))
+	if err != nil {
+		return "", fmt.Errorf("no sysfs entry for %s: %w", name, err)
+	}
+	for _, dir := range []string{sys, filepath.Dir(sys)} {
+		if seq, err := os.ReadFile(filepath.Join(dir, "diskseq")); err == nil {
+			return name + "@" + strings.TrimSpace(string(seq)), nil
+		}
+	}
+	return "", fmt.Errorf("no diskseq for %s", name)
+}
+
+// usbStillSameDevice reports whether device still resolves to the disk
+// identified earlier by usbDeviceIdentity. A vanished node (stick pulled)
+// counts as changed.
+func usbStillSameDevice(device, identity string) bool {
+	cur, err := usbDeviceIdentity(device)
+	return err == nil && cur == identity
 }
 
 func detectUSB() {
