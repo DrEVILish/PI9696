@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -405,5 +407,33 @@ func TestHyperdeckSessionCapRefuses(t *testing.T) {
 	// Refused means EOF/closed without the 500-greeting other sessions get.
 	if rerr == nil {
 		t.Fatalf("past-cap connection served %d bytes: %q", n, buf[:n])
+	}
+}
+
+// failingConn is a net.Conn whose writes always fail, recording Close.
+type failingConn struct {
+	net.Conn
+	closed atomic.Bool
+}
+
+func (c *failingConn) Write([]byte) (int, error)        { return 0, errors.New("broken pipe") }
+func (c *failingConn) SetWriteDeadline(time.Time) error { return nil }
+func (c *failingConn) Close() error                     { c.closed.Store(true); return nil }
+
+// A failed reply must end the session whichever helper sent it. block()
+// closed the connection on a write error but ok()/fail() ignored it, so a
+// vanished controller kept its session (one of eight) until the 5-minute
+// read deadline.
+func TestHyperdeckWriteFailureClosesSession(t *testing.T) {
+	for name, send := range map[string]func(h *hyperdeckConn){
+		"ok":    func(h *hyperdeckConn) { h.ok() },
+		"fail":  func(h *hyperdeckConn) { h.fail(100, "syntax error") },
+		"block": func(h *hyperdeckConn) { h.block(204, "device info", nil) },
+	} {
+		c := &failingConn{}
+		send(&hyperdeckConn{c: c})
+		if !c.closed.Load() {
+			t.Errorf("%s(): write failed but the connection was left open", name)
+		}
 	}
 }

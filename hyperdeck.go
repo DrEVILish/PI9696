@@ -157,11 +157,18 @@ type hyperdeckConn struct {
 	lastSig         string
 }
 
+// write sends one response. A failed write (client gone, or stalled past
+// the deadline) closes the connection, which ends the session's read loop
+// at once. Only block() used to do this; ok()/fail() dropped the error, so
+// a dead client held its session slot until the 5-minute idle timeout.
 func (h *hyperdeckConn) write(s string) error {
 	h.wmu.Lock()
 	defer h.wmu.Unlock()
 	h.c.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	_, err := h.c.Write([]byte(s))
+	if err != nil {
+		h.c.Close()
+	}
 	return err
 }
 
@@ -174,9 +181,7 @@ func (h *hyperdeckConn) block(code int, title string, lines []string) {
 		b.WriteString(l + "\r\n")
 	}
 	b.WriteString("\r\n")
-	if err := h.write(b.String()); err != nil {
-		h.c.Close()
-	}
+	h.write(b.String()) // closes the connection itself on failure
 }
 
 func (h *hyperdeckConn) ok() {
