@@ -4889,8 +4889,11 @@ func saveTxGlobals(t *testing.T) {
 	oDemo, oState := demoMode, currentState
 	oRate, oCh, oName := sampleRateIdx, channelCount, deviceName
 	oHolder, oDev, oReady, oPending := txHolder, txHolderDevice, txHolderReady, txReopenPending
-	oOpener, oVia := openTxDevice, playbackViaDante
-	oPorts, oWait, oFailed := txPortsInUse, txPortWait, txHolderFailed
+	oVia, oFailed := playbackViaDante, txHolderFailed
+	var oOpener func(string, int, int) (txFrameWriter, error)
+	var oPorts func() int
+	var oWait time.Duration
+	setTxSeams(func() { oOpener, oPorts, oWait = openTxDevice, txPortsInUse, txPortWait })
 	oCmd := playbackCmd
 	oEnv := make(map[string]string)
 	oEnvSet := make(map[string]bool)
@@ -4898,13 +4901,16 @@ func saveTxGlobals(t *testing.T) {
 		oEnv[k], oEnvSet[k] = os.LookupEnv(k)
 	}
 	t.Cleanup(func() {
+		// Seams first, outside the app mutex: ensureTxHolder takes
+		// txReconcileMu and then the app mutex, so taking them in the other
+		// order here could deadlock against a reconcile still running.
+		setTxSeams(func() { openTxDevice, txPortsInUse, txPortWait = oOpener, oPorts, oWait })
 		mutex.Lock()
 		demoMode, currentState = oDemo, oState
 		sampleRateIdx, channelCount, deviceName = oRate, oCh, oName
 		txHolder, txHolderDevice, txHolderReady, txReopenPending = oHolder, oDev, oReady, oPending
 		txHolderFailed = oFailed
 		playbackViaDante = oVia
-		setTxSeams(func() { openTxDevice, txPortsInUse, txPortWait = oOpener, oPorts, oWait })
 		playbackCmd = oCmd
 		mutex.Unlock()
 		for k := range oEnv {
