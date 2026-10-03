@@ -295,9 +295,24 @@ const txOpenAttempts = 3
 // ALSA. A clock-less network is the other case, but that fails at warmup.
 func openVerifiedTxHolder(name string, rate, channels int) (txFrameWriter, bool) {
 	first, last := txPorts[0], txPorts[len(txPorts)-1]
+	fail := func(why string) {
+		logErrorf("TX holder: %s - Inferno TX off", why)
+		mutex.Lock()
+		txHolderFailed = true
+		showWebNotice("Inferno TX failed to start (ports busy) - see log")
+		mutex.Unlock()
+	}
 	for attempt := 1; ; attempt++ {
+		// Ports still held means the open cannot succeed - and the old
+		// holder's sockets would then satisfy the "bound" check below,
+		// passing a dead instance as ready. Count it as a failed attempt.
 		if !waitTxPorts(0) {
-			logWarnf("TX holder: UDP %d-%d still held %s after the previous instance closed", first, last, txPortWait)
+			if attempt >= txOpenAttempts {
+				fail(fmt.Sprintf("UDP %d-%d never released by the previous instance (%d waits of %s)", first, last, attempt, txPortWait))
+				return nil, false
+			}
+			logWarnf("TX holder: UDP %d-%d still held after %s (attempt %d of %d), waiting again", first, last, txPortWait, attempt, txOpenAttempts)
+			continue
 		}
 		applyTxInfernoEnv(txInfernoEnv(name, rate, channels))
 		holder, err := openTxDevice("inferno", rate, channels)
@@ -310,11 +325,7 @@ func openVerifiedTxHolder(name string, rate, channels int) (txFrameWriter, bool)
 		}
 		holder.Close()
 		if attempt >= txOpenAttempts {
-			logErrorf("TX holder: inferno instance never bound UDP %d-%d (%d attempts) - Inferno TX off", first, last, attempt)
-			mutex.Lock()
-			txHolderFailed = true
-			showWebNotice("Inferno TX failed to start (ports busy) - see log")
-			mutex.Unlock()
+			fail(fmt.Sprintf("inferno instance never bound UDP %d-%d (%d attempts)", first, last, attempt))
 			return nil, false
 		}
 		logWarnf("TX holder: inferno instance did not bind its ports (attempt %d of %d), retrying", attempt, txOpenAttempts)
