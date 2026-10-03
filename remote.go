@@ -1632,12 +1632,13 @@ func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
 
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
 <div class="field-row">
-<form hx-post="/api/settings/channels" hx-target="#channelcount" hx-swap="outerHTML" hx-sync="this:drop">
+<form hx-post="/api/settings/channels" hx-swap="none" hx-sync="this:queue last" hx-status:400="target:#channels-error swap:innerHTML">
 <label class="label" for="channelsInput">Channels</label>
-<input id="channelsInput" class="input" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" title="Number of input channels">
+<input id="channelsInput" class="input" type="number" name="count" min="1" max="{{.Max}}" step="1" value="{{.Count}}" onchange="this.form.requestSubmit()" oninput="document.getElementById('channels-error').textContent=''" title="Number of input channels">
 <span class="hint field-hint">1–{{.Max}}</span>
 </form>
 </div>
+<div id="channels-error"></div>
 </div>`))
 
 // prefixView carries the current filename prefix for the free-text Prefix
@@ -1801,24 +1802,34 @@ func handleAPISettingsSampleRate(w http.ResponseWriter, r *http.Request) {
 	renderFragment(w, selectFragmentTmpl, sampleRateSelect())
 }
 
+// handleAPISettingsChannels applies a channel count. The number box is not
+// swapped on success (204): replacing an input the operator is still
+// spinning overwrote the newer value they had already entered with the
+// server's echo of an older one. A refused value answers 400 with a
+// message, so the field never silently disagrees with the unit.
 func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
-	if n, err := strconv.Atoi(r.FormValue("count")); err == nil {
-		mutex.Lock()
-		// Unchanged is a no-op: Enter in the number box fires both its
-		// change handler and the form submit, and a repeat save of the same
-		// value must not queue a second Inferno restart or config write.
-		if n >= 1 && n <= MaxChannelCount && n != channelCount {
-			channelCount = n
-			// Relaunch Inferno with the new channel count if it's running
-			// (the worker's restart path re-starts monitoring too), so the
-			// running instance - and with it the live VU count - always
-			// matches what the settings page shows.
-			checkInfernoRestart()
-			settingChanged()
-		}
-		mutex.Unlock()
+	n, err := strconv.Atoi(r.FormValue("count"))
+	if err != nil || n < 1 || n > MaxChannelCount {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprintf(w, `<span class="err">Channels must be 1-%d</span>`, MaxChannelCount)
+		return
 	}
-	renderFragment(w, channelCountFragmentTmpl, currentChannelCountView())
+	mutex.Lock()
+	// Unchanged is a no-op: Enter in the number box fires both its change
+	// handler and the form submit, and a repeat save of the same value must
+	// not queue a second Inferno restart or config write.
+	if n != channelCount {
+		channelCount = n
+		// Relaunch Inferno with the new channel count if it's running (the
+		// worker's restart path re-starts monitoring too), so the running
+		// instance - and with it the live VU count - always matches what
+		// the settings page shows.
+		checkInfernoRestart()
+		settingChanged()
+	}
+	mutex.Unlock()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func handleAPISettingsTag(w http.ResponseWriter, r *http.Request) {
