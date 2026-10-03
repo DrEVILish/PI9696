@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"image/png"
 	"io"
 	"net/http"
@@ -5745,5 +5746,26 @@ func TestFailedRecordStartRestoresMonitor(t *testing.T) {
 	}
 	if !strings.Contains(notice, "RECORD FAILED") {
 		t.Fatalf("no operator notice for the failed start (notice %q)", notice)
+	}
+}
+
+// Template errors in fragment handlers were discarded: the client got a
+// truncated 200 and nothing reached the log. renderFragment must log them.
+func TestRenderFragmentLogsTemplateErrors(t *testing.T) {
+	orig := currentLogLevel()
+	path := filepath.Join(t.TempDir(), "app.log")
+	setupLogs(path)
+	t.Cleanup(func() {
+		setupLogs("")
+		applyLogLevel(orig)
+	})
+	broken := template.Must(template.New("broken-fragment").Parse(`<p>{{.Missing}}</p>`))
+	renderFragment(httptest.NewRecorder(), broken, struct{}{})
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "render broken-fragment") {
+		t.Fatalf("template error not logged; log: %q", data)
 	}
 }
