@@ -2268,6 +2268,25 @@ var demoFifoGen uint64
 var demoGenQuit chan struct{}
 var demoGenRunning bool
 
+// demoGenRetryAt holds off restarting a generator whose FIFO could not be
+// created or opened. render() calls syncDemoGeneratorLocked every 100 ms,
+// so without it a persistent failure (e.g. /rec read-only) retried - and
+// logged an error to the journal and the unrotated app log - ten times a
+// second. Cleared when the operator toggles demo mode, so a deliberate
+// retry is immediate.
+var demoGenRetryAt time.Time
+
+const demoGenRetryDelay = 5 * time.Second
+
+// demoGenFailedLocked records a generator start failure: back off, and tell
+// the operator once per attempt instead of leaving DEMO showing with no
+// signal behind it. Callers hold the app mutex.
+func demoGenFailedLocked() {
+	demoGenRetryAt = time.Now().Add(demoGenRetryDelay)
+	showSysNotice("DEMO SOURCE FAILED")
+	showWebNotice("Demo mode: could not create the simulated audio source - retrying")
+}
+
 // infernoUp reports whether audio is flowing, real or simulated. Every
 // "can we monitor/record/show link" gate routes through here; callers hold
 // the app mutex like they did for the raw infernoState comparison.
@@ -2291,6 +2310,9 @@ func audioFifoPath() string {
 // two bool checks; callers hold the app mutex.
 func syncDemoGeneratorLocked() {
 	if demoMode && !demoGenRunning {
+		if time.Now().Before(demoGenRetryAt) {
+			return
+		}
 		startDemoGeneratorLocked()
 	} else if !demoMode && demoGenRunning {
 		stopDemoGeneratorLocked()
@@ -2380,6 +2402,7 @@ func startDemoGeneratorLocked() {
 	os.Remove(path)
 	if err := syscall.Mkfifo(path, 0666); err != nil {
 		logErrorf("demo: failed to create FIFO %s: %v", path, err)
+		demoGenFailedLocked()
 		return
 	}
 	demoFifoKeeper = enlargeFifo(path)
@@ -2416,6 +2439,7 @@ func setDemoModeLocked(on bool) bool {
 		return false
 	}
 	demoMode = on
+	demoGenRetryAt = time.Time{} // an explicit toggle retries at once
 	syncDemoGeneratorLocked()
 	settingChanged()
 	logInfof("demo: mode %v", map[bool]string{true: "ON (simulated audio)", false: "off"}[on])
@@ -2457,6 +2481,7 @@ func demoGenLoop(path string, quit <-chan struct{}, keeper *os.File, gen uint64)
 		if demoFifoPath == path {
 			demoFifoPath = ""
 		}
+		demoGenFailedLocked()
 		mutex.Unlock()
 		return
 	}
