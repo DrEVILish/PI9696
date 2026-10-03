@@ -90,12 +90,15 @@ import (
 )
 
 // LatencyUs is the ALSA buffer/period hint in microseconds. It is a knob
-// rather than a constant because it trades Dante latency against resilience
+// rather than a constant because it trades latency against resilience
 // to scheduling jitter on the host, and the right value is a property of the
-// machine: inferno's own default Dante latency is 10ms, so this must not go
-// much below that, while a recorder benefits from riding out a slow SD card
-// or a busy CPU without an overrun.
-const LatencyUs = 40000
+// machine: inferno's own default network latency is 10ms, so this must not
+// go much below that for the network side, while the ALSA side only feeds
+// the plugin's ring and can be deeper - file playback has no live-input
+// deadline, so depth here buys immunity from app-mutex stalls (the render
+// tick can hold the mutex ~15ms during an SPI push) rather than costing
+// anything audible. Raised after TX xrun-dribble diagnosis on the test unit.
+const LatencyUs = 120000
 
 // Device is an open pair of ALSA handles on one Inferno virtual soundcard.
 type Device struct {
