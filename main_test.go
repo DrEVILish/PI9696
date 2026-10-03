@@ -5581,3 +5581,44 @@ func TestLoginPageDeviceNameRaceFree(t *testing.T) {
 		t.Error("login page does not show the renamed device")
 	}
 }
+
+// Import must apply demo mode and HyperDeck control: export writes both and
+// the boot-time load applies both, but import skipped them and then
+// persisted the unit's own values over the imported profile.
+func TestConfigImportAppliesDemoAndHyperdeck(t *testing.T) {
+	usb := t.TempDir()
+	mutex.Lock()
+	origDemo, origHD, origBind := demoMode, hyperdeckEnabled, hyperdeckBindAddr
+	hyperdeckBindAddr = "127.0.0.1:0"
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		setDemoModeLocked(origDemo)
+		setHyperdeckEnabledLocked(origHD)
+		hyperdeckBindAddr = origBind
+		persistConfig()
+		mutex.Unlock()
+	})
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	if !setDemoModeLocked(true) {
+		t.Fatal("could not enable demo mode for the export")
+	}
+	setHyperdeckEnabledLocked(true)
+	if err := exportConfigTo(usb); err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	setDemoModeLocked(false)
+	setHyperdeckEnabledLocked(false)
+
+	if err := importConfigFrom(usb); err != nil {
+		t.Fatalf("import: %v", err)
+	}
+	if !demoMode {
+		t.Error("import did not apply demo mode from the profile")
+	}
+	if !hyperdeckEnabled || !hyperdeckRunning() {
+		t.Errorf("import did not apply HyperDeck control: enabled=%v listening=%v", hyperdeckEnabled, hyperdeckRunning())
+	}
+}
