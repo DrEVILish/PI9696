@@ -462,6 +462,16 @@ func importConfigFrom(dir string) error {
 		go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
 	}
 
+	// Export and the boot-time load both carry these two; import used to
+	// skip them, and the persistConfig below then wrote the unit's own
+	// values over the profile's. Applied through their setters so the
+	// generator/listener follow the flag (the demo toggle still refuses
+	// mid-take, which leaves the current mode and is logged).
+	if c.DemoMode != demoMode && !setDemoModeLocked(c.DemoMode) {
+		logWarnf("config import: demo mode left %v (transport busy)", demoMode)
+	}
+	setHyperdeckEnabledLocked(c.HyperdeckEnabled)
+
 	checkInfernoRestart()
 	persistConfig()
 	logInfof("config imported from USB %s", configExportName)
