@@ -5769,3 +5769,25 @@ func TestRenderFragmentLogsTemplateErrors(t *testing.T) {
 		t.Fatalf("template error not logged; log: %q", data)
 	}
 }
+
+// Panel notices render on one line in the "selected" font context and
+// silently overflow past 256px (AGENTS.md). Check every notice string,
+// including the counted delete failure at an unrealistically large count.
+func TestSysNoticesFitOneOLEDLine(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	defer mutex.Unlock()
+	hwManager.SwitchToContext("selected")
+	for _, msg := range []string{
+		"BUSY - STOP FIRST",
+		"DEMO SOURCE FAILED",
+		"RECORD FAILED - SEE LOG",
+		fmt.Sprintf("DELETE FAILED: %d FILES", 99999),
+	} {
+		if w := hwManager.GetTextWidth(msg); w > 256 {
+			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
+		} else {
+			t.Logf("%q: %dpx", msg, w)
+		}
+	}
+}
