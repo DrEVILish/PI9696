@@ -524,6 +524,16 @@ func handleLoginGet(w http.ResponseWriter, r *http.Request) {
 
 // writeLoginPage fills in the page-invariant fields (name, logo, theme) and
 // renders; error/box state rides in d.
+// renderFragment executes a page or htmx fragment template into the
+// response. These calls used to drop the error: a failing template sent a
+// truncated 200 with nothing logged. Headers are usually already sent by
+// then, so the error can only be logged, but now it always is.
+func renderFragment(w io.Writer, t *template.Template, data any) {
+	if err := t.Execute(w, data); err != nil {
+		logErrorf("render %s: %v", t.Name(), err)
+	}
+}
+
 func writeLoginPage(w http.ResponseWriter, d loginPageData) {
 	// Snapshot under the app mutex: a WebUI rename writes deviceName under
 	// it, and reading a string mid-write is a data race. No caller holds the
@@ -1064,7 +1074,7 @@ func registerDisplayOptionRoutes(mux *http.ServeMux) {
 			settingChanged()
 			mutex.Unlock()
 			noteActivity()
-			selectFragmentTmpl.Execute(w, settingSelect(opt.id, opt.post, opt.label, "", func() optionsView { return optionsView{Options: opt.options, Idx: opt.get()} }))
+			renderFragment(w, selectFragmentTmpl, settingSelect(opt.id, opt.post, opt.label, "", func() optionsView { return optionsView{Options: opt.options, Idx: opt.get()} }))
 			// Carrier update rides out-of-band so the applied value takes
 			// effect immediately (same pattern as the theme swap).
 			fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">%s</script>", opt.carrier(idx))
@@ -1098,14 +1108,14 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 			mutex.Unlock()
 		}
 	}
-	themeFragmentTmpl.Execute(w, themePicker())
+	renderFragment(w, themeFragmentTmpl, themePicker())
 	if variantChanged {
 		// The tint control follows the theme (shown only when it declares a
 		// tint) and the inline tint token follows the stored colour.
 		tv := currentTintView()
 		tv.OOB = true
 		w.Write([]byte("\n"))
-		tintFragmentTmpl.Execute(w, tv)
+		renderFragment(w, tintFragmentTmpl, tv)
 	}
 	if variantChanged && !themeChanged {
 		// Same bundle, other palette: only the marker attribute changes.
@@ -1221,7 +1231,7 @@ func handleAPISettingsTint(w http.ResponseWriter, r *http.Request) {
 	}
 	mutex.Unlock()
 	noteActivity()
-	tintFragmentTmpl.Execute(w, currentTintView())
+	renderFragment(w, tintFragmentTmpl, currentTintView())
 	fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">%stelePalette=null</script>", tintCarrier())
 }
 
@@ -1467,7 +1477,7 @@ func handleAPISettingsBrightness(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	brightnessFragmentTmpl.Execute(w, brightnessViewData())
+	renderFragment(w, brightnessFragmentTmpl, brightnessViewData())
 }
 
 func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
@@ -1480,7 +1490,7 @@ func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
 	noteActivity()
 	settingChanged()
 	mutex.Unlock()
-	autoDimFragmentTmpl.Execute(w, autoDimViewData())
+	renderFragment(w, autoDimFragmentTmpl, autoDimViewData())
 }
 
 // hyperdeckFragmentTmpl is the Transport -> HyperDeck Control setting: an
@@ -1518,7 +1528,7 @@ func handleAPISettingsHyperdeck(w http.ResponseWriter, r *http.Request) {
 	settingChanged()
 	noteActivity()
 	mutex.Unlock()
-	hyperdeckFragmentTmpl.Execute(w, hyperdeckViewData())
+	renderFragment(w, hyperdeckFragmentTmpl, hyperdeckViewData())
 }
 
 // demoFragmentTmpl is the Demo -> Demo Mode setting: an on/off switch for
@@ -1560,7 +1570,7 @@ func handleAPISettingsDemoMode(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<span class="err">BUSY - STOP FIRST</span>`)
 		return
 	}
-	demoFragmentTmpl.Execute(w, demoViewData())
+	renderFragment(w, demoFragmentTmpl, demoViewData())
 }
 
 // monitorFragmentTmpl is the Audio -> Monitoring setting: an on/off switch
@@ -1616,7 +1626,7 @@ func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(3 * time.Second):
 		}
 	}
-	monitorFragmentTmpl.Execute(w, monitorViewData())
+	renderFragment(w, monitorFragmentTmpl, monitorViewData())
 }
 
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
@@ -1675,7 +1685,7 @@ func handleAPISettingsPrefix(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<span class="err">Letters, numbers, spaces and - only (max 32)</span>`)
 		return
 	}
-	filePrefixFragmentTmpl.Execute(w, filePrefixView())
+	renderFragment(w, filePrefixFragmentTmpl, filePrefixView())
 	// OOB swap: clear any stale validation error from #prefix-error on success.
 	fmt.Fprint(w, "\n<div id=\"prefix-error\" hx-swap-oob=\"innerHTML\"></div>")
 }
@@ -1701,13 +1711,13 @@ func handleAPISettingsTransportMode(w http.ResponseWriter, r *http.Request) {
 			transportMode = "text"
 		} else {
 			mutex.Unlock()
-			transportFragmentTmpl.Execute(w, transportOptionsView())
+			renderFragment(w, transportFragmentTmpl, transportOptionsView())
 			return
 		}
 		settingChanged()
 		mutex.Unlock()
 	}
-	transportFragmentTmpl.Execute(w, transportOptionsView())
+	renderFragment(w, transportFragmentTmpl, transportOptionsView())
 }
 
 // wifiQRView carries the data needed to render the WiFi join QR code in the
@@ -1747,7 +1757,7 @@ func handleAPISettingsVURange(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	selectFragmentTmpl.Execute(w, vuRangeSelect())
+	renderFragment(w, selectFragmentTmpl, vuRangeSelect())
 }
 
 func logLevelOptionsView() optionsView {
@@ -1762,7 +1772,7 @@ func handleAPISettingsLogLevel(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	selectFragmentTmpl.Execute(w, logLevelSelect())
+	renderFragment(w, selectFragmentTmpl, logLevelSelect())
 }
 
 func handleAPISettingsPeakHold(w http.ResponseWriter, r *http.Request) {
@@ -1774,7 +1784,7 @@ func handleAPISettingsPeakHold(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	selectFragmentTmpl.Execute(w, peakHoldSelect())
+	renderFragment(w, selectFragmentTmpl, peakHoldSelect())
 }
 
 func handleAPISettingsSampleRate(w http.ResponseWriter, r *http.Request) {
@@ -1787,7 +1797,7 @@ func handleAPISettingsSampleRate(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	selectFragmentTmpl.Execute(w, sampleRateSelect())
+	renderFragment(w, selectFragmentTmpl, sampleRateSelect())
 }
 
 func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
@@ -1804,7 +1814,7 @@ func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	channelCountFragmentTmpl.Execute(w, currentChannelCountView())
+	renderFragment(w, channelCountFragmentTmpl, currentChannelCountView())
 }
 
 func handleAPISettingsTag(w http.ResponseWriter, r *http.Request) {
@@ -1816,7 +1826,7 @@ func handleAPISettingsTag(w http.ResponseWriter, r *http.Request) {
 		}
 		mutex.Unlock()
 	}
-	selectFragmentTmpl.Execute(w, tagSelect())
+	renderFragment(w, selectFragmentTmpl, tagSelect())
 }
 
 // handleAPISettingsWiFi updates the WiFi access point configuration from the
@@ -3235,7 +3245,7 @@ func handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 	wifiQRFragmentTmpl.Execute(&qrBuf, wifiQRView{wifiEn, wifiS, wifiP, qrBase64})
 
-	dashboardTmpl.Execute(w, dashboardData{
+	renderFragment(w, dashboardTmpl, dashboardData{
 		DeviceName:           name,
 		Logo:                 template.HTML(pi9696LogoSVG),
 		Theme:                activeTheme,
