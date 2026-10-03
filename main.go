@@ -4044,10 +4044,22 @@ func copyFile(src, dst string, cancelled func() bool) error {
 	return os.Rename(tmp, dst)
 }
 
-func deleteAllRecordings() {
+// deleteAllRecordings removes every take and reports how many could not be
+// removed. Failures (read-only or failing media) used to be ignored, so the
+// panel looked like it had wiped the card while takes were still there; now
+// each is logged and the operator gets a count. Caller holds the app mutex
+// (showSysNotice).
+func deleteAllRecordings() (failed int) {
 	for _, file := range recordingFiles() {
-		os.Remove(file)
+		if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
+			logErrorf("delete recording %s: %v", file, err)
+			failed++
+		}
 	}
+	if failed > 0 {
+		showSysNotice(fmt.Sprintf("DELETE FAILED: %d FILES", failed))
+	}
+	return failed
 }
 
 func formatUSB() {
