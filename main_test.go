@@ -5622,3 +5622,52 @@ func TestConfigImportAppliesDemoAndHyperdeck(t *testing.T) {
 		t.Errorf("import did not apply HyperDeck control: enabled=%v listening=%v", hyperdeckEnabled, hyperdeckRunning())
 	}
 }
+
+// A rename replaces the running avahi child. mdnsTick used to Kill and then
+// Wait it while the child's own reaper goroutine was also in Wait - two
+// concurrent Waits on one exec.Cmd (a data race under -race) and a blocking
+// wait under the app mutex. The old child must still be reaped (no zombie)
+// by its reaper alone.
+func TestMdnsRenameReapsOldChildOnce(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	origCmd, origLast, origDev := mdnsCmd, mdnsLastName, deviceName
+	mutex.Unlock()
+	if origCmd != nil {
+		t.Skip("another test left a live mDNS child")
+	}
+	t.Cleanup(func() {
+		mutex.Lock()
+		if mdnsCmd != nil {
+			mdnsCmd.Process.Kill()
+		}
+		mdnsCmd, mdnsLastName, deviceName = origCmd, origLast, origDev
+		mutex.Unlock()
+	})
+	fakeExecutable(t, "avahi-publish-service", "#!/bin/sh\nexec sleep 30\n")
+	mutex.Lock()
+	deviceName = "Unit-Mdns-Old"
+	mutex.Unlock()
+	if !mdnsTick() {
+		t.Fatal("first tick did not publish")
+	}
+	mutex.Lock()
+	old := mdnsCmd
+	deviceName = "Unit-Mdns-New"
+	mutex.Unlock()
+	if !mdnsTick() {
+		t.Fatal("rename tick did not republish")
+	}
+	pid := old.Process.Pid
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+		if err != nil {
+			break // reaped
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("old avahi child %d never reaped: %s", pid, raw)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}

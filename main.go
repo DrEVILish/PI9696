@@ -841,8 +841,10 @@ func mdnsTick() bool {
 		return true
 	}
 	if mdnsCmd != nil {
+		// Kill only: the child's own reaper goroutine (below) is its sole
+		// Wait()er. Waiting here too raced that reaper on the same Cmd and
+		// blocked on the child's exit while holding the app mutex.
 		mdnsCmd.Process.Kill()
-		mdnsCmd.Wait()
 		mdnsCmd = nil
 	}
 	host := sanitizeMDNSHost(name)
@@ -1263,8 +1265,8 @@ func gracefulShutdown() {
 	// orphaned by os.Exit and keeps answering for a dead host.
 	mutex.Lock()
 	if mdnsCmd != nil {
+		// Kill only; mdnsTick's reaper goroutine owns Wait (see there).
 		mdnsCmd.Process.Kill()
-		mdnsCmd.Wait()
 		mdnsCmd = nil
 	}
 	mutex.Unlock()
