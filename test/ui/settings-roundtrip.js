@@ -12,8 +12,8 @@
 // Switches are toggled by click. WiFi fields, the brightness slider and the
 // tint colour picker are skipped (WiFi needs all fields at once; the other
 // two have no Enter and their own checks). A change the server refuses must
-// leave the field showing the server's value; every action must send exactly
-// one save.
+// leave the field showing the server's value; one action must never send
+// conflicting saves. A rapid-spin case checks number boxes keep the last value.
 const { chromium } = require('playwright');
 const fs = require('fs');
 const BASE = process.env.PI9696_URL || 'http://127.0.0.1:18080';
@@ -85,9 +85,10 @@ const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor', 'brigh
     const server = await valueOf(c);
     // The field must always agree with what the server stored (a refused
     // change, e.g. monitoring with no source, legitimately stays put), and a
-    // single user action must send a single save.
+    // single user action must never send conflicting saves (an Enter in a
+    // number box may send the same save twice; the server ignores repeats).
     const refused = server !== target;
-    const bad = now !== server || later !== server || posts.length !== 1;
+    const bad = now !== server || later !== server || posts.length === 0 || !posts.every(p => p === posts[0]);
     results.push({ ctl: `${c.pane}/${c.id || c.container + '>' + c.name}`, before, target, now, later, server, refused, posts: posts.slice(), bad });
     console.log((bad ? 'MISMATCH ' : 'ok       ') + JSON.stringify(results[results.length - 1]));
     // restore
@@ -97,6 +98,26 @@ const SKIP = new Set(['wifiSsid', 'wifiPass', 'wifiEnabled', 'tintcolor', 'brigh
       else if (c.tag === 'SELECT') { await loc.selectOption({ label: before }); }
       else { await loc.fill(before); await loc.press('Enter'); }
     }
+    await page.waitForTimeout(800);
+  }
+  // Rapid spinner clicks on a number box: changes made while a save is in
+  // flight must not be lost - the field and the server end on the last one.
+  {
+    await page.goto(BASE + '/'); await page.waitForTimeout(500);
+    await open('audio');
+    const loc = page.locator('#channelsInput');
+    const start = Number(await loc.inputValue());
+    posts.length = 0;
+    await loc.focus();
+    for (let i = 0; i < 3; i++) await page.keyboard.press('ArrowUp');
+    await page.waitForTimeout(2500);
+    const shown = Number(await loc.inputValue());
+    await page.goto(BASE + '/'); await page.waitForTimeout(500); await open('audio');
+    const server = Number(await page.locator('#channelsInput').inputValue());
+    const bad = shown !== start + 3 || server !== start + 3;
+    results.push({ ctl: 'audio/channelsInput rapid x3', before: start, target: start + 3, now: shown, server, posts: posts.slice(), bad });
+    console.log((bad ? 'MISMATCH ' : 'ok       ') + JSON.stringify(results[results.length - 1]));
+    await page.locator('#channelsInput').fill(String(start)); await page.locator('#channelsInput').press('Enter');
     await page.waitForTimeout(800);
   }
   console.log('errors:', JSON.stringify(errors));

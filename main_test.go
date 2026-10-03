@@ -6014,8 +6014,31 @@ func TestChannelsSaveUnchangedIsNoOp(t *testing.T) {
 	if dirty {
 		t.Error("re-saving the unchanged channel count marked the config dirty")
 	}
-	if !strings.Contains(rec.Body.String(), `value="3"`) {
-		t.Errorf("response does not show the current count: %s", rec.Body.String())
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("status %d, want 204 (the field keeps what the operator entered)", rec.Code)
+	}
+}
+
+// A refused channel count must answer 400 with a message rather than a 200
+// that leaves the field showing a value the unit does not have.
+func TestChannelsSaveRejectsOutOfRange(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	orig := channelCount
+	mutex.Unlock()
+	for _, v := range []string{"0", "999", "x"} {
+		req := httptest.NewRequest("POST", "/api/settings/channels", strings.NewReader("count="+v))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		rec := httptest.NewRecorder()
+		handleAPISettingsChannels(rec, req)
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "Channels must be") {
+			t.Errorf("count=%s: status %d body %q, want 400 with a message", v, rec.Code, rec.Body.String())
+		}
+	}
+	mutex.Lock()
+	defer mutex.Unlock()
+	if channelCount != orig {
+		t.Fatalf("refused saves changed the channel count to %d", channelCount)
 	}
 }
 
@@ -6080,3 +6103,4 @@ func TestPatternAttributesValidUnderVFlag(t *testing.T) {
 		}
 	}
 }
+
