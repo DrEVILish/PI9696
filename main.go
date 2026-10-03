@@ -749,11 +749,15 @@ func terminateFfmpeg(p *os.Process, exited <-chan struct{}, what string) {
 		return
 	}
 	signalTERM(p, what)
+	// Read the grace once, here: the watchdog outlives this call, and
+	// reading the package var from it races any later change (tests shrink
+	// and restore it; -race flagged exactly that).
+	grace := ffmpegStopGrace
 	go func() {
 		select {
 		case <-exited:
-		case <-time.After(ffmpegStopGrace):
-			logWarnf("%s ignored SIGTERM after %s, sending SIGKILL", what, ffmpegStopGrace)
+		case <-time.After(grace):
+			logWarnf("%s ignored SIGTERM after %s, sending SIGKILL", what, grace)
 			if err := p.Signal(syscall.SIGKILL); err != nil && !errors.Is(err, os.ErrProcessDone) {
 				logWarnf("%s: SIGKILL failed: %v", what, err)
 			}
