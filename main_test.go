@@ -58,6 +58,10 @@ func TestMain(m *testing.M) {
 		return nil, errors.New("test suite: no inferno ALSA device")
 	}
 	RawPath = filepath.Join(recDir, "raw")
+	// TX port verification reads the host's UDP table; a dev box running
+	// inferno (or not) must not decide TX tests. "Unknown" skips the checks;
+	// tests that exercise them script their own table.
+	txPortsInUse = func() int { return -1 }
 	go infernoWorker()
 	code := m.Run()
 	os.RemoveAll(recDir)
@@ -4869,12 +4873,23 @@ func (f *fakeTxHolder) flattened() []int32 {
 	return out
 }
 
+// setTxSeams swaps the TX holder test seams under txReconcileMu, which every
+// ensureTxHolder holds while it uses them: reconciles launched by earlier
+// tests (go ensureTxHolder) may still be running, and a bare assignment
+// races their reads.
+func setTxSeams(f func()) {
+	txReconcileMu.Lock()
+	defer txReconcileMu.Unlock()
+	f()
+}
+
 func saveTxGlobals(t *testing.T) {
 	t.Helper()
 	oDemo, oState := demoMode, currentState
 	oRate, oCh, oName := sampleRateIdx, channelCount, deviceName
 	oHolder, oDev, oReady, oPending := txHolder, txHolderDevice, txHolderReady, txReopenPending
 	oOpener, oVia := openTxDevice, playbackViaDante
+	oPorts, oWait, oFailed := txPortsInUse, txPortWait, txHolderFailed
 	oCmd := playbackCmd
 	oEnv := make(map[string]string)
 	oEnvSet := make(map[string]bool)
@@ -4886,7 +4901,9 @@ func saveTxGlobals(t *testing.T) {
 		demoMode, currentState = oDemo, oState
 		sampleRateIdx, channelCount, deviceName = oRate, oCh, oName
 		txHolder, txHolderDevice, txHolderReady, txReopenPending = oHolder, oDev, oReady, oPending
-		openTxDevice, playbackViaDante = oOpener, oVia
+		txHolderFailed = oFailed
+		playbackViaDante = oVia
+		setTxSeams(func() { openTxDevice, txPortsInUse, txPortWait = oOpener, oPorts, oWait })
 		playbackCmd = oCmd
 		mutex.Unlock()
 		for k := range oEnv {
@@ -5170,10 +5187,12 @@ func TestEnsureTxHolderLifecycle(t *testing.T) {
 	}
 	var calls []openCall
 	fake := &fakeTxHolder{}
-	openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
-		calls = append(calls, openCall{device, rate, channels})
-		return fake, nil
-	}
+	setTxSeams(func() {
+		openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
+			calls = append(calls, openCall{device, rate, channels})
+			return fake, nil
+		}
+	})
 	mutex.Lock()
 	demoMode = false
 	sampleRateIdx, channelCount, deviceName = 1, 2, "PI9696"
@@ -5241,9 +5260,11 @@ func TestEnsureTxHolderUnreadyOnNoClock(t *testing.T) {
 	initTestHardware(t)
 	saveTxGlobals(t)
 	dead := &fakeTxHolder{writeErr: errors.New("no clock available (timeout waiting for overlay update)")}
-	openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
-		return dead, nil
-	}
+	setTxSeams(func() {
+		openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
+			return dead, nil
+		}
+	})
 	mutex.Lock()
 	demoMode = false
 	sampleRateIdx, channelCount, deviceName = 1, 2, "PI9696"
@@ -5267,9 +5288,11 @@ func TestEnsureTxHolderUnreadyOnNoClock(t *testing.T) {
 func TestEnsureTxHolderAbsentWithoutDevice(t *testing.T) {
 	initTestHardware(t)
 	saveTxGlobals(t)
-	openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
-		return nil, errors.New("no such ALSA device")
-	}
+	setTxSeams(func() {
+		openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
+			return nil, errors.New("no such ALSA device")
+		}
+	})
 	mutex.Lock()
 	demoMode = false
 	currentState = StateIdle
@@ -5789,5 +5812,180 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		} else {
 			t.Logf("%q: %dpx", msg, w)
 		}
+	}
+}
+
+// procTxPortsInUse parses the kernel UDP table: count the TX ports (10300-
+// 10303) any socket holds, by local port, regardless of address or state.
+func TestProcTxPortsInUseParsesUDPTable(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "udp")
+	table := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n" +
+		"   1: 00000000:283C 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0 0\n" + // 10300
+		"   2: 450200C0:283D 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0 0\n" + // 10301
+		"   3: 00000000:283D 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0 0\n" + // 10301 again
+		"   4: 450200C0:1158 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0 0\n" // 4440, not TX
+	if err := os.WriteFile(path, []byte(table), 0644); err != nil {
+		t.Fatal(err)
+	}
+	orig := procNetUDPPath
+	procNetUDPPath = path
+	t.Cleanup(func() { procNetUDPPath = orig })
+	if n := procTxPortsInUse(); n != 2 {
+		t.Fatalf("procTxPortsInUse = %d, want 2 (10300, 10301)", n)
+	}
+	procNetUDPPath = filepath.Join(t.TempDir(), "missing")
+	if n := procTxPortsInUse(); n != -1 {
+		t.Fatalf("unreadable table = %d, want -1 (unknown)", n)
+	}
+}
+
+// txPortSim scripts the host UDP table for TX holder tests: the ports a
+// fake inferno instance holds, settable as it "starts" and "stops".
+type txPortSim struct {
+	mu   sync.Mutex
+	held int
+}
+
+func (p *txPortSim) count() int { p.mu.Lock(); defer p.mu.Unlock(); return p.held }
+func (p *txPortSim) set(n int)  { p.mu.Lock(); p.held = n; p.mu.Unlock() }
+
+func txHolderTestSetup(t *testing.T) *txPortSim {
+	t.Helper()
+	initTestHardware(t)
+	saveTxGlobals(t)
+	sim := &txPortSim{}
+	setTxSeams(func() { txPortsInUse = sim.count })
+	setTxSeams(func() { txPortWait = 200 * time.Millisecond })
+	mutex.Lock()
+	demoMode = false
+	sampleRateIdx, channelCount, deviceName = 1, 2, "PI9696"
+	currentState = StateIdle
+	txHolder, txHolderDevice, txHolderReady, txHolderFailed = nil, "", false, false
+	mutex.Unlock()
+	return sim
+}
+
+// The reported fault: after a settings change the new TX instance lost the
+// race for its ports ("address already in use" inside the plugin) and died,
+// but the ALSA handle still accepted writes, so the dashboard said "TX
+// ready". An instance that never binds must be retried, not trusted.
+func TestTxHolderRetriesInstanceThatFailedToBind(t *testing.T) {
+	ports := txHolderTestSetup(t)
+	var opened []*fakeTxHolder
+	setTxSeams(func() {
+		openTxDevice = func(string, int, int) (txFrameWriter, error) {
+			h := &fakeTxHolder{}
+			opened = append(opened, h)
+			if len(opened) >= 2 {
+				ports.set(len(txPorts)) // second instance comes up properly
+			}
+			return h, nil
+		}
+	})
+	ensureTxHolder()
+	mutex.Lock()
+	holder, ready, failed := txHolder, txHolderReady, txHolderFailed
+	mutex.Unlock()
+	if len(opened) != 2 {
+		t.Fatalf("opens = %d, want 2 (dead instance retried once)", len(opened))
+	}
+	if !opened[0].closed {
+		t.Error("the instance that failed to bind was not closed")
+	}
+	if holder != opened[1] || !ready || failed {
+		t.Errorf("holder=%p want second instance %p, ready=%v failed=%v", holder, opened[1], ready, failed)
+	}
+}
+
+// An instance that never binds after every attempt must leave TX visibly
+// failed - never "ready".
+func TestTxHolderReportsFailureWhenInstanceNeverBinds(t *testing.T) {
+	txHolderTestSetup(t)
+	opens := 0
+	setTxSeams(func() {
+		openTxDevice = func(string, int, int) (txFrameWriter, error) {
+			opens++
+			return &fakeTxHolder{}, nil
+		}
+	})
+	ensureTxHolder()
+	mutex.Lock()
+	defer mutex.Unlock()
+	if opens != txOpenAttempts {
+		t.Fatalf("opens = %d, want %d attempts", opens, txOpenAttempts)
+	}
+	short, long := txStatusLocked()
+	if txHolder != nil || txHolderReady || short != "failed" {
+		t.Fatalf("after %d failed binds: holder=%v ready=%v status=%q/%q; want no holder and \"failed\"", opens, txHolder != nil, txHolderReady, short, long)
+	}
+	if !strings.Contains(webNotice, "Inferno TX failed") {
+		t.Errorf("no dashboard notice for the TX failure (notice %q)", webNotice)
+	}
+}
+
+// A reopen must wait for the previous instance to release its ports before
+// starting the next one: the plugin's close only asks it to shut down.
+func TestTxHolderReopenWaitsForOldPorts(t *testing.T) {
+	ports := txHolderTestSetup(t)
+	setTxSeams(func() { txPortWait = 2 * time.Second })
+	ports.set(len(txPorts))
+	mutex.Lock()
+	txHolder, txHolderDevice, txHolderReady = &fakeTxHolder{}, "stale", true
+	mutex.Unlock()
+	var freedAt, openedAt time.Time
+	go func() {
+		time.Sleep(150 * time.Millisecond) // old instance lingers
+		freedAt = time.Now()
+		ports.set(0)
+	}()
+	setTxSeams(func() {
+		openTxDevice = func(string, int, int) (txFrameWriter, error) {
+			openedAt = time.Now()
+			if ports.count() != 0 {
+				t.Error("opened a new instance while the old one still held the ports")
+			}
+			ports.set(len(txPorts))
+			return &fakeTxHolder{}, nil
+		}
+	})
+	ensureTxHolder()
+	if openedAt.IsZero() || openedAt.Before(freedAt) {
+		t.Fatalf("open at %v, ports freed at %v: reopen did not wait", openedAt, freedAt)
+	}
+}
+
+// Concurrent triggers (Inferno restart, rename, take end) must not open two
+// instances at once: the loser died on "address already in use".
+func TestEnsureTxHolderSerialized(t *testing.T) {
+	txHolderTestSetup(t)
+	var inflight, maxInflight atomic.Int32
+	setTxSeams(func() {
+		openTxDevice = func(string, int, int) (txFrameWriter, error) {
+			n := inflight.Add(1)
+			for {
+				m := maxInflight.Load()
+				if n <= m || maxInflight.CompareAndSwap(m, n) {
+					break
+				}
+			}
+			time.Sleep(50 * time.Millisecond)
+			inflight.Add(-1)
+			return &fakeTxHolder{}, nil
+		}
+	})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			mutex.Lock()
+			channelCount = 2 + i%2 // alternate so each call wants a reopen
+			mutex.Unlock()
+			ensureTxHolder()
+		}(i)
+	}
+	wg.Wait()
+	if m := maxInflight.Load(); m > 1 {
+		t.Fatalf("%d TX instances were opened concurrently", m)
 	}
 }
