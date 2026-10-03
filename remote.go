@@ -1963,6 +1963,13 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
 <meta name="theme-color" content="#00d9ff">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<!-- Settle off: htmx 4.0's settle step copies the outgoing element's
+     attributes onto the incoming one (setting the live value too), refocuses
+     it, then applies the real attributes - which a focused, now-dirty input
+     ignores. A text/number field saved with Enter showed its OLD value while
+     the server (and the main window) had the new one. Nothing here uses
+     settle transitions. -->
+<meta name="htmx-config" content='{"defaultSettleDelay":0}'>
 <script src="/static/htmax.min.js"></script>
 <link rel="stylesheet" href="/static/uPlot.min.css">
 <script src="/static/uPlot.iife.min.js"></script>

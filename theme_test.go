@@ -671,3 +671,22 @@ func TestTintPreviewAndPersistence(t *testing.T) {
 		t.Errorf("malformed stored colour kept: %v", v)
 	}
 }
+
+// htmx 4.0's settle step showed a text/number field's OLD value after an
+// Enter-save (it copies outgoing attributes, sets the live value, refocuses,
+// and the focused input then ignores the real value). The dashboard turns
+// settle off; keep it off. Browser-level check: test/ui/settings-roundtrip.js.
+func TestDashboardDisablesHtmxSettle(t *testing.T) {
+	initTestHardware(t)
+	rec := httptest.NewRecorder()
+	handleDashboard(rec, httptest.NewRequest("GET", "/", nil))
+	body := rec.Body.String()
+	meta := `<meta name="htmx-config" content='{"defaultSettleDelay":0}'>`
+	i, j := strings.Index(body, meta), strings.Index(body, `<script src="/static/htmax.min.js">`)
+	if i < 0 {
+		t.Fatal("dashboard no longer sets htmx defaultSettleDelay 0")
+	}
+	if j < 0 || i > j {
+		t.Fatal("htmx-config meta must come before htmax.min.js, which reads it at load")
+	}
+}
