@@ -7602,3 +7602,31 @@ func TestInfernoFifoIsPrivate(t *testing.T) {
 		t.Fatalf("FIFO mode %o is open to other accounts", perm)
 	}
 }
+
+// Tokens are 8 symbols from the alphabet, drawn without modulo bias: over
+// many tokens every symbol appears at close to its fair share. The old
+// byte%31 gave the first 8 symbols 9/256 instead of 8/256 - about 9% over
+// fair; with 320k draws one standard deviation is about 1%, so a 5% bound
+// catches that bias without flaking.
+func TestGenerateRemoteTokenUniform(t *testing.T) {
+	counts := map[rune]int{}
+	const n = 40000
+	for i := 0; i < n; i++ {
+		tok := generateRemoteToken()
+		if len(tok) != remoteTokenLength {
+			t.Fatalf("token %q has length %d", tok, len(tok))
+		}
+		for _, c := range tok {
+			if !strings.ContainsRune(remoteTokenAlphabet, c) {
+				t.Fatalf("token %q has symbol %q outside the alphabet", tok, c)
+			}
+			counts[c]++
+		}
+	}
+	fair := float64(n*remoteTokenLength) / float64(len(remoteTokenAlphabet))
+	for _, c := range remoteTokenAlphabet {
+		if dev := (float64(counts[c]) - fair) / fair; dev > 0.05 || dev < -0.05 {
+			t.Errorf("symbol %q drawn %d times, %.1f%% off its fair share", c, counts[c], dev*100)
+		}
+	}
+}

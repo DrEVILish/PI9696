@@ -41,7 +41,7 @@ import (
 // to the device - the same trust model as the rest of this app's local-only
 // controls, just extended to the LAN.
 //
-// It's short (8 chars from a 32-symbol alphabet, ~40 bits of entropy)
+// It's short (8 chars from a 31-symbol alphabet, ~39.6 bits of entropy)
 // because it has to fit on a 256px-wide OLED line and be typeable from a
 // phone; loginLimiter's lockout is what keeps that from being brute-forceable
 // over the network in practice, not the raw length. Displayed (OLED, login
@@ -54,13 +54,21 @@ const (
 )
 
 func generateRemoteToken() string {
-	b := make([]byte, remoteTokenLength)
-	if _, err := rand.Read(b); err != nil {
-		log.Fatalf("Failed to generate remote control token: %v", err)
-	}
-	out := make([]byte, len(b))
-	for i, c := range b {
-		out[i] = remoteTokenAlphabet[int(c)%len(remoteTokenAlphabet)]
+	// Rejection sampling: 256 is not a multiple of the 31-symbol alphabet,
+	// so a plain byte%31 made the first 8 symbols slightly likelier. Bytes
+	// at or above the largest multiple of 31 are discarded and redrawn.
+	limit := 256 - 256%len(remoteTokenAlphabet)
+	out := make([]byte, 0, remoteTokenLength)
+	b := make([]byte, remoteTokenLength*2)
+	for len(out) < remoteTokenLength {
+		if _, err := rand.Read(b); err != nil {
+			log.Fatalf("Failed to generate remote control token: %v", err)
+		}
+		for _, c := range b {
+			if int(c) < limit && len(out) < remoteTokenLength {
+				out = append(out, remoteTokenAlphabet[int(c)%len(remoteTokenAlphabet)])
+			}
+		}
 	}
 	return string(out)
 }
