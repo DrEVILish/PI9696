@@ -17,6 +17,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"pi9696/alsapcm"
@@ -59,6 +61,172 @@ var (
 		return alsapcm.OpenPlayback(device, rate, channels)
 	}
 )
+
+// --- Single-instance (in-process RX + TX) path --------------------------
+//
+// The owner's invariant is one inferno instance per unit, with equal RX and
+// TX channel counts both visible on the network. The historical layout ran
+// two instances (inferno2pipe RX-only + this holder TX-only), which showed
+// up as two devices on one IP and advertised 0 RX. alsapcm.Open opens a
+// paired capture+playback handle on a single ALSA device, so one instance
+// can do both. When PI9696_INPROC_RX is set, doStartInferno opens that paired
+// device and an in-process reader copies captured frames into the same FIFO
+// inferno2pipe used to write, leaving every downstream consumer unchanged.
+//
+// Gated by the env toggle while the path is validated against the bit-exact
+// channel sweep; the default remains the proven inferno2pipe subprocess.
+
+// inProcRX reports whether the single-instance in-process RX+TX path is on.
+func inProcRX() bool { return os.Getenv("PI9696_INPROC_RX") != "" }
+
+var (
+	inProcRxDevice *alsapcm.Device // the paired capture+playback device, nil when stopped
+	inProcRxQuit   chan struct{}   // closed to stop the capture loop
+	inProcRxDone   chan struct{}   // closed by the capture loop when it has exited
+	inProcRxGen    uint64          // generation tag, bumped per (re)start
+)
+
+// unifiedTxInfernoEnv is the plugin config for the single paired instance:
+// equal RX and TX channels, the unit's own name (no "-TX" suffix), and the
+// primary UDP ports (no ALT_PORT/PROCESS_ID override, which existed only to
+// keep the TX-only holder off inferno2pipe's ports).
+func applyUnifiedInfernoEnv(name string, rate, channels int) {
+	os.Setenv("INFERNO_NAME", sanitizeDanteName(name))
+	os.Setenv("INFERNO_SAMPLE_RATE", fmt.Sprintf("%d", rate))
+	os.Setenv("INFERNO_TX_CHANNELS", fmt.Sprintf("%d", channels))
+	os.Setenv("INFERNO_RX_CHANNELS", fmt.Sprintf("%d", channels))
+	// Clear the TX-only holder's separation keys so the single instance binds
+	// the default ports and the default process id.
+	os.Unsetenv("INFERNO_ALT_PORT")
+	os.Unsetenv("INFERNO_PROCESS_ID")
+}
+
+// startInProcInferno opens the paired device, publishes it as the TX holder,
+// and starts the capture loop feeding fifoPath. Returns false if the device
+// cannot be opened (no inferno ALSA plugin: caller falls back to InfernoFailed
+// exactly as a missing inferno2pipe binary would). Runs without the app mutex.
+func startInProcInferno(name string, rate, channels int, fifoPath string) bool {
+	applyUnifiedInfernoEnv(name, rate, channels)
+	dev, err := alsapcm.Open("inferno", rate, channels)
+	if err != nil {
+		logErrorf("in-process inferno: cannot open paired ALSA device: %v", err)
+		return false
+	}
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	mutex.Lock()
+	inProcRxGen++
+	gen := inProcRxGen
+	inProcRxDevice, inProcRxQuit, inProcRxDone = dev, quit, done
+	txHolder = dev
+	txHolderDevice = fmt.Sprintf("inferno:%s:%d:%d", sanitizeDanteName(name), rate, channels)
+	txHolderReady = false
+	txHolderFailed = false
+	mutex.Unlock()
+	go infernoRxLoop(dev, fifoPath, quit, done, gen, channels)
+	// Warm up the TX side against the clock overlay, same as the TX-only
+	// holder; recording is gated separately on clock sync (clocksync.go).
+	go warmupTxHolder(dev, channels)
+	return true
+}
+
+// stopInProcInferno stops the capture loop, waits for it to exit, then closes
+// the paired device. The wait matters: closing an ALSA handle while a readi
+// is in flight on another thread is undefined, so the loop must be out of
+// Read before Close. Runs without the app mutex.
+func stopInProcInferno() {
+	mutex.Lock()
+	quit, done, dev := inProcRxQuit, inProcRxDone, inProcRxDevice
+	inProcRxQuit, inProcRxDone, inProcRxDevice = nil, nil, nil
+	if txFrameWriter(dev) == txHolder {
+		txHolder, txHolderDevice, txHolderReady = nil, "", false
+	}
+	mutex.Unlock()
+	if quit != nil {
+		close(quit)
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			logWarnf("in-process inferno: capture loop did not exit in 2s")
+		}
+	}
+	if dev != nil {
+		txWriteLocks.Delete(txFrameWriter(dev))
+		dev.Close()
+	}
+}
+
+// infernoRxLoop copies captured frames from the paired device into the FIFO
+// ffmpeg records and monitors from, in the exact interleaved little-endian
+// s32le layout inferno2pipe wrote, so the recording pipeline is unchanged.
+//
+// Raw O_NONBLOCK FIFO writes (not os.File) for the same reason as demoGenLoop:
+// Go's poller would park a blocking write with no reader and ignore quit;
+// EAGAIN keeps every iteration responsive. O_RDWR holds a read end so a write
+// with no ffmpeg attached yet gets EAGAIN rather than SIGPIPE.
+func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done chan struct{}, gen uint64, channels int) {
+	defer close(done)
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		logErrorf("in-process inferno: open FIFO %s: %v", path, err)
+		return
+	}
+	defer syscall.Close(fd)
+
+	const chunkFrames = txPumpFrames
+	frames := make([]int32, chunkFrames*channels)
+	buf := make([]byte, chunkFrames*channels*4)
+	for {
+		select {
+		case <-quit:
+			return
+		default:
+		}
+		n, err := dev.Read(frames)
+		if err != nil {
+			// Device closed (restart) or unrecoverable: exit. A restart
+			// reopens; a real fault leaves infernoState for the worker.
+			select {
+			case <-quit:
+			default:
+				logWarnf("in-process inferno: capture read ended: %v", err)
+			}
+			return
+		}
+		if n == 0 {
+			// No media yet (clock not valid, or a short wakeup): don't spin.
+			time.Sleep(2 * time.Millisecond)
+			continue
+		}
+		total := n * channels * 4
+		for i := 0; i < n*channels; i++ {
+			binary.LittleEndian.PutUint32(buf[i*4:], uint32(frames[i]))
+		}
+		for off := 0; off < total; {
+			select {
+			case <-quit:
+				return
+			default:
+			}
+			w, werr := syscall.Write(fd, buf[off:total])
+			if werr != nil {
+				if werr == syscall.EAGAIN {
+					time.Sleep(2 * time.Millisecond)
+					continue
+				}
+				// Reader tore the FIFO down: exit; the next (re)start rebuilds.
+				return
+			}
+			if w == 0 {
+				time.Sleep(2 * time.Millisecond)
+				continue
+			}
+			off += w
+		}
+	}
+}
 
 // sanitizeDanteName maps the unit name onto Dante device-name rules
 // (letters, digits, hyphen; starts with a letter; max 31 chars). Spaces and
@@ -148,6 +316,13 @@ func scrubbedInfernoEnv() []string {
 // with "address already in use" inside the plugin while the app, whose
 // warm-up write still succeeded, reported TX ready.
 func ensureTxHolder() {
+	// In single-instance mode the paired device is owned by
+	// doStartInferno/doStopInferno (RX and TX are one instance), so there is
+	// no separate TX holder to reconcile; a rename or settings change goes
+	// through an Inferno restart instead.
+	if inProcRX() {
+		return
+	}
 	txReconcileMu.Lock()
 	defer txReconcileMu.Unlock()
 	mutex.Lock()

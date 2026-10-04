@@ -6194,3 +6194,50 @@ func TestDemoExitStartsInfernoWhenLinkUp(t *testing.T) {
 		}
 	}
 }
+
+// Single-instance mode advertises one device: the unit's own name (no "-TX"),
+// equal RX and TX channels, and the primary ports (the TX-only separation
+// keys cleared). applyUnifiedInfernoEnv builds that plugin config.
+func TestUnifiedInfernoEnv(t *testing.T) {
+	saveTxGlobals(t) // restores INFERNO_* env in cleanup
+	os.Setenv("INFERNO_ALT_PORT", "10300")
+	os.Setenv("INFERNO_PROCESS_ID", "1")
+	applyUnifiedInfernoEnv("PI 9696_Live", 48000, 32)
+	if got := os.Getenv("INFERNO_NAME"); got != "PI-9696-Live" {
+		t.Errorf("INFERNO_NAME = %q, want sanitized name without -TX", got)
+	}
+	if rx, tx := os.Getenv("INFERNO_RX_CHANNELS"), os.Getenv("INFERNO_TX_CHANNELS"); rx != "32" || tx != "32" {
+		t.Errorf("RX=%q TX=%q, want equal 32/32", rx, tx)
+	}
+	if os.Getenv("INFERNO_SAMPLE_RATE") != "48000" {
+		t.Errorf("INFERNO_SAMPLE_RATE = %q, want 48000", os.Getenv("INFERNO_SAMPLE_RATE"))
+	}
+	for _, k := range []string{"INFERNO_ALT_PORT", "INFERNO_PROCESS_ID"} {
+		if v, ok := os.LookupEnv(k); ok {
+			t.Errorf("%s still set (%q); the single instance must take the primary ports", k, v)
+		}
+	}
+}
+
+// ensureTxHolder is a no-op in single-instance mode: the paired device is
+// owned by the Inferno start/stop lifecycle, so reconciling a separate TX
+// holder would open a second instance.
+func TestEnsureTxHolderNoopInProcRX(t *testing.T) {
+	saveTxGlobals(t)
+	t.Setenv("PI9696_INPROC_RX", "1")
+	opened := false
+	setTxSeams(func() {
+		openTxDevice = func(string, int, int) (txFrameWriter, error) {
+			opened = true
+			return &fakeTxHolder{}, nil
+		}
+	})
+	mutex.Lock()
+	txHolder, txHolderDevice, txHolderReady = nil, "", false
+	demoMode, currentState = false, StateIdle
+	mutex.Unlock()
+	ensureTxHolder()
+	if opened {
+		t.Error("ensureTxHolder opened a TX device in single-instance mode (would be a second instance)")
+	}
+}

@@ -2635,6 +2635,36 @@ func doStartInferno() {
 	}
 	fifoKeeper = enlargeFifo(path)
 
+	// Single-instance path (PI9696_INPROC_RX): open the paired capture+
+	// playback ALSA device and feed the FIFO in-process, instead of the
+	// inferno2pipe subprocess. One inferno instance advertises equal RX and
+	// TX; the FIFO contract is unchanged, so record/monitor downstream are
+	// untouched. infernoCmd stays nil - doStopInferno tears this down.
+	if inProcRX() {
+		if !startInProcInferno(name, sampleRate, channels, path) {
+			mutex.Lock()
+			infernoState = InfernoFailed
+			closeFifoKeeperLocked()
+			mutex.Unlock()
+			os.Remove(path)
+			return
+		}
+		mutex.Lock()
+		fifoPath = path
+		infernoState = InfernoRunning
+		lastSampleRate = sampleRate
+		lastChannelCount = channels
+		if !isRecording {
+			startMonitor()
+			if monitoring {
+				autoMonitor = true
+			}
+		}
+		mutex.Unlock()
+		logInfof("Inferno (in-process RX+TX) started: %dkHz, %d channels", sampleRate/1000, channels)
+		return
+	}
+
 	// The Inferno server is built once during installation
 	// (`cargo build --release`), so at runtime we start the prebuilt binary
 	// directly instead of invoking cargo - starting cargo at runtime made
@@ -2761,6 +2791,11 @@ func stopProcessGroup(cmd *exec.Cmd, what string) {
 }
 
 func doStopInferno() {
+	// Single-instance mode: stop the capture loop and close the paired
+	// device first, so no writer remains before the FIFO is removed below.
+	if inProcRX() {
+		stopInProcInferno()
+	}
 	mutex.Lock()
 	cmd := infernoCmd
 	path := fifoPath

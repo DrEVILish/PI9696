@@ -3362,9 +3362,14 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	persistConfig()
 	mutex.Unlock()
 	logInfof("Device name changed to %q via remote", name)
-	// The TX holder advertises <name>-TX: reconcile it with the new name
-	// (deferred while a take plays).
-	go ensureTxHolder()
+	// Reconcile the advertised name. Single-instance mode carries the name on
+	// the one paired device, so restart Inferno; the two-instance path just
+	// reopens the TX holder (deferred while a take plays).
+	if inProcRX() {
+		restartInfernoServer()
+	} else {
+		go ensureTxHolder()
+	}
 
 	mutex.Lock()
 	current := deviceName
