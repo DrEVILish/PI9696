@@ -66,6 +66,9 @@ func TestMain(m *testing.M) {
 	// inferno (or not) must not decide TX tests. "Unknown" skips the checks;
 	// tests that exercise them script their own table.
 	txPortsInUse = func() int { return -1 }
+	// The TX idle feeder would mix silence into the write sequences the TX
+	// tests assert on; its own tests turn it back on.
+	txIdleFeedEnabled = false
 	go infernoWorker()
 	code := m.Run()
 	os.RemoveAll(recDir)
@@ -7875,6 +7878,13 @@ func (f *fakeTxHolder) writeCount() int {
 	return len(f.writes)
 }
 
+// enableTxIdleFeed turns the idle feeder on for one test.
+func enableTxIdleFeed(t *testing.T) {
+	t.Helper()
+	txIdleFeedEnabled = true
+	t.Cleanup(func() { txIdleFeedEnabled = false })
+}
+
 func waitWrites(t *testing.T, f *fakeTxHolder, atLeast int, within time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(within)
@@ -7883,6 +7893,84 @@ func waitWrites(t *testing.T, f *fakeTxHolder, atLeast int, within time.Duration
 			t.Fatalf("only %d writes after %v, want %d", f.writeCount(), within, atLeast)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// Between playbacks nothing wrote the TX device, so the first playback
+// write underran by millions of samples and the plugin restarted its
+// transmitter (dropping every flow). The feeder must write silence while
+// idle and step aside while a playback pump runs.
+func TestTxIdleFeederWritesSilenceAndYieldsToPump(t *testing.T) {
+	saveTxGlobals(t)
+	enableTxIdleFeed(t)
+	holder := &fakeTxHolder{}
+	mutex.Lock()
+	txHolder, txHolderReady = holder, true
+	startTxIdleFeeder(holder, 2, 48000)
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		txHolder = nil
+		mutex.Unlock()
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			if _, ok := txIdleFeeders.Load(holder); !ok || time.Now().After(deadline) {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	})
+
+	waitWrites(t, holder, 3, 2*time.Second)
+	for _, v := range holder.flattened() {
+		if v != 0 {
+			t.Fatalf("feeder wrote non-silence %d", v)
+		}
+	}
+	// A second warm-up must not start a second feeder.
+	mutex.Lock()
+	startTxIdleFeeder(holder, 2, 48000)
+	mutex.Unlock()
+
+	txPumpsActive.Add(1)
+	time.Sleep(50 * time.Millisecond) // let an in-flight write finish
+	n := holder.writeCount()
+	time.Sleep(150 * time.Millisecond)
+	if got := holder.writeCount(); got != n {
+		t.Errorf("feeder wrote %d chunks while a playback pump was active", got-n)
+	}
+	txPumpsActive.Add(-1)
+	waitWrites(t, holder, n+2, 2*time.Second) // resumes after the pump
+}
+
+// The feeder belongs to one holder: when the holder is replaced (reopen,
+// stop), it must exit instead of writing to a dead device.
+func TestTxIdleFeederExitsWhenHolderReplaced(t *testing.T) {
+	saveTxGlobals(t)
+	enableTxIdleFeed(t)
+	old := &fakeTxHolder{}
+	mutex.Lock()
+	txHolder = old
+	startTxIdleFeeder(old, 2, 48000)
+	mutex.Unlock()
+	waitWrites(t, old, 1, 2*time.Second)
+	mutex.Lock()
+	txHolder = &fakeTxHolder{}
+	mutex.Unlock()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := txIdleFeeders.Load(old); !ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("feeder kept running after its holder was replaced")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	n := old.writeCount()
+	time.Sleep(100 * time.Millisecond)
+	if old.writeCount() != n {
+		t.Fatal("old holder still written after its feeder exited")
 	}
 }
 

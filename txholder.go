@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unsafe"
@@ -604,10 +605,79 @@ func warmupTxHolder(holder txFrameWriter, channels int) {
 	if txHolder == holder {
 		txHolderReady = true
 		logInfof("TX holder ready (%s)", txHolderDevice)
+		startTxIdleFeeder(holder, channels, sampleRates[sampleRateIdx])
 	} else {
 		holder.Close()
 	}
 	mutex.Unlock()
+}
+
+// --- Keeping the transmitter fed between playbacks ------------------------
+//
+// Nothing used to write the TX device between playbacks. The plugin's
+// stream clock keeps running regardless, so the first write of the next
+// playback found it millions of samples behind: an underrun, and the plugin
+// recovers from an underrun by restarting its transmitter, which (before
+// the fork's fix) dropped every flow to every receiver. A receiver then
+// heard nothing for seconds; e2e_bitperfect.py measured 0.6 s of audio out
+// of a 21 s playback. Receivers also timed out on an idle transmitter and
+// lost the start of each playback (REPORT F3). The idle feeder writes
+// silence whenever no playback pump is running, paced by the device itself
+// (a blocking write once the ring is full), so the stream never underruns
+// and receivers stay connected. Owner decision 2026-10-04: transmit silence
+// while idle (replaces "no TX while idle").
+
+// txPumpsActive counts running playback pumps; the feeder yields to them.
+var txPumpsActive atomic.Int32
+
+// txIdleFeeders holds the holders that have a feeder, so warm-up can be
+// called again without starting a second one.
+var txIdleFeeders sync.Map // txFrameWriter -> struct{}
+
+// txIdleFeedEnabled is a test seam: the suite turns the feeder off so its
+// silence does not mix into the write sequences other TX tests assert on.
+var txIdleFeedEnabled = true
+
+// startTxIdleFeeder starts the silence feeder for holder (once per holder).
+// It exits when holder stops being the current TX holder or a write fails
+// (the device was closed). Caller holds the app mutex.
+func startTxIdleFeeder(holder txFrameWriter, channels, rate int) {
+	if !txIdleFeedEnabled || channels <= 0 || rate <= 0 {
+		return
+	}
+	if _, loaded := txIdleFeeders.LoadOrStore(holder, struct{}{}); loaded {
+		return
+	}
+	go func() {
+		defer txIdleFeeders.Delete(holder)
+		zeros := make([]int32, txPumpFrames*channels)
+		chunk := time.Duration(txPumpFrames) * time.Second / time.Duration(rate)
+		for {
+			// TryLock, never Lock: render() can hold the app mutex for
+			// tens of milliseconds, longer than the device can wait.
+			if mutex.TryLock() {
+				current := txHolder == holder
+				mutex.Unlock()
+				if !current {
+					return
+				}
+			}
+			if txPumpsActive.Load() > 0 {
+				time.Sleep(chunk / 8)
+				continue
+			}
+			start := time.Now()
+			if _, err := txWrite(holder, zeros); err != nil {
+				return
+			}
+			// A write returns at once while the ring has room; pace those
+			// slightly faster than real time so the ring fills up to the
+			// point where writes block, then the device sets the pace.
+			if el := time.Since(start); el < chunk/2 {
+				time.Sleep(chunk*3/4 - el)
+			}
+		}
+	}()
 }
 
 // txStatusLocked reports the inferno TX state for the UI: short fits one
@@ -763,6 +833,8 @@ func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int) {
 // playhead machinery is untouched. A dead sink kills the decoder so the
 // existing reaper drives the deck back to idle instead of stranding it.
 func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channels int) {
+	txPumpsActive.Add(1)
+	defer txPumpsActive.Add(-1)
 	frameBytes := channels * 4
 	tmp := make([]byte, txPumpFrames*frameBytes)
 	carry := make([]byte, 0, txPumpFrames*frameBytes)
