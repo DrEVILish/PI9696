@@ -24,12 +24,12 @@ go build -o pi9696 . && sudo ./pi9696
 | Input | AES67 via Inferno (Ethernet only; no analog/USB audio) |
 | Rates | 44.1 / 48 / 96 / 192 kHz |
 | Channels | 1–128. Measured on a Pi 4 at 48 kHz: 1–128 ch bit-exact, 58% CPU at 128 ch (REPORT.md round 3). Above 16 ch needs the inferno U13 patch (Known Limitations #11) |
-| Format | WAV PCM 24-bit on disk (32-bit internal) |
+| Format | WAV PCM 24-bit on disk (32-bit internal); `-rf64 auto`, so a take past 4 GiB (under 4 min at 128 ch/48 kHz) is finalised as RF64 instead of with wrapped RIFF sizes |
 | File naming | `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` in `/rec/YYYY-MM-DD/` |
 | Display | SSD1322 256×64 OLED (SPI), FiraCode TTF |
 | Controls | EC11 rotary encoder + Record/Stop/Play buttons |
 | Remote | HTTP on port 8080 (token + session auth, no HTTPS); `PI9696_REMOTE_PORT` overrides |
-| Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport toggle, default off, no auth) |
+| Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport toggle, default off, no auth; switching it off also drops connected controllers) |
 | Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log |
 | File size | ~17.3 MB/min at 48 kHz stereo 24-bit |
 
@@ -90,6 +90,8 @@ Playback path:
 - Start refused when <30 min space remains at the current rate
 - Take starts contiguous: the input monitor is killed and reaped before the recorder opens the FIFO
 - Take auto-stops when <1 min space remains (graceful finalize, LOW DISK warning)
+- Start refused while Inferno is restarting for a new rate/channel count (`AUDIO RESTARTING - WAIT`): the FIFO still carries the old format, so the take would be corrupt; the worker claims a restart under the app mutex so a press cannot slip into its teardown. Start with Inferno down shows `NO AUDIO INPUT`
+- Faults are reported, not swallowed: a take whose ffmpeg dies unasked shows `RECORDING STOPPED - SEE LOG` and logs ffmpeg's last stderr lines; a crashed Inferno server is reaped (`INFERNO STOPPED - SEE LOG`), any take on its FIFO finalised, and failed servers are retried with a 5-60 s backoff; Inferno's own ERROR/panic lines reach the log (rate-limited)
 - Tag presets (Show/Rehearsal/Soundcheck/Interview/Backup/None) + filename prefix
 - Real-time elapsed/remaining, storage, Peak/RMS on OLED
 
@@ -111,7 +113,8 @@ Playback path:
 
 - Copy selected/all takes to USB (per-day structure preserved)
 - Delete with confirmation
-  - Format USB drive: exFAT or FAT32, user-selectable (currently exFAT-first with FAT32 fallback; explicit choice in progress — exFAT has no 4 GB file ceiling, which matters at high channel counts)
+  - Format USB drive: exFAT or FAT32, user-selectable (currently exFAT-first with FAT32 fallback; explicit choice in progress — exFAT has no 4 GB file ceiling, which matters at high channel counts). Every outcome shows a notice (`USB FAT32 - 4GB FILE LIMIT` on the fallback); an abort after the umount remounts the stick
+- Copy ends with `COPY COMPLETE` or `COPY FAILED: N FILES`
 - WebUI: per-file download + Download-ALL as streaming ZIP with manifest
 
 ### Button Lamps
@@ -123,7 +126,7 @@ Playback path:
 ### Config Export/Import
 
 - Export: non-secret JSON profile to USB (no WiFi password, no access token)
-- Import: applied + persisted, Inferno restart if rate/channels changed
+- Import: applied + persisted, Inferno restart if rate/channels changed; refused while recording, playing or copying; a Wi-Fi block failing the WebUI's validation is skipped
 - OLED: System Options menu; WebUI: settings modal Config group
 
 ### WebUI Dashboard
@@ -253,7 +256,7 @@ test/gotest.sh       # vet + the full suite under -race (the standard check)
 
 ### Testing
 
-- 143 tests in `main_test.go` (+ 3 `clocksync_test.go`, 1 `inferno_log_test.go`, 18 `theme_test.go`, 10 `hyperdeck_test.go`, 8 `alsapcm/`, 10 `hardware/`, 3 `logging_test.go`)
+- 196 tests in `main_test.go` (+ 3 `clocksync_test.go`, 3 `inferno_log_test.go`, 19 `theme_test.go`, 12 `hyperdeck_test.go`, 9 `alsapcm/`, 10 `hardware/`, 4 `logging_test.go`)
 - Run it with `test/gotest.sh`, which adds `-race`: the suite is race-clean, and some regression tests (login-page device-name read, mDNS child reaping) only catch their bug under the race detector
 - The suite is hermetic: a temp recordings tree, no real inferno TX device (a host with the inferno ALSA plugin used to get a real holder, which broke 4 tests), the clock gate off, and per-test restore of audio settings, web notice and monitor (`initTestHardware`). It passes in source order and under `go test -shuffle=on`. Still run it on the dev server, never on a unit - see DEPLOYMENT.md
 - `test/ui/settings-roundtrip.js` (Playwright, dev box, SIM instance only) changes every settings control like a user, Enter included, and fails if a field ever shows a value other than the saved one
