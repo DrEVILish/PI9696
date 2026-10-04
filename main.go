@@ -159,6 +159,26 @@ func loadPersistedConfig() {
 		return
 	}
 
+	applyConfigSettings(&c)
+	demoMode = c.DemoMode
+	hyperdeckEnabled = c.HyperdeckEnabled
+
+	wifiEnabled = c.WifiEnabled
+	wifiSSID = c.WifiSSID
+	wifiPassword = c.WifiPassword
+
+	logInfof("Loaded persisted config from %s (device %q, %dkHz %dch WAV, log=%s)",
+		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount, logLevelNames[int(currentLogLevel())])
+}
+
+// applyConfigSettings applies a saved or imported profile's ordinary
+// settings, clamping every index and validating every name so a hand-edited
+// file can't push an index past its slice. Boot (loadPersistedConfig) and
+// USB import (importConfigFrom) used to carry two copies of these ~50
+// lines, which is how their Wi-Fi handling drifted apart; each caller now
+// handles only what genuinely differs (Wi-Fi, demo, HyperDeck). Caller
+// holds the app mutex, or runs before the loops start.
+func applyConfigSettings(c *PersistedConfig) {
 	if c.DeviceName != "" && isValidDeviceName(c.DeviceName) {
 		deviceName = c.DeviceName
 	}
@@ -203,31 +223,24 @@ func loadPersistedConfig() {
 	if c.LogLevelIdx >= 0 && c.LogLevelIdx < len(logLevelNames) {
 		applyLogLevel(LogLevel(c.LogLevelIdx))
 	}
-	if c.OledBrightnessPct != nil {
-		if *c.OledBrightnessPct >= 0 && *c.OledBrightnessPct <= 100 {
-			oledBrightnessPct = *c.OledBrightnessPct
+	if c.OledBrightnessPct != nil && *c.OledBrightnessPct >= 0 && *c.OledBrightnessPct <= 100 {
+		oledBrightnessPct = *c.OledBrightnessPct
+		// No-op at boot (the panel isn't up yet; startup applies it).
+		if hwManager != nil {
+			hwManager.SetBrightness(oledBrightnessPct)
 		}
 	}
 	autoDimEnabled = !c.AutoDimDisabled
 	if c.MenuTimeoutIdx >= 0 && c.MenuTimeoutIdx < len(menuTimeoutOptions) {
 		menuTimeoutIdx = c.MenuTimeoutIdx
 	}
-	demoMode = c.DemoMode
-	hyperdeckEnabled = c.HyperdeckEnabled
-
-	wifiEnabled = c.WifiEnabled
-	wifiSSID = c.WifiSSID
-	wifiPassword = c.WifiPassword
-
-	logInfof("Loaded persisted config from %s (device %q, %dkHz %dch WAV, log=%s)",
-		ConfigPath, deviceName, sampleRates[sampleRateIdx]/1000, channelCount, logLevelNames[int(currentLogLevel())])
 }
 
-// persistConfig snapshots the current non-destructive settings to ConfigPath.
-// Safe to call under the app mutex (it only reads globals); the write is
-// atomic via a temp file + rename so a power cut mid-write can't truncate it.
-func persistConfig() {
-	cur := PersistedConfig{
+// currentConfig snapshots the settings that persistConfig saves and
+// exportConfig writes (export then blanks the Wi-Fi passphrase). Caller
+// holds the app mutex.
+func currentConfig() PersistedConfig {
+	return PersistedConfig{
 		DeviceName:        deviceName,
 		SampleRateIdx:     sampleRateIdx,
 		ChannelCount:      channelCount,
@@ -252,6 +265,13 @@ func persistConfig() {
 		WifiSSID:          wifiSSID,
 		WifiPassword:      wifiPassword,
 	}
+}
+
+// persistConfig snapshots the current non-destructive settings to ConfigPath.
+// Safe to call under the app mutex (it only reads globals); the write is
+// atomic via a temp file + rename so a power cut mid-write can't truncate it.
+func persistConfig() {
+	cur := currentConfig()
 	data, err := json.MarshalIndent(&cur, "", "  ")
 	if err != nil {
 		logErrorf("Failed to marshal config: %v", err)
@@ -335,31 +355,8 @@ func exportConfig() error {
 // exportConfigTo does exportConfig's work into an arbitrary directory so the
 // round-trip is testable without a mounted drive.
 func exportConfigTo(dir string) error {
-	profile := PersistedConfig{
-		DeviceName:        deviceName,
-		SampleRateIdx:     sampleRateIdx,
-		ChannelCount:      channelCount,
-		TagPresetIdx:      tagPresetIdx,
-		FilePrefix:        filePrefix,
-		VURangeIdx:        vuRangeIdx,
-		PeakHoldIdx:       peakHoldIdx,
-		TransportMode:     transportMode,
-		Theme:             themeSlug,
-		ThemeVariant:      themeVariant,
-		ThemeTints:        copyThemeTints(themeTints),
-		DisplayMotion:     displayMotion,
-		DisplayContrast:   displayContrast,
-		DensityIdx:        displayDensityIdx,
-		LogLevelIdx:       int(currentLogLevel()),
-		OledBrightnessPct: &oledBrightnessPct,
-		AutoDimDisabled:   !autoDimEnabled,
-		MenuTimeoutIdx:    menuTimeoutIdx,
-		DemoMode:          demoMode,
-		HyperdeckEnabled:  hyperdeckEnabled,
-		WifiEnabled:       wifiEnabled,
-		WifiSSID:          wifiSSID,
-		// WifiPassword deliberately omitted - it's a credential.
-	}
+	profile := currentConfig()
+	profile.WifiPassword = "" // a credential: the profile is the non-secret clone
 	data, err := json.MarshalIndent(&profile, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshalling config: %v", err)
@@ -410,60 +407,7 @@ func importConfigFrom(dir string) error {
 		return fmt.Errorf("invalid config file: %v", err)
 	}
 
-	if c.DeviceName != "" && isValidDeviceName(c.DeviceName) {
-		deviceName = c.DeviceName
-	}
-	if c.SampleRateIdx >= 0 && c.SampleRateIdx < len(sampleRates) {
-		sampleRateIdx = c.SampleRateIdx
-	}
-	if c.ChannelCount >= 1 && c.ChannelCount <= MaxChannelCount {
-		channelCount = c.ChannelCount
-	}
-	if c.TagPresetIdx >= 0 && c.TagPresetIdx < len(tagPresets) {
-		tagPresetIdx = c.TagPresetIdx
-	}
-	if c.FilePrefix == "" || isValidFilePrefix(c.FilePrefix) {
-		filePrefix = c.FilePrefix
-	}
-	if c.VURangeIdx >= 0 && c.VURangeIdx < len(vuRangeOptions) {
-		vuRangeIdx = c.VURangeIdx
-	}
-	if c.PeakHoldIdx >= 0 && c.PeakHoldIdx < len(peakHoldOptions) {
-		peakHoldIdx = c.PeakHoldIdx
-	}
-	if c.Theme != "" && isKnownTheme(c.Theme) {
-		themeSlug = c.Theme
-	}
-	themeVariant = ""
-	if themeHasVariant(themeSlug, c.ThemeVariant) {
-		themeVariant = c.ThemeVariant
-	}
-	themeTints = validThemeTints(c.ThemeTints)
-	if c.DisplayMotion == "full" || c.DisplayMotion == "reduced" {
-		displayMotion = c.DisplayMotion
-	}
-	if c.DisplayContrast == "standard" || c.DisplayContrast == "high" {
-		displayContrast = c.DisplayContrast
-	}
-	if c.DensityIdx >= 0 && c.DensityIdx < len(displayDensityValues) {
-		displayDensityIdx = c.DensityIdx
-	}
-	if c.TransportMode == "icon" || c.TransportMode == "text" {
-		transportMode = c.TransportMode
-	}
-	if c.LogLevelIdx >= 0 && c.LogLevelIdx < len(logLevelNames) {
-		applyLogLevel(LogLevel(c.LogLevelIdx))
-	}
-	if c.OledBrightnessPct != nil && *c.OledBrightnessPct >= 0 && *c.OledBrightnessPct <= 100 {
-		oledBrightnessPct = *c.OledBrightnessPct
-		if hwManager != nil {
-			hwManager.SetBrightness(oledBrightnessPct)
-		}
-	}
-	autoDimEnabled = !c.AutoDimDisabled
-	if c.MenuTimeoutIdx >= 0 && c.MenuTimeoutIdx < len(menuTimeoutOptions) {
-		menuTimeoutIdx = c.MenuTimeoutIdx
-	}
+	applyConfigSettings(&c)
 
 	if c.WifiPassword != "" {
 		if msg := validateWifiCredentials(c.WifiSSID, c.WifiPassword); msg != "" {

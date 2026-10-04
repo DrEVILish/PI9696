@@ -7675,3 +7675,76 @@ func TestFramesAsS32LE(t *testing.T) {
 		t.Fatal("empty input must give no bytes")
 	}
 }
+
+// Boot load and USB import share applyConfigSettings: the same hand-edited
+// profile (valid and out-of-range values mixed) must leave the same settings
+// either way. The two copies of the clamp code used to drift.
+func TestLoadAndImportClampAlike(t *testing.T) {
+	initTestHardware(t)
+	mutex.Lock()
+	defer mutex.Unlock()
+	baseline := currentConfig()
+	baseBright := oledBrightnessPct // currentConfig points at the live value
+	baseline.OledBrightnessPct = &baseBright
+	origConfigPath := ConfigPath
+	origSSID, origPass, origWifi := wifiSSID, wifiPassword, wifiEnabled
+	origDemo, origHD := demoMode, hyperdeckEnabled
+	defer func() {
+		ConfigPath = origConfigPath
+		applyConfigSettings(&baseline)
+		wifiSSID, wifiPassword, wifiEnabled = origSSID, origPass, origWifi
+		demoMode, hyperdeckEnabled = origDemo, origHD
+	}()
+	bright := 250 // out of range
+	profile := PersistedConfig{
+		DeviceName:        "Edited-Unit",
+		SampleRateIdx:     99, // out of range
+		ChannelCount:      16,
+		TagPresetIdx:      -3,               // out of range
+		FilePrefix:        "bad_prefix/../", // invalid
+		VURangeIdx:        1,
+		DisplayMotion:     "sideways", // invalid
+		DisplayContrast:   "high",
+		DensityIdx:        2,
+		TransportMode:     "text",
+		LogLevelIdx:       0,
+		OledBrightnessPct: &bright,
+		MenuTimeoutIdx:    1,
+	}
+	dir := t.TempDir()
+	data, _ := json.Marshal(&profile)
+	os.WriteFile(filepath.Join(dir, configExportName), data, 0644)
+	ConfigPath = filepath.Join(dir, configExportName)
+
+	applyConfigSettings(&baseline)
+	loadPersistedConfig()
+	viaLoad := currentConfig()
+
+	applyConfigSettings(&baseline)
+	if err := importConfigFrom(dir); err != nil {
+		t.Fatal(err)
+	}
+	viaImport := currentConfig()
+
+	strip := func(c PersistedConfig) PersistedConfig {
+		c.WifiEnabled, c.WifiSSID, c.WifiPassword = false, "", ""
+		c.DemoMode, c.HyperdeckEnabled = false, false
+		c.OledBrightnessPct = nil
+		return c
+	}
+	a, b := strip(viaLoad), strip(viaImport)
+	ja, _ := json.Marshal(&a)
+	jb, _ := json.Marshal(&b)
+	if !bytes.Equal(ja, jb) {
+		t.Fatalf("load and import diverge:\nload   %s\nimport %s", ja, jb)
+	}
+	if viaLoad.DeviceName != "Edited-Unit" || viaLoad.ChannelCount != 16 {
+		t.Errorf("valid values not applied: %+v", viaLoad)
+	}
+	if viaLoad.SampleRateIdx != baseline.SampleRateIdx || viaLoad.FilePrefix != baseline.FilePrefix {
+		t.Errorf("invalid values not rejected: rate %d prefix %q", viaLoad.SampleRateIdx, viaLoad.FilePrefix)
+	}
+	if oledBrightnessPct != baseBright {
+		t.Errorf("out-of-range brightness applied: %d", oledBrightnessPct)
+	}
+}
