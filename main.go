@@ -731,6 +731,87 @@ func signalTERM(p *os.Process, what string) {
 	}
 }
 
+// stopRequested marks the children the app deliberately signalled (Stop,
+// a seek handoff, the demo end timer), so a reaper can tell a requested exit
+// from ffmpeg dying on its own. A take or playback that ends unasked is a
+// fault the operator must hear about; before, both were reaped silently.
+var stopRequested sync.Map // *exec.Cmd -> struct{}
+
+func markStopRequested(cmd *exec.Cmd) {
+	if cmd != nil {
+		stopRequested.Store(cmd, struct{}{})
+	}
+}
+
+// takeStopRequested reports and clears the mark. Every reaper calls it, so
+// the map never outlives its processes.
+func takeStopRequested(cmd *exec.Cmd) bool {
+	_, ok := stopRequested.LoadAndDelete(cmd)
+	return ok
+}
+
+// stderrTail keeps the last stderrTailMax bytes a child wrote to stderr:
+// enough of ffmpeg's closing complaint ("No space left on device", "Invalid
+// data found") to log why it died, bounded so a chatty child can't grow it.
+type stderrTail struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+const stderrTailMax = 2048
+
+func (t *stderrTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > stderrTailMax {
+		t.buf = append([]byte(nil), t.buf[len(t.buf)-stderrTailMax:]...)
+	}
+	return len(p), nil
+}
+
+// String returns the last few non-empty lines, joined for a single log line.
+func (t *stderrTail) String() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var lines []string
+	for _, l := range strings.Split(string(t.buf), "\n") {
+		if l = strings.TrimSpace(l); l != "" {
+			lines = append(lines, l)
+		}
+	}
+	if len(lines) > 3 {
+		lines = lines[len(lines)-3:]
+	}
+	return strings.Join(lines, " | ")
+}
+
+// captureStderr points cmd's stderr at a fresh tail. WaitDelay bounds Wait:
+// with a non-file Stderr, Wait also waits for the copy goroutine, and an
+// orphaned grandchild holding the pipe open would otherwise hang the reaper
+// (the same trap startRecording documents for stdout).
+func captureStderr(cmd *exec.Cmd) {
+	cmd.Stderr = &stderrTail{}
+	cmd.WaitDelay = 2 * time.Second
+}
+
+// stderrOf returns what captureStderr collected for cmd, or "".
+func stderrOf(cmd *exec.Cmd) string {
+	if t, ok := cmd.Stderr.(*stderrTail); ok {
+		return t.String()
+	}
+	return ""
+}
+
+// reportPlaybackExitLocked tells the operator when playback ended unasked
+// with an error (a natural EOF exits 0 and stays quiet). Caller holds the
+// app mutex.
+func reportPlaybackExitLocked(file string, err error) {
+	logErrorf("Playback of %s failed: %v: %s", file, err, stderrOf(playbackCmd))
+	showSysNotice("PLAYBACK FAILED - SEE LOG")
+	showWebNotice("Playback of " + filepath.Base(file) + " failed - see the log")
+}
+
 // ffmpegStopGrace is how long a signalled ffmpeg gets to exit on its own before
 // it is killed. It has to be long enough for ffmpeg to finalize a take on slow
 // storage - the WAV segment muxer writes valid chunk sizes on SIGTERM, and that
@@ -3038,6 +3119,7 @@ func startRecording() {
 	args = append(args, recordingFile)
 
 	cmd := exec.Command("ffmpeg", args...)
+	captureStderr(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -3090,7 +3172,8 @@ func startRecording() {
 	// blocking the mutex on ffmpeg's exit from an HTTP request would freeze
 	// render() and every button/encoder callback for as long as that took.
 	go func() {
-		cmd.Wait()
+		werr := cmd.Wait()
+		asked := takeStopRequested(cmd)
 		// Bound the meterReader goroutine (see the comment above): if an
 		// orphaned grandchild inherited stdout, the pipe never EOFs and the
 		// reader plus its fd would leak permanently. Closing our read side
@@ -3101,6 +3184,16 @@ func startRecording() {
 		mutex.Lock()
 		if ffmpegCmd == cmd {
 			closedFile = recordingFile
+			if !asked {
+				// Nobody pressed Stop: ffmpeg died (disk full, I/O error)
+				// or its input ended (the FIFO's writer went away). The
+				// take is cut short, so say so and why, instead of
+				// quietly dropping back to idle.
+				logErrorf("Take %s ended unexpectedly after %s (exit: %v): %s",
+					filepath.Base(recordingFile), time.Since(recordStart).Round(time.Second), werr, stderrOf(cmd))
+				showSysNotice("RECORDING STOPPED - SEE LOG")
+				showWebNotice("Recording " + filepath.Base(recordingFile) + " stopped unexpectedly - see the log")
+			}
 			ffmpegCmd = nil
 			isRecording = false
 			meterPeakDB = meterSilence
@@ -3274,6 +3367,7 @@ func stopRecording() {
 	// A stale read is harmless - the worst case is escalating to SIGKILL
 	// against an already-exited process.
 	if ffmpegCmd != nil && ffmpegCmd.Process != nil {
+		markStopRequested(ffmpegCmd)
 		terminateFfmpeg(ffmpegCmd.Process, recordingDone, "recording")
 	}
 }
@@ -3601,9 +3695,13 @@ func startPlayback() {
 	// stopPlayback/gracefulShutdown sending SIGTERM, this is what reaps the
 	// process and flips the state back to idle.
 	go func() {
-		cmd.Wait()
+		werr := cmd.Wait()
+		asked := takeStopRequested(cmd)
 		mutex.Lock()
 		if playbackCmd == cmd {
+			if werr != nil && !asked {
+				reportPlaybackExitLocked(file, werr)
+			}
 			playbackCmd = nil
 			monitoringOutput = false
 			playbackPausedElapsed = 0
@@ -3674,6 +3772,7 @@ func armDemoPlaybackEnd(cmd *exec.Cmd, total time.Duration) {
 		}
 		// SIGCONT first: a paused stand-in is SIGSTOP'd and would
 		// defer the TERM forever (same trap stopPlayback handles).
+		markStopRequested(cmd)
 		if err := cmd.Process.Signal(syscall.SIGCONT); err == nil {
 			_ = cmd.Process.Signal(syscall.SIGTERM)
 		}
@@ -3769,6 +3868,7 @@ func stopPlayback() {
 	// A stopped track needs no end-of-track countdown.
 	stopDemoEndTimerLocked()
 	if playbackCmd != nil && playbackCmd.Process != nil {
+		markStopRequested(playbackCmd)
 		signalTERM(playbackCmd.Process, "playback")
 		// A paused track is frozen with SIGSTOP (see pausePlayback), and a
 		// stopped process defers signal delivery until it's continued: the
@@ -3859,6 +3959,7 @@ func restartPlaybackAt(pos time.Duration) {
 	// says "playing".
 	wasPaused := currentState == StatePaused
 	if old != nil && old.Process != nil {
+		markStopRequested(old)
 		signalTERM(old.Process, "playback (seek handoff)")
 		// Seek only ever happens while paused, so the outgoing process is
 		// usually SIGSTOP'd - and a stopped process defers SIGTERM until
@@ -3957,10 +4058,15 @@ func restartPlaybackAt(pos time.Duration) {
 	done := make(chan struct{})
 	playbackDone = done
 	armDemoPlaybackEnd(cmd, playbackDuration-pos)
+	file := playbackFile
 	go func() {
-		cmd.Wait()
+		werr := cmd.Wait()
+		asked := takeStopRequested(cmd)
 		mutex.Lock()
 		if playbackCmd == cmd {
+			if werr != nil && !asked {
+				reportPlaybackExitLocked(file, werr)
+			}
 			playbackCmd = nil
 			monitoringOutput = false
 			playbackPausedElapsed = 0

@@ -10,6 +10,7 @@ import (
 	"html/template"
 	"image/png"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -5845,6 +5846,8 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		fmt.Sprintf("DELETE FAILED: %d FILES", 99999),
 		"AUDIO RESTARTING - WAIT",
 		"NO AUDIO INPUT",
+		"RECORDING STOPPED - SEE LOG",
+		"PLAYBACK FAILED - SEE LOG",
 	} {
 		if w := hwManager.GetTextWidth(msg); w > 256 {
 			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
@@ -6542,4 +6545,172 @@ func TestRecordRefusedWhileRestartClaimed(t *testing.T) {
 	if started {
 		t.Fatal("a take started while the worker held the restart claim")
 	}
+}
+
+// fakeFfmpegDiesScript stands in for an ffmpeg that fails on its own a
+// moment after starting (disk full, bad input), leaving its reason on stderr.
+const fakeFfmpegDiesScript = `#!/bin/sh
+sleep 0.2
+echo "Error writing trailer: No space left on device" >&2
+exit 1
+`
+
+func waitReaped(t *testing.T, done chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("%s was never reaped", what)
+	}
+}
+
+// A take whose ffmpeg dies on its own used to drop back to idle with no
+// notice and nothing but the exit in the log. The reaper must tell the
+// operator, and the log must carry ffmpeg's own reason.
+func TestUnexpectedTakeEndIsReported(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeFfmpegDiesScript)
+	var logBuf syncBuffer
+	captureLogs(t, &logBuf)
+
+	mutex.Lock()
+	origState, origFifo, origCur := infernoState, fifoPath, currentState
+	origRate, origCh := lastSampleRate, lastChannelCount
+	infernoState, currentState = InfernoRunning, StateIdle
+	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
+	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	sysNotice = ""
+	startRecording()
+	done := recordingDone
+	started := isRecording
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		infernoState, fifoPath, currentState = origState, origFifo, origCur
+		lastSampleRate, lastChannelCount = origRate, origCh
+		sysNotice = ""
+		mutex.Unlock()
+	})
+	if !started {
+		t.Fatal("take did not start")
+	}
+	waitReaped(t, done, "dying take")
+	mutex.Lock()
+	notice, rec := sysNotice, isRecording
+	mutex.Unlock()
+	if rec {
+		t.Fatal("isRecording still set after ffmpeg died")
+	}
+	if !strings.Contains(notice, "RECORDING STOPPED") {
+		t.Errorf("no operator notice for a take that died (notice %q)", notice)
+	}
+	if !strings.Contains(logBuf.String(), "No space left on device") {
+		t.Errorf("log lacks ffmpeg's reason:\n%s", logBuf.String())
+	}
+}
+
+// A take stopped on request must not raise the unexpected-end notice.
+func TestRequestedTakeStopIsQuiet(t *testing.T) {
+	startFakeTake(t)
+	mutex.Lock()
+	sysNotice = ""
+	done := recordingDone
+	stopRecording()
+	mutex.Unlock()
+	waitReaped(t, done, "stopped take")
+	mutex.Lock()
+	notice := sysNotice
+	mutex.Unlock()
+	if notice != "" {
+		t.Fatalf("a requested stop raised a notice: %q", notice)
+	}
+}
+
+// Playback whose ffmpeg fails (ALSA busy, unreadable file) used to fall back
+// to idle silently; a natural EOF (exit 0) must stay quiet.
+func TestFailedPlaybackIsReported(t *testing.T) {
+	initTestHardware(t)
+	resetTransportCleanup(t)
+	fakeExecutable(t, "ffmpeg", fakeFfmpegDiesScript)
+	mutex.Lock()
+	origDemo := demoMode
+	demoMode, currentState = false, StateIdle
+	for i, r := range sampleRates {
+		if r == 48000 {
+			sampleRateIdx = i
+		}
+	}
+	channelCount = 2
+	sysNotice = ""
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		demoMode, sysNotice = origDemo, ""
+		mutex.Unlock()
+	})
+	os.MkdirAll(RecordPath, 0755)
+	take := filepath.Join(RecordPath, "failplay_20990101_120000_ch2_48kHz.wav")
+	if err := os.WriteFile(take, make([]byte, 44+48000*2*3), 0644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(24 * time.Hour) // newest take: latestRecording picks it
+	os.Chtimes(take, future, future)
+	t.Cleanup(func() { os.Remove(take) })
+
+	mutex.Lock()
+	startPlayback()
+	done := playbackDone
+	playing := playbackCmd != nil
+	mutex.Unlock()
+	if !playing {
+		t.Fatal("playback did not start")
+	}
+	waitReaped(t, done, "failing playback")
+	mutex.Lock()
+	notice := sysNotice
+	mutex.Unlock()
+	if !strings.Contains(notice, "PLAYBACK FAILED") {
+		t.Fatalf("no operator notice for failed playback (notice %q)", notice)
+	}
+}
+
+func TestStderrTailKeepsLastLines(t *testing.T) {
+	var tail stderrTail
+	for i := 0; i < 500; i++ {
+		fmt.Fprintf(&tail, "line %d\n", i)
+	}
+	got := tail.String()
+	if got != "line 497 | line 498 | line 499" {
+		t.Fatalf("tail = %q", got)
+	}
+	if len(tail.buf) > stderrTailMax {
+		t.Fatalf("tail grew to %d bytes, cap %d", len(tail.buf), stderrTailMax)
+	}
+}
+
+// syncBuffer is a goroutine-safe bytes.Buffer for captured logs: reapers
+// log from their own goroutines.
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuffer) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+// captureLogs routes the app's slog output into buf for the test.
+func captureLogs(t *testing.T, buf *syncBuffer) {
+	t.Helper()
+	orig := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: &slogLevel})))
+	t.Cleanup(func() { slog.SetDefault(orig) })
 }

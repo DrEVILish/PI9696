@@ -585,6 +585,7 @@ func dantePlaybackCmdFor(file string, pos time.Duration) (*exec.Cmd, io.ReadClos
 	args = append(args, "-i", file,
 		"-f", "s32le", "-ac", fmt.Sprintf("%d", channels), "-ar", fmt.Sprintf("%d", rate), "-")
 	cmd := exec.Command("ffmpeg", args...)
+	captureStderr(cmd)
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, nil, err
@@ -604,7 +605,9 @@ func buildPlaybackCmd(file string, pos time.Duration) (cmd *exec.Cmd, stdout io.
 			logWarnf("Inferno playback unavailable (%v), falling back to local ALSA", err)
 		}
 	}
-	return playbackCmdFor(file, pos), nil, false
+	cmd = playbackCmdFor(file, pos)
+	captureStderr(cmd)
+	return cmd, nil, false
 }
 
 // txWriteLocks serialises writes per TX holder: a pump retiring (seek, stop)
