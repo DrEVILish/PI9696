@@ -4779,7 +4779,7 @@ func getUSBSize() string {
 	totalBytes := uint64(stat.Blocks) * uint64(stat.Bsize)
 
 	if totalBytes < 1024*1024*1024 { // Less than 1GB
-		return fmt.Sprintf("%dmb", totalBytes/(1024*1024))
+		return fmt.Sprintf("%dMB", totalBytes/(1024*1024))
 	} else if totalBytes < 1024*1024*1024*1024 { // Less than 1TB
 		return fmt.Sprintf("%dGB", totalBytes/(1024*1024*1024))
 	} else {

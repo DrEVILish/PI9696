@@ -7630,3 +7630,25 @@ func TestGenerateRemoteTokenUniform(t *testing.T) {
 		}
 	}
 }
+
+// Sub-gigabyte sticks showed "mb" next to "GB"/"TB" for larger ones.
+func TestUSBSizeUnits(t *testing.T) {
+	origMP, origStat := USBMountPoint, usbStatfs
+	t.Cleanup(func() { USBMountPoint, usbStatfs = origMP, origStat })
+	for _, tc := range []struct {
+		blocks uint64
+		want   string
+	}{
+		{512 << 10, "512MB"}, // 512 MiB in 1 KiB blocks
+		{64 << 20, "64GB"},
+		{2 << 30, "2TB"},
+	} {
+		usbStatfs = func(_ string, st *syscall.Statfs_t) error {
+			st.Blocks, st.Bsize = tc.blocks, 1024
+			return nil
+		}
+		if got := getUSBSize(); got != tc.want {
+			t.Errorf("%d KiB blocks: %q, want %q", tc.blocks, got, tc.want)
+		}
+	}
+}
