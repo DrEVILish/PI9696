@@ -6420,3 +6420,95 @@ func TestRecordRefusedWhileInfernoRestartPending(t *testing.T) {
 	}
 	<-done
 }
+
+// fakeSlowTermScript stands in for an Inferno server that takes a moment to
+// exit on SIGTERM, holding the worker inside doStopInferno long enough for a
+// test to act mid-restart.
+const fakeSlowTermScript = `#!/bin/sh
+trap 'sleep 0.5; exit 0' TERM
+sleep 300 &
+wait $!
+`
+
+// The worker used to read isRecording, release the mutex, and only then
+// stop the server: a Record press in between saw Inferno "running", started
+// a take, and lost its FIFO a moment later. The restart is now claimed in
+// the same critical section, and startRecording refuses while it is held.
+func TestRecordRefusedDuringInfernoRestart(t *testing.T) {
+	initTestHardware(t)
+	resetTransportCleanup(t)
+	bin := filepath.Join(t.TempDir(), "inferno2pipe")
+	if err := os.WriteFile(bin, []byte(fakeSlowTermScript), 0755); err != nil {
+		t.Fatal(err)
+	}
+	orig := InfernoBinary
+	InfernoBinary = bin
+	t.Cleanup(func() { InfernoBinary = orig })
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	startDone := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: startDone}
+	<-startDone
+	t.Cleanup(stopInfernoAndWait)
+
+	restartDone := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdRestart, done: restartDone}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mutex.Lock()
+		claimed := infernoRestarting
+		if claimed {
+			currentState = StateIdle
+			startRecording()
+		}
+		started := isRecording
+		if started {
+			stopRecording()
+		}
+		mutex.Unlock()
+		if claimed {
+			if started {
+				t.Fatal("a take started while the worker was tearing Inferno down")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("worker never claimed the restart")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	<-restartDone
+	mutex.Lock()
+	still := infernoRestarting
+	mutex.Unlock()
+	if still {
+		t.Fatal("restart claim not released after the request finished")
+	}
+}
+
+// The claim alone must refuse a take: in the real race the server is still
+// marked running with matching settings, so nothing else would stop it.
+func TestRecordRefusedWhileRestartClaimed(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+	mutex.Lock()
+	origState, origFifo, origCur := infernoState, fifoPath, currentState
+	origRate, origCh := lastSampleRate, lastChannelCount
+	infernoState, currentState = InfernoRunning, StateIdle
+	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
+	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	infernoRestarting = true
+	startRecording()
+	started := isRecording
+	if started {
+		stopRecording()
+	}
+	infernoRestarting = false
+	infernoState, fifoPath, currentState = origState, origFifo, origCur
+	lastSampleRate, lastChannelCount = origRate, origCh
+	sysNotice = ""
+	mutex.Unlock()
+	if started {
+		t.Fatal("a take started while the worker held the restart claim")
+	}
+}

@@ -2134,6 +2134,14 @@ func infernoWorker() {	for req := range infernoReqCh {
 		case infernoCmdStart, infernoCmdRestart:
 			mutex.Lock()
 			recording := isRecording
+			// Claim the restart in the same critical section that saw no
+			// take: startRecording refuses while this is set, so a Record
+			// press cannot slip in between this check and doStopInferno
+			// removing the FIFO under the new take. Cleared below once
+			// the request has finished.
+			if !recording && req.cmd == infernoCmdRestart {
+				infernoRestarting = true
+			}
 			mutex.Unlock()
 
 			if recording && req.cmd == infernoCmdRestart {
@@ -2172,6 +2180,9 @@ func infernoWorker() {	for req := range infernoReqCh {
 				recording := isRecording
 				mismatch := infernoState == InfernoRunning &&
 					(sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount)
+				if !recording && mismatch {
+					infernoRestarting = true // same claim as above
+				}
 				mutex.Unlock()
 			if recording || !mismatch {
 				break
@@ -2187,11 +2198,21 @@ func infernoWorker() {	for req := range infernoReqCh {
 			go ensureTxHolder()
 		}
 
+		mutex.Lock()
+		infernoRestarting = false
+		mutex.Unlock()
+
 		if req.done != nil {
 			close(req.done)
 		}
 	}
 }
+
+// infernoRestarting is set by infernoWorker, under the app mutex, from the
+// moment it commits to tearing the server down until the restart request
+// has finished. startRecording refuses while it is set. Guarded by the app
+// mutex.
+var infernoRestarting bool
 
 // shutdownCh is closed once by gracefulShutdown; long-lived loops select on
 // it so teardown can't race them. shutdownOnce because signals can arrive
@@ -2891,8 +2912,9 @@ func startRecording() {
 	// differ: ffmpeg would deinterleave an 8-channel stream as 16 channels
 	// (or label 44.1kHz audio as 48kHz) and the filename would claim the
 	// new format - a silently corrupt take. Worse, the restart then defers
-	// for the whole take. Refuse until the server matches.
-	if infernoRestartNeeded() {
+	// for the whole take. Refuse until the server matches. Demo takes read
+	// the generator's FIFO, which no Inferno restart touches.
+	if !demoMode && (infernoRestarting || infernoRestartNeeded()) {
 		msg := fmt.Sprintf("Inferno is still restarting for %dkHz/%dch - recording refused, try again in a moment",
 			sampleRates[sampleRateIdx]/1000, channelCount)
 		logWarnf("%s", msg)
