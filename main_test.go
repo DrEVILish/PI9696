@@ -5813,6 +5813,7 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		"DEMO SOURCE FAILED",
 		"RECORD FAILED - SEE LOG",
 		fmt.Sprintf("DELETE FAILED: %d FILES", 99999),
+		"AUDIO RESTARTING - WAIT",
 	} {
 		if w := hwManager.GetTextWidth(msg); w > 256 {
 			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
@@ -6364,4 +6365,58 @@ func TestWavDataBytesRF64(t *testing.T) {
 	if got := wavDataBytes(bytes.NewReader([]byte("not a wav file at all"))); got != 0 {
 		t.Fatalf("garbage header = %d, want 0", got)
 	}
+}
+
+// Between a rate/channel change and the worker's restart, the FIFO still
+// carries the old format while ffmpeg would be configured with the new one:
+// a corrupt take. startRecording must refuse while the running server does
+// not match the selected settings, and start once it does.
+func TestRecordRefusedWhileInfernoRestartPending(t *testing.T) {
+	initTestHardware(t)
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("FAKE_FFMPEG_ARGS", argsFile)
+	fakeExecutable(t, "ffmpeg", fakeFfmpegArgsScript)
+
+	mutex.Lock()
+	origState, origFifo, origCur, origDemo := infernoState, fifoPath, currentState, demoMode
+	origRate, origCh := lastSampleRate, lastChannelCount
+	infernoState, demoMode, currentState = InfernoRunning, false, StateIdle
+	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
+	lastSampleRate = sampleRates[sampleRateIdx]
+	lastChannelCount = channelCount + 1 // running server has the old count
+	startRecording()
+	refused := !isRecording
+	notice := sysNotice
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		infernoState, fifoPath, currentState, demoMode = origState, origFifo, origCur, origDemo
+		lastSampleRate, lastChannelCount = origRate, origCh
+		sysNotice = ""
+		mutex.Unlock()
+	})
+	if !refused {
+		mutex.Lock()
+		stopRecording()
+		mutex.Unlock()
+		t.Fatal("a take started while the running server's channel count differed from the setting")
+	}
+	if notice == "" {
+		t.Error("refusal gave the operator no notice")
+	}
+
+	// Server caught up: the same press now starts.
+	mutex.Lock()
+	lastChannelCount = channelCount
+	startRecording()
+	started := isRecording
+	done := recordingDone
+	if started {
+		stopRecording()
+	}
+	mutex.Unlock()
+	if !started {
+		t.Fatal("take refused even though the server matches the settings")
+	}
+	<-done
 }

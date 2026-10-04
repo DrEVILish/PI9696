@@ -2885,6 +2885,21 @@ func startRecording() {
 		logErrorf("Cannot start recording: Inferno server not running")
 		return
 	}
+	// The take's ffmpeg is configured from the selected rate and channel
+	// count, but the FIFO carries whatever the running server was started
+	// with. Between a settings change and the worker's restart the two
+	// differ: ffmpeg would deinterleave an 8-channel stream as 16 channels
+	// (or label 44.1kHz audio as 48kHz) and the filename would claim the
+	// new format - a silently corrupt take. Worse, the restart then defers
+	// for the whole take. Refuse until the server matches.
+	if infernoRestartNeeded() {
+		msg := fmt.Sprintf("Inferno is still restarting for %dkHz/%dch - recording refused, try again in a moment",
+			sampleRates[sampleRateIdx]/1000, channelCount)
+		logWarnf("%s", msg)
+		showSysNotice("AUDIO RESTARTING - WAIT")
+		showWebNotice(msg)
+		return
+	}
 
 	// A named FIFO only supports one real reader at a time - concurrent
 	// readers split frames between them. Wait for the outgoing monitor to
