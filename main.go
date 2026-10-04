@@ -2145,6 +2145,10 @@ const (
 	infernoCmdStart infernoCommand = iota
 	infernoCmdStop
 	infernoCmdRestart
+	// infernoCmdSync does nothing; its done channel closes once every
+	// request queued before it has run. The test suite uses it to let one
+	// test's queued restarts finish before the next test starts.
+	infernoCmdSync
 )
 
 type infernoRequest struct {

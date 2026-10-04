@@ -199,9 +199,15 @@ func initTestHardware(t *testing.T) {
 	monWas := monitoring
 	mutex.Unlock()
 	t.Cleanup(func() {
+		// Let any Inferno work this test queued (a reaper's deferred
+		// restart, a retry) finish now: run later, it starts servers,
+		// monitors and FIFOs under the next test, which is how the suite
+		// failed under -shuffle.
+		quiesceInfernoWorker(t)
 		mutex.Lock()
 		sampleRateIdx, channelCount, deviceName = rate, ch, name
 		webNotice, webNoticeUntil = notice, noticeUntil
+		infernoRestartDeferred, infernoNoRetry = false, false
 		var done chan struct{}
 		if !monWas && monitoring {
 			done = monitorDone
@@ -216,6 +222,24 @@ func initTestHardware(t *testing.T) {
 			}
 		}
 	})
+}
+
+// quiesceInfernoWorker waits until the shared worker has run everything
+// queued so far.
+func quiesceInfernoWorker(t *testing.T) {
+	t.Helper()
+	done := make(chan struct{})
+	select {
+	case infernoReqCh <- infernoRequest{cmd: infernoCmdSync, done: done}:
+	case <-time.After(15 * time.Second):
+		t.Error("inferno worker queue stuck")
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Error("inferno worker did not drain")
+	}
 }
 
 // testSessionCookie logs in through the real login flow and returns a valid
