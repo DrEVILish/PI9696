@@ -5856,6 +5856,8 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		"USB FORMATTED",
 		"SHUTDOWN FAILED - SEE LOG",
 		"REBOOT FAILED - SEE LOG",
+		fmt.Sprintf("COPY FAILED: %d FILES", 99999),
+		"COPY COMPLETE",
 	} {
 		if w := hwManager.GetTextWidth(msg); w > 256 {
 			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
@@ -7107,5 +7109,50 @@ func TestFailedPowerCommandIsReported(t *testing.T) {
 	}
 	if len(called) != 2 {
 		t.Fatalf("power commands built: %q", called)
+	}
+}
+
+// A copy with failed files used to end exactly like a clean one; the
+// operator must get a failure count (and a clean copy a confirmation).
+func TestCopyReportsFailedFiles(t *testing.T) {
+	initTestHardware(t)
+	usb := t.TempDir()
+	origMP := USBMountPoint
+	USBMountPoint = usb
+	os.MkdirAll(RecordPath, 0755)
+	good := "copytest_20990101_120000_ch2_48kHz.wav"
+	os.WriteFile(filepath.Join(RecordPath, good), []byte("RIFF"), 0644)
+	mutex.Lock()
+	origUSB, origSel, origState := usbMounted, filesToCopy, currentState
+	mutex.Unlock()
+	t.Cleanup(func() {
+		USBMountPoint = origMP
+		os.Remove(filepath.Join(RecordPath, good))
+		mutex.Lock()
+		usbMounted, filesToCopy, currentState, sysNotice = origUSB, origSel, origState, ""
+		mutex.Unlock()
+	})
+
+	run := func(files ...string) string {
+		t.Helper()
+		mutex.Lock()
+		usbMounted, sysNotice = true, ""
+		filesToCopy = map[string]bool{}
+		for _, f := range files {
+			filesToCopy[f] = true
+		}
+		startCopyOperation()
+		done := copyDone
+		mutex.Unlock()
+		waitReaped(t, done, "copy")
+		mutex.Lock()
+		defer mutex.Unlock()
+		return sysNotice
+	}
+	if got := run(good); got != "COPY COMPLETE" {
+		t.Errorf("clean copy notice %q, want COPY COMPLETE", got)
+	}
+	if got := run(good, "vanished_20990101_120001_ch2_48kHz.wav"); got != "COPY FAILED: 1 FILES" {
+		t.Errorf("copy with a missing file: notice %q, want COPY FAILED: 1 FILES", got)
 	}
 }

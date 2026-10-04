@@ -4338,6 +4338,7 @@ func startCopyOperation() {
 			return
 		}
 
+		failed, stopped := 0, false
 		for i, file := range selectedFiles {
 			mutex.Lock()
 			cancelled := !isCopying
@@ -4346,6 +4347,7 @@ func startCopyOperation() {
 			active := isRecording && filepath.Join(RecordPath, file) == recordingFile
 			mutex.Unlock()
 			if cancelled {
+				stopped = true
 				break
 			}
 			if active {
@@ -4362,10 +4364,12 @@ func startCopyOperation() {
 				return !isCopying
 			})
 			if err == errCopyCancelled {
+				stopped = true
 				break
 			}
 			if err != nil {
 				logErrorf("Failed to copy %s: %v", file, err)
+				failed++
 			}
 			mutex.Lock()
 			copyProgress = int(float64(i+1) / float64(len(selectedFiles)) * 100)
@@ -4375,6 +4379,16 @@ func startCopyOperation() {
 		mutex.Lock()
 		isCopying = false
 		currentState = StateIdle
+		// Per-file failures (a full stick, FAT32's 4 GiB limit, a pulled
+		// drive) used to be log-only, and the copy just ended as if it had
+		// worked - an operator could walk away with an incomplete backup.
+		switch {
+		case failed > 0:
+			showSysNotice(fmt.Sprintf("COPY FAILED: %d FILES", failed))
+			showWebNotice(fmt.Sprintf("USB copy: %d of %d files failed - see the log", failed, len(selectedFiles)))
+		case !stopped:
+			showSysNotice("COPY COMPLETE")
+		}
 		close(copyDone)
 		mutex.Unlock()
 	}()
