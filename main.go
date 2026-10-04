@@ -3146,16 +3146,38 @@ func enqueueSystemOp(op systemOp) bool {
 
 func systemOpWorker() {
 	for op := range systemOpCh {
-		switch op {
-		case opFormatUSB:
-			formatUSB()
-		case opShutdown:
-			log.Println("Shutting down system via menu")
-			exec.Command("sudo", "shutdown", "-h", "now").Run()
-		case opRestart:
-			log.Println("Restarting system via menu")
-			exec.Command("sudo", "reboot").Run()
-		}
+		runSystemOp(op)
+	}
+}
+
+// powerCommand builds the shutdown/reboot command; a seam so tests can
+// exercise the failure path without any chance of powering the unit off.
+var powerCommand = func(name string, args ...string) *exec.Cmd {
+	return exec.Command(name, args...)
+}
+
+func runSystemOp(op systemOp) {
+	switch op {
+	case opFormatUSB:
+		formatUSB()
+	case opShutdown:
+		log.Println("Shutting down system via menu")
+		runPowerCommand("shutdown", "SHUTDOWN FAILED - SEE LOG", "sudo", "shutdown", "-h", "now")
+	case opRestart:
+		log.Println("Restarting system via menu")
+		runPowerCommand("reboot", "REBOOT FAILED - SEE LOG", "sudo", "reboot")
+	}
+}
+
+// runPowerCommand runs a confirmed shutdown/reboot. Its error used to be
+// discarded: a refused sudo or a missing binary left the operator, who had
+// just confirmed, watching a unit that simply carried on.
+func runPowerCommand(what, panelMsg, name string, args ...string) {
+	if out, err := powerCommand(name, args...).CombinedOutput(); err != nil {
+		logErrorf("%s failed: %v: %s", what, err, strings.TrimSpace(string(out)))
+		mutex.Lock()
+		showSysNotice(panelMsg)
+		mutex.Unlock()
 	}
 }
 

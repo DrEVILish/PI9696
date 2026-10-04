@@ -5854,6 +5854,8 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		"USB NOT MOUNTED - SEE LOG",
 		"USB FAT32 - 4GB FILE LIMIT",
 		"USB FORMATTED",
+		"SHUTDOWN FAILED - SEE LOG",
+		"REBOOT FAILED - SEE LOG",
 	} {
 		if w := hwManager.GetTextWidth(msg); w > 256 {
 			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
@@ -7073,5 +7075,37 @@ func TestFormatUSBReportsFilesystem(t *testing.T) {
 		if notice != tc.want {
 			t.Errorf("fail=%s: notice %q, want %q", tc.fail, notice, tc.want)
 		}
+	}
+}
+
+// A shutdown/reboot that fails must tell the operator who confirmed it.
+// powerCommand is replaced, so nothing here can power the unit off.
+func TestFailedPowerCommandIsReported(t *testing.T) {
+	initTestHardware(t)
+	var called []string
+	orig := powerCommand
+	powerCommand = func(name string, args ...string) *exec.Cmd {
+		called = append(called, name+" "+strings.Join(args, " "))
+		return exec.Command("sh", "-c", "echo 'sudo: a password is required' >&2; exit 1")
+	}
+	t.Cleanup(func() { powerCommand = orig })
+	for op, want := range map[systemOp]string{
+		opShutdown: "SHUTDOWN FAILED - SEE LOG",
+		opRestart:  "REBOOT FAILED - SEE LOG",
+	} {
+		mutex.Lock()
+		sysNotice = ""
+		mutex.Unlock()
+		runSystemOp(op)
+		mutex.Lock()
+		got := sysNotice
+		sysNotice = ""
+		mutex.Unlock()
+		if got != want {
+			t.Errorf("op %d: notice %q, want %q", op, got, want)
+		}
+	}
+	if len(called) != 2 {
+		t.Fatalf("power commands built: %q", called)
 	}
 }
