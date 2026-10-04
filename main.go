@@ -1609,7 +1609,11 @@ func startRecordingGuarded() bool {
 			return false
 		}
 		startRecording()
-		return true
+		// startRecording has refusals of its own (Inferno down or
+		// restarting, take dir or ffmpeg failure); report what actually
+		// happened, so HyperDeck doesn't answer "200 ok" to a take that
+		// never started.
+		return isRecording
 	}
 	return false
 }
@@ -2904,6 +2908,10 @@ func systemOpWorker() {
 func startRecording() {
 	if !infernoUp() {
 		logErrorf("Cannot start recording: Inferno server not running")
+		// Every other refusal tells the operator; this one used to leave
+		// a Record press doing nothing visible.
+		showSysNotice("NO AUDIO INPUT")
+		showWebNotice("Inferno is not running - recording refused")
 		return
 	}
 	// The take's ffmpeg is configured from the selected rate and channel

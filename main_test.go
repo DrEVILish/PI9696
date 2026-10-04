@@ -515,20 +515,50 @@ func TestStartRecordingGuarded(t *testing.T) {
 		t.Fatalf("expected guarded start to refuse from StateSettings")
 	}
 
-	// Allowed: idle, not recording, and (in test) not low on disk.
+	// Refused with a notice: idle, but Inferno is not running. This used to
+	// report success (and HyperDeck answered "200 ok") while no take ran.
 	mutex.Lock()
 	currentState = StateIdle
 	isRecording = false
+	sysNotice = ""
 	mutex.Unlock()
+	if startRecordingGuarded() {
+		t.Fatalf("expected guarded start to refuse while Inferno is stopped")
+	}
+	mutex.Lock()
+	notice := sysNotice
+	sysNotice = ""
+	mutex.Unlock()
+	if notice == "" {
+		t.Fatalf("refusal with Inferno stopped gave the operator no notice")
+	}
+
+	// Allowed: idle, not recording, Inferno up, and (in test) not low on
+	// disk.
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+	mutex.Lock()
+	origFifo, origRate, origCh := fifoPath, lastSampleRate, lastChannelCount
+	infernoState = InfernoRunning
+	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
+	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	currentState = StateIdle
+	isRecording = false
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		fifoPath, lastSampleRate, lastChannelCount = origFifo, origRate, origCh
+		mutex.Unlock()
+	})
 	if !startRecordingGuarded() {
 		t.Fatalf("expected guarded start to succeed from idle")
 	}
 
-	// Clean up the started take (no real ffmpeg runs - startRecording spins
-	// a real exec.Command; just reset the flag for the rest of the suite).
 	mutex.Lock()
+	done := recordingDone
 	stopRecording()
-	isRecording = false
+	mutex.Unlock()
+	<-done
+	mutex.Lock()
 	currentState = StateIdle
 	mutex.Unlock()
 }
@@ -5814,6 +5844,7 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		"RECORD FAILED - SEE LOG",
 		fmt.Sprintf("DELETE FAILED: %d FILES", 99999),
 		"AUDIO RESTARTING - WAIT",
+		"NO AUDIO INPUT",
 	} {
 		if w := hwManager.GetTextWidth(msg); w > 256 {
 			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
