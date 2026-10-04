@@ -816,8 +816,8 @@ func tintTokens() []string {
 // switches an app may offer beside the theme, applied as documentElement
 // attributes/style. Guarded by the app mutex; persisted like every setting.
 var (
-	displayMotion    = "full"      // or "reduced" -> <html data-motion="reduced">
-	displayContrast  = "standard"  // or "high"    -> <html data-contrast="high">
+	displayMotion     = "full"     // or "reduced" -> <html data-motion="reduced">
+	displayContrast   = "standard" // or "high"    -> <html data-contrast="high">
 	displayDensityIdx = 0          // 0 Normal, 1 Compact (0.85), 2 Comfortable (1.15)
 )
 
@@ -1089,8 +1089,8 @@ type displayOption struct {
 	label   string
 	options []string
 	// get returns the current selection index; set applies one.
-	get     func() int
-	set     func(int)
+	get func() int
+	set func(int)
 	// carrier renders the documentElement update for the applied value.
 	carrier func(int) string
 }
@@ -1124,7 +1124,11 @@ var displayOptions = []displayOption{
 		id: "density", post: "/api/settings/density", label: "Density",
 		options: []string{"Normal", "Compact", "Comfortable"},
 		get:     func() int { return displayDensityIdx },
-		set:     func(i int) { if i < len(displayDensityValues) { displayDensityIdx = i } },
+		set: func(i int) {
+			if i < len(displayDensityValues) {
+				displayDensityIdx = i
+			}
+		},
 		carrier: func(i int) string {
 			if d := displayDensityValues[i]; d != "1" {
 				return `document.documentElement.style.setProperty("--density","` + d + `")`
@@ -3952,7 +3956,7 @@ func currentMeterResponse() meterResponse {
 		FloorDB:    vuRangeOptions[vuRangeIdx],
 		DisplaySeq: displaySeq,
 	}
-	_, resp.TXStatus = txStatusLocked()	// Always size the meter bank to the configured channel count. During
+	_, resp.TXStatus = txStatusLocked() // Always size the meter bank to the configured channel count. During
 	// recording, the peak/RMS arrays are exactly channelCount (startRecording
 	// sizes them to it), and at idle/monitoring they follow it too, so this
 	// is normally a no-op - but while a channel change is still in flight

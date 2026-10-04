@@ -32,8 +32,8 @@ const (
 	DisplayWidth        = 256
 	DisplayHeight       = 64
 	MaxChannelCount     = 128
-	BitsPerSample       = 32 // internal FIFO/pipeline sample width, shown in status bar
-	OutputBitsPerSample = 24 // actual pcm_s24le WAV written to disk, used for storage math
+	BitsPerSample       = 32     // internal FIFO/pipeline sample width, shown in status bar
+	OutputBitsPerSample = 24     // actual pcm_s24le WAV written to disk, used for storage math
 	meterSilence        = -100.0 // dB sentinel shown/reported when no recording is active
 )
 
@@ -1125,7 +1125,7 @@ var (
 	meterRMSDB             = meterSilence
 	meterChannelPeak       []float64 // raw per-channel instantaneous dBFS straight from ffmpeg, index 0 = channel 1; see meterReader
 	meterChannelRMS        []float64
-	meterGen               uint64 // session generation: bumped on every record/monitor start; a stale meterReader (old ffmpeg exiting late) flushes only if its generation is still current, so it can't corrupt the new session's meters
+	meterGen               uint64    // session generation: bumped on every record/monitor start; a stale meterReader (old ffmpeg exiting late) flushes only if its generation is still current, so it can't corrupt the new session's meters
 	meterChannelPeakHeld   []float64 // display-facing peak after hold/decay ballistics - see decayPeakHold; everything that shows a peak marker (OLED, WebUI) reads this, never meterChannelPeak directly
 	peakHeldSetAt          []time.Time
 	bootTime               time.Time // set at startup, used by uptime readout
@@ -1135,10 +1135,10 @@ var (
 	displayLastCanvasHash  uint64
 	lastDisplayErrLog      time.Time // throttles display-push failure logs to 1/min
 	displayPushed          bool      // first render always pushes (see render); afterwards only changed frames
-	vuRangeIdx             = 3      // index into vuRangeOptions; -90dBFS default
-	peakHoldIdx            = 4      // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
-	transportMode          = "icon" // web dashboard transport buttons: "icon" or "text" labels - persisted, see PersistedConfig
-	monitoring             bool     // input-monitor ffmpeg reading the Inferno FIFO for levels only, no recording - see startMonitor
+	vuRangeIdx             = 3       // index into vuRangeOptions; -90dBFS default
+	peakHoldIdx            = 4       // index into peakHoldOptions; 3s default (standard broadcast/DAW practice, see RESEARCH-FEATURES notes)
+	transportMode          = "icon"  // web dashboard transport buttons: "icon" or "text" labels - persisted, see PersistedConfig
+	monitoring             bool      // input-monitor ffmpeg reading the Inferno FIFO for levels only, no recording - see startMonitor
 	monitorCmd             *exec.Cmd
 	monitorDone            chan struct{}
 	monitoringOutput       bool          // playback's output-monitoring mode: the input monitor is stood down while a track plays (see startPlayback); UI shows "monitoring output" - no real output tap, so audio latency is untouched
@@ -1172,8 +1172,8 @@ var (
 	diskWarnUntil time.Time
 	// clockWarnUntil: same, for a record refused by the clock-sync gate.
 	clockWarnUntil time.Time
-	networkWasUp  bool
-	mutex         sync.Mutex
+	networkWasUp   bool
+	mutex          sync.Mutex
 
 	// WiFi access point settings - OFF by default. wifiSSID is the AP name
 	// (device name by default), wifiPassword is user-set via the web UI.
@@ -2271,7 +2271,8 @@ func preemptMonitorForRestart() {
 	mutex.Unlock()
 }
 
-func infernoWorker() {	for req := range infernoReqCh {
+func infernoWorker() {
+	for req := range infernoReqCh {
 		switch req.cmd {
 		case infernoCmdStop:
 			// Exempt from the recording guard below: this only ever comes
@@ -2344,13 +2345,13 @@ func infernoWorker() {	for req := range infernoReqCh {
 					infernoRestarting = true // same claim as above
 				}
 				mutex.Unlock()
-			if recording || !mismatch {
-				break
-			}
-			preemptMonitorForRestart()
-			doStopInferno()
-			time.Sleep(1 * time.Second)
-			doStartInferno()
+				if recording || !mismatch {
+					break
+				}
+				preemptMonitorForRestart()
+				doStopInferno()
+				time.Sleep(1 * time.Second)
+				doStartInferno()
 			}
 			// The TX holder is independent of the pipe server (own inferno
 			// instance on its own ports) but follows the same audio
@@ -2571,6 +2572,7 @@ func closeFifoKeeperLocked() {
 		fifoKeeper = nil
 	}
 }
+
 // enlargeFifo opens a freshly created FIFO and asks the kernel for a larger
 // buffer, returning the descriptor that must be held for as long as the FIFO
 // is in use (nil if the FIFO could not be opened).
@@ -4675,6 +4677,7 @@ func formatBusyNow() bool {
 	defer mutex.Unlock()
 	return isRecording || playbackCmd != nil || isCopying
 }
+
 // usbDevicePath looks up the block device currently mounted at USBMountPoint.
 // formatUSB previously hardcoded /dev/sda1, which would format the wrong
 // disk (or even a boot/root drive) on any system where the USB stick isn't
