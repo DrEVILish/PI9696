@@ -2248,6 +2248,13 @@ func infernoWorker() {	for req := range infernoReqCh {
 				doStopInferno()
 				time.Sleep(1 * time.Second) // give the old process a moment to fully release the audio device
 				if !hwManager.IsNetworkAvailable() {
+					// Retryable, not Stopped: networkMonitorLoop only
+					// starts the server on a down->up edge, and a probe
+					// that failed here may never have been seen as down
+					// there - which left Inferno off for good.
+					mutex.Lock()
+					infernoState = InfernoFailed
+					mutex.Unlock()
 					break
 				}
 			}
@@ -2322,6 +2329,11 @@ func networkMonitorLoop(stop <-chan struct{}) {
 		} else if !networkUp && networkWasUp {
 			// Network went down
 			logWarnf("Network unavailable")
+		} else if networkUp && infernoRetryDueLocked(time.Now()) {
+			logInfof("Retrying the Inferno server (next attempt in %v if this fails)", infernoRetryBackoff)
+			// Restart, not start: it also clears the dead server's FIFO
+			// and keeper before starting afresh.
+			enqueueInferno(infernoCmdRestart)
 		}
 
 		networkWasUp = networkUp
@@ -2758,6 +2770,7 @@ func doStartInferno() {
 		mutex.Lock()
 		fifoPath = path
 		infernoState = InfernoRunning
+		infernoRetryBackoff = 0
 		lastSampleRate = sampleRate
 		lastChannelCount = channels
 		if !isRecording {
@@ -2824,10 +2837,13 @@ func doStartInferno() {
 		return
 	}
 
+	exited := make(chan struct{})
 	mutex.Lock()
 	infernoCmd = cmd
+	infernoExited = exited
 	fifoPath = path
 	infernoState = InfernoRunning
+	infernoRetryBackoff = 0
 	lastSampleRate = sampleRate
 	lastChannelCount = channels
 	// Input monitoring should be on from the moment the unit boots, not only
@@ -2843,7 +2859,82 @@ func doStartInferno() {
 		}
 	}
 	mutex.Unlock()
+	go reapInferno(cmd, exited)
 	logInfof("Inferno server started with %dkHz, %d channels", sampleRate/1000, channels)
+}
+
+// infernoExited is closed by reapInferno when the running server's process
+// has exited; doStopInferno waits on it instead of calling Wait itself.
+// Guarded by the app mutex, like infernoCmd.
+var infernoExited chan struct{}
+
+// reapInferno is the sole owner of the server process's Wait. Before it
+// existed nothing waited on the child until a stop: a server that crashed
+// stayed a zombie while infernoState kept saying "running", the status bar
+// lied, and new takes recorded an empty FIFO. A requested stop disowns the
+// child first (doStopInferno clears infernoCmd), so an exit while it is
+// still infernoCmd is a fault.
+func reapInferno(cmd *exec.Cmd, exited chan struct{}) {
+	err := cmd.Wait()
+	close(exited)
+	mutex.Lock()
+	defer mutex.Unlock()
+	if infernoCmd != cmd {
+		return
+	}
+	infernoCmd = nil
+	infernoExited = nil
+	logErrorf("Inferno server exited unexpectedly: %v", err)
+	infernoFailedLocked()
+}
+
+// infernoFailedLocked records a running server's unexpected loss. A take in
+// progress is finalised now: the FIFO keeper holds the pipe open, so its
+// ffmpeg would otherwise wait on an empty FIFO forever with the panel still
+// showing REC. The network loop's retry (infernoRetryDueLocked) brings the
+// server back. Caller holds the app mutex.
+func infernoFailedLocked() {
+	infernoState = InfernoFailed
+	showSysNotice("INFERNO STOPPED - SEE LOG")
+	showWebNotice("The Inferno server stopped unexpectedly - restarting it")
+	if isRecording && !demoMode {
+		logErrorf("Stopping take %s: its audio input is gone", filepath.Base(recordingFile))
+		stopRecording()
+	}
+}
+
+// infernoRetryBackoff is the delay before the next automatic retry of a
+// failed server (0 = retry at the next check); infernoRetryAt is when that
+// retry is due. Both guarded by the app mutex.
+var infernoRetryBackoff time.Duration
+var infernoRetryAt time.Time
+
+const (
+	infernoRetryMin = 5 * time.Second
+	infernoRetryMax = time.Minute
+)
+
+// infernoRetryDueLocked reports whether the network loop should restart a
+// failed server now, and if so books the next attempt with a doubling
+// backoff (reset once a start succeeds). A failed start (missing binary,
+// FIFO error), a crash and a restart that found the network down all leave
+// InfernoFailed; before this nothing retried them until the link flapped.
+// Never while recording (the restart would defer anyway), during a restart,
+// or in demo mode. Caller holds the app mutex.
+func infernoRetryDueLocked(now time.Time) bool {
+	if demoMode || isRecording || infernoRestarting || infernoState != InfernoFailed {
+		return false
+	}
+	if now.Before(infernoRetryAt) {
+		return false
+	}
+	if infernoRetryBackoff == 0 {
+		infernoRetryBackoff = infernoRetryMin
+	} else if infernoRetryBackoff *= 2; infernoRetryBackoff > infernoRetryMax {
+		infernoRetryBackoff = infernoRetryMax
+	}
+	infernoRetryAt = now.Add(infernoRetryBackoff)
+	return true
 }
 
 // doStopInferno stops the Inferno server. Must only be called from
@@ -2871,15 +2962,26 @@ func stopProcessGroup(cmd *exec.Cmd, what string) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	pid := cmd.Process.Pid
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		logWarnf("%s: SIGTERM failed: %v", what, err)
-	}
 	waitCh := make(chan struct{})
 	go func() {
 		cmd.Wait()
 		close(waitCh)
 	}()
+	stopProcessGroupReaped(cmd, waitCh, what)
+}
+
+// stopProcessGroupReaped is stopProcessGroup for a child whose Wait is
+// already owned elsewhere (the Inferno server's reaper): it signals and
+// waits on exited, the channel that reaper closes, instead of calling Wait
+// a second time.
+func stopProcessGroupReaped(cmd *exec.Cmd, waitCh <-chan struct{}, what string) {
+	if cmd == nil || cmd.Process == nil {
+		return
+	}
+	pid := cmd.Process.Pid
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		logWarnf("%s: SIGTERM failed: %v", what, err)
+	}
 	select {
 	case <-waitCh:
 		return
@@ -2904,16 +3006,24 @@ func doStopInferno() {
 	}
 	mutex.Lock()
 	cmd := infernoCmd
+	exited := infernoExited
 	path := fifoPath
 	keeper := fifoKeeper
+	// Disowning before signalling is what tells reapInferno this exit was
+	// requested.
 	infernoCmd = nil
+	infernoExited = nil
 	fifoPath = ""
 	fifoKeeper = nil
 	infernoState = InfernoStopped
 	mutex.Unlock()
 
 	if cmd != nil && cmd.Process != nil {
-		stopProcessGroup(cmd, "Inferno server")
+		if exited != nil {
+			stopProcessGroupReaped(cmd, exited, "Inferno server")
+		} else {
+			stopProcessGroup(cmd, "Inferno server")
+		}
 	}
 
 	if path != "" {

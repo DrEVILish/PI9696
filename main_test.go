@@ -5848,6 +5848,7 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		"NO AUDIO INPUT",
 		"RECORDING STOPPED - SEE LOG",
 		"PLAYBACK FAILED - SEE LOG",
+		"INFERNO STOPPED - SEE LOG",
 	} {
 		if w := hwManager.GetTextWidth(msg); w > 256 {
 			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
@@ -6713,4 +6714,143 @@ func captureLogs(t *testing.T, buf *syncBuffer) {
 	orig := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: &slogLevel})))
 	t.Cleanup(func() { slog.SetDefault(orig) })
+}
+
+// useFakeInfernoBinary points InfernoBinary at a shell script for the test.
+func useFakeInfernoBinary(t *testing.T, script string) {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "inferno2pipe")
+	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	orig := InfernoBinary
+	InfernoBinary = bin
+	t.Cleanup(func() { InfernoBinary = orig })
+}
+
+// Nothing used to wait on the server until a stop: a crash left a zombie,
+// infernoState stayed "running" and a take in progress hung on the empty
+// FIFO. The reaper must mark the server failed, tell the operator, and
+// finalise the take.
+func TestInfernoCrashIsDetected(t *testing.T) {
+	initTestHardware(t)
+	resetTransportCleanup(t)
+	useFakeInfernoBinary(t, "#!/bin/sh\nsleep 1\nexit 3\n")
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+
+	startDone := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: startDone}
+	<-startDone
+	t.Cleanup(func() {
+		stopInfernoAndWait()
+		mutex.Lock()
+		infernoState, sysNotice = InfernoStopped, ""
+		mutex.Unlock()
+	})
+
+	mutex.Lock()
+	running := infernoState == InfernoRunning
+	sysNotice, currentState = "", StateIdle
+	startRecording()
+	recording := isRecording
+	mutex.Unlock()
+	if !running || !recording {
+		t.Fatalf("setup: running=%v recording=%v", running, recording)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mutex.Lock()
+		state, cmd, rec, notice := infernoState, infernoCmd, isRecording, sysNotice
+		mutex.Unlock()
+		if state == InfernoFailed && !rec {
+			if cmd != nil {
+				t.Error("infernoCmd still set after the server exited")
+			}
+			if !strings.Contains(notice, "INFERNO STOPPED") {
+				t.Errorf("no operator notice for the crash (notice %q)", notice)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("crash not handled: state=%v recording=%v", state, rec)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// A requested stop disowns the server first, so the reaper stays quiet.
+func TestRequestedInfernoStopIsQuiet(t *testing.T) {
+	initTestHardware(t)
+	resetTransportCleanup(t)
+	useFakeInfernoBinary(t, fakeChildScript)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+	startDone := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: startDone}
+	<-startDone
+	mutex.Lock()
+	sysNotice = ""
+	mutex.Unlock()
+	stopInfernoAndWait()
+	time.Sleep(100 * time.Millisecond) // let a (wrong) reaper report land
+	mutex.Lock()
+	state, notice := infernoState, sysNotice
+	mutex.Unlock()
+	if state != InfernoStopped {
+		t.Errorf("state after a requested stop = %v, want stopped", state)
+	}
+	if notice != "" {
+		t.Errorf("a requested stop raised %q", notice)
+	}
+}
+
+// Failed servers are retried with a doubling backoff capped at a minute,
+// never while recording, restarting, in demo mode, or when not failed.
+func TestInfernoRetryBackoff(t *testing.T) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	origState, origRec, origDemo, origRestart := infernoState, isRecording, demoMode, infernoRestarting
+	origBackoff, origAt := infernoRetryBackoff, infernoRetryAt
+	defer func() {
+		infernoState, isRecording, demoMode, infernoRestarting = origState, origRec, origDemo, origRestart
+		infernoRetryBackoff, infernoRetryAt = origBackoff, origAt
+	}()
+	infernoState, isRecording, demoMode, infernoRestarting = InfernoFailed, false, false, false
+	infernoRetryBackoff, infernoRetryAt = 0, time.Time{}
+
+	now := time.Now()
+	if !infernoRetryDueLocked(now) {
+		t.Fatal("first retry of a failed server not due")
+	}
+	if infernoRetryDueLocked(now.Add(time.Second)) {
+		t.Fatal("retried again inside the backoff")
+	}
+	var gaps []time.Duration
+	for i := 0; i < 6; i++ {
+		at := infernoRetryAt
+		if !infernoRetryDueLocked(at) {
+			t.Fatalf("retry %d not due at its booked time", i)
+		}
+		gaps = append(gaps, infernoRetryAt.Sub(at))
+	}
+	want := []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, time.Minute, time.Minute, time.Minute}
+	for i := range want {
+		if gaps[i] != want[i] {
+			t.Fatalf("backoff sequence %v, want %v", gaps, want)
+		}
+	}
+
+	far := infernoRetryAt.Add(time.Hour)
+	for name, set := range map[string]func(){
+		"recording":  func() { isRecording = true },
+		"demo":       func() { demoMode = true },
+		"restarting": func() { infernoRestarting = true },
+		"running":    func() { infernoState = InfernoRunning },
+	} {
+		infernoState, isRecording, demoMode, infernoRestarting = InfernoFailed, false, false, false
+		set()
+		if infernoRetryDueLocked(far) {
+			t.Errorf("retry due while %s", name)
+		}
+	}
 }

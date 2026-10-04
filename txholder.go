@@ -187,11 +187,13 @@ func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done 
 		n, err := dev.Read(frames)
 		if err != nil {
 			// Device closed (restart) or unrecoverable: exit. A restart
-			// reopens; a real fault leaves infernoState for the worker.
+			// reopens; a real fault marks the server failed so the
+			// network loop's retry rebuilds it.
 			select {
 			case <-quit:
 			default:
-				logWarnf("in-process inferno: capture read ended: %v", err)
+				logErrorf("in-process inferno: capture read ended: %v", err)
+				inProcRxFailed(gen)
 			}
 			return
 		}
@@ -216,7 +218,8 @@ func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done 
 					time.Sleep(2 * time.Millisecond)
 					continue
 				}
-				// Reader tore the FIFO down: exit; the next (re)start rebuilds.
+				logErrorf("in-process inferno: FIFO write failed: %v", werr)
+				inProcRxFailed(gen)
 				return
 			}
 			if w == 0 {
@@ -225,6 +228,17 @@ func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done 
 			}
 			off += w
 		}
+	}
+}
+
+// inProcRxFailed marks the server failed when the capture loop of the
+// current generation dies on its own, instead of leaving infernoState at
+// "running" over a FIFO nothing feeds any more.
+func inProcRxFailed(gen uint64) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	if gen == inProcRxGen && inProcRxQuit != nil && infernoState == InfernoRunning {
+		infernoFailedLocked()
 	}
 }
 
