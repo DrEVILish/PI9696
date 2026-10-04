@@ -14,6 +14,7 @@ anything on the test unit: the analysis runs on the second host.
 | `arc_subscribe.py` | either | Subscribe RX 1..N with raw ARC requests (netaudio's encoder), for receivers whose subscription read-back netaudio cannot parse |
 | `channel_list_check.sh` | second host | Channel-list round trip: one RX (`inferno2pipe`) or TX (ALSA plugin) device per count from a given inferno tree, `netaudio channel list`, check every channel 1..N came back (U13) |
 | `arc_page_check.py` | second host | Feeds every RX/TX channel-list page in a pcap to netaudio's own page parser and prints which pages it accepts or rejects (U13) |
+| `e2e_bitperfect.py` | second host | Two-Pi bit-perfect test: the second host transmits a sample-accurate timecode (24-bit counter per channel), pi9696 records a take through the WebUI, plays it back, the second host records the playback, and the two recordings are aligned on the timecode and compared bit for bit. Exit 0 only if every frame of the take reaches the second host unchanged |
 
 ## Setup that matters
 
@@ -32,10 +33,12 @@ anything on the test unit: the analysis runs on the second host.
 3. **Instance ports.** Every extra inferno instance on a host needs its own
    `INFERNO_PROCESS_ID` + `INFERNO_ALT_PORT` block (probe 4/10400, aplay test
    6/10600, `ITEST-RX` 5/10500 were used here).
-4. **Dither.** Stock inferno TPDF-dithers every 24-bit transmit, so a stock
-   source can never be bit-exact (expect ~25% of samples at ±1 LSB). For a
-   bit-exact reference, build the second host's ALSA plugin with the `Some(dither_rng)`
-   on the 24-bit branch of `flows_tx.rs` replaced by `None`.
+4. **Dither.** inferno TPDF-dithers a 24-bit transmit unless told the source
+   is already 24-bit (expect ~25% of samples at ±1 LSB otherwise). Since the
+   fork includes upstream's configurable dither (`ef39a28`), set
+   `INFERNO_TX_SOURCE_BIT_DEPTH=24` on a 24-bit-exact source; the old
+   test-only patch is no longer needed. pi9696's own transmitter does not set
+   it yet, so its playback is dithered (`e2e_bitperfect.py` would report it).
 
 ## Known limits of `compare.py`
 
