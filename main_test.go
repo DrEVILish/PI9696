@@ -7398,3 +7398,73 @@ func TestRemoteServerDropsSlowHeaders(t *testing.T) {
 		t.Fatal("connection with unfinished headers still open after 3s")
 	}
 }
+
+// In single-instance mode the paired device is also the playback sink: a
+// restart mid-playback killed the output and closed the handle under the
+// pump. The worker must defer it and remember that it did.
+func TestInProcRestartDeferredDuringPlayback(t *testing.T) {
+	initTestHardware(t)
+	t.Setenv("PI9696_INPROC_RX", "1")
+	mutex.Lock()
+	origState, origPlay, origDeferred := infernoState, playbackCmd, infernoRestartDeferred
+	infernoState, playbackCmd, infernoRestartDeferred = InfernoRunning, &exec.Cmd{}, false
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		infernoState, playbackCmd, infernoRestartDeferred = origState, origPlay, origDeferred
+		mutex.Unlock()
+	})
+	done := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdRestart, done: done}
+	waitReaped(t, done, "restart request")
+	mutex.Lock()
+	state, deferred := infernoState, infernoRestartDeferred
+	mutex.Unlock()
+	if state != InfernoRunning {
+		t.Fatalf("server torn down mid-playback (state %v)", state)
+	}
+	if !deferred {
+		t.Fatal("deferred restart not recorded")
+	}
+}
+
+// A deferred restart must come back once the transport is idle, even when
+// rate and channels match (a rename in single-instance mode); it used to be
+// re-queued only on a rate/channel mismatch.
+func TestDeferredRestartResumesWhenIdle(t *testing.T) {
+	initTestHardware(t)
+	useFakeInfernoBinary(t, fakeChildScript)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+	mutex.Lock()
+	origRec, origPlay, origDeferred, origDemo := isRecording, playbackCmd, infernoRestartDeferred, demoMode
+	origState, origRate, origCh := infernoState, lastSampleRate, lastChannelCount
+	mutex.Unlock()
+	t.Cleanup(func() {
+		// The re-queued restart runs on the shared worker: let it finish
+		// (a synchronous stop queues behind it) before restoring state.
+		stopInfernoAndWait()
+		mutex.Lock()
+		isRecording, playbackCmd, infernoRestartDeferred, demoMode = origRec, origPlay, origDeferred, origDemo
+		infernoState, lastSampleRate, lastChannelCount = origState, origRate, origCh
+		mutex.Unlock()
+	})
+
+	mutex.Lock()
+	defer mutex.Unlock()
+	// Settings match the running server: only the deferral asks for it.
+	infernoState, demoMode = InfernoStopped, false
+	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+
+	isRecording, playbackCmd, infernoRestartDeferred = true, nil, true
+	if resumeDeferredInfernoRestartLocked() {
+		t.Fatal("restart re-queued while still recording")
+	}
+	isRecording = false
+	if !resumeDeferredInfernoRestartLocked() {
+		t.Fatal("deferred restart not re-queued once idle")
+	}
+	infernoRestartDeferred = false
+	if resumeDeferredInfernoRestartLocked() {
+		t.Fatal("restart queued with nothing deferred and settings matching")
+	}
+}

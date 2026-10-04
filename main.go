@@ -2281,14 +2281,19 @@ func infernoWorker() {	for req := range infernoReqCh {
 
 		case infernoCmdStart, infernoCmdRestart:
 			mutex.Lock()
-			recording := isRecording
+			recording := infernoBusyLocked()
 			// Claim the restart in the same critical section that saw no
 			// take: startRecording refuses while this is set, so a Record
 			// press cannot slip in between this check and doStopInferno
 			// removing the FIFO under the new take. Cleared below once
 			// the request has finished.
-			if !recording && req.cmd == infernoCmdRestart {
-				infernoRestarting = true
+			if req.cmd == infernoCmdRestart {
+				if recording {
+					infernoRestartDeferred = true
+				} else {
+					infernoRestarting = true
+					infernoRestartDeferred = false
+				}
 			}
 			mutex.Unlock()
 
@@ -2302,7 +2307,7 @@ func infernoWorker() {	for req := range infernoReqCh {
 				// timer still running while no more audio is being
 				// captured. Defer instead - stopRecording() re-enqueues
 				// this restart once it's safe.
-				logWarnf("Deferring Inferno restart: recording in progress")
+				logWarnf("Deferring Inferno restart: recording or playback in progress")
 				break
 			}
 
@@ -2332,7 +2337,7 @@ func infernoWorker() {	for req := range infernoReqCh {
 			// guard as above applies here.
 			for {
 				mutex.Lock()
-				recording := isRecording
+				recording := infernoBusyLocked()
 				mismatch := infernoState == InfernoRunning &&
 					(sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount)
 				if !recording && mismatch {
@@ -2361,6 +2366,36 @@ func infernoWorker() {	for req := range infernoReqCh {
 			close(req.done)
 		}
 	}
+}
+
+// infernoBusyLocked reports whether a restart must wait: a take is reading
+// the FIFO, or - in single-instance mode, where the paired device is also
+// the TX sink the playback pump writes - a track is playing. Tearing the
+// device down mid-playback killed the output (and closed the handle under
+// the pump). Caller holds the app mutex.
+func infernoBusyLocked() bool {
+	return isRecording || (inProcRX() && playbackCmd != nil)
+}
+
+// infernoRestartDeferred records that the worker postponed a restart because
+// the transport was busy. The busy check alone could not bring it back
+// later: the end-of-take hook re-queued only when the rate or channel count
+// differed, so a deferred rename (single-instance mode restarts to apply a
+// new name) was dropped. Guarded by the app mutex.
+var infernoRestartDeferred bool
+
+// resumeDeferredInfernoRestartLocked re-queues a postponed restart once the
+// transport is idle, reporting whether it did. Called from the take and
+// playback reapers. Caller holds the app mutex.
+func resumeDeferredInfernoRestartLocked() bool {
+	if infernoBusyLocked() || demoMode {
+		return false
+	}
+	if !infernoRestartDeferred && !infernoRestartNeeded() {
+		return false
+	}
+	enqueueInferno(infernoCmdRestart)
+	return true
 }
 
 // infernoRestarting is set by infernoWorker, under the app mutex, from the
@@ -3403,10 +3438,7 @@ func startRecording() {
 			// recording guard there). Now that it's safe, let it proceed
 			// instead of leaving Inferno running at a stale rate/channel
 			// count indefinitely.
-			if infernoState == InfernoRunning &&
-				(sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount) {
-				enqueueInferno(infernoCmdRestart)
-			} else {
+			if !resumeDeferredInfernoRestartLocked() {
 				// No deferred restart in flight - bring the always-on input
 				// monitor back up now that the take has ended.
 				maybeResumeInputMonitorLocked()
@@ -3908,6 +3940,7 @@ func startPlayback() {
 			if txReopenPending {
 				go ensureTxHolder()
 			}
+			resumeDeferredInfernoRestartLocked()
 		}
 		// Back to idle and the input monitor is expected to be a persistent,
 		// always-on thing (started at startup), so bring it back up.
@@ -4273,6 +4306,7 @@ func restartPlaybackAt(pos time.Duration) {
 			if txReopenPending {
 				go ensureTxHolder()
 			}
+			resumeDeferredInfernoRestartLocked()
 			// Only the current generation resumes the monitor: a stale
 			// reaper from a pre-seek process must not stand the monitor
 			// back up while the new playback is running.
