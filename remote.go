@@ -3713,7 +3713,9 @@ func broadcastTelemetry() {
 	teleWSMu.Unlock()
 	for _, ws := range clients {
 		alive := true
-		if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
+		if !wsSessionLive(ws) {
+			alive = false // logged out or token rotated: stop streaming
+		} else if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
 			alive = false
 		} else if configChanged && !teleWSSend(ws, "#config", config) {
 			alive = false
@@ -3972,10 +3974,19 @@ func handleWSMeter(ws *websocket.Conn) {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for range ticker.C {
-		if !wsMeterSend(ws) {
+		if !wsSessionLive(ws) || !wsMeterSend(ws) {
 			return
 		}
 	}
+}
+
+// wsSessionLive reports whether the login session that opened ws is still
+// valid. requireAuth checks only the handshake, so a socket used to keep
+// streaming after a logout, the session's expiry, or a token rotation -
+// the response to a compromised token - had revoked it.
+func wsSessionLive(ws *websocket.Conn) bool {
+	r := ws.Request()
+	return r != nil && validSession(r)
 }
 
 func handleAPIRecordStart(w http.ResponseWriter, r *http.Request) {

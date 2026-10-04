@@ -11,6 +11,7 @@ import (
 	"image/png"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -859,7 +860,7 @@ func TestTelemetryWSRoundtrip(t *testing.T) {
 
 	srv := httptest.NewServer(websocket.Handler(handleWSTelemetry))
 	defer srv.Close()
-	ws, err := websocket.Dial("ws://"+strings.TrimPrefix(srv.URL, "http://")+"/", "", "http://localhost/")
+	ws, err := dialWithSession(t, "ws://"+strings.TrimPrefix(srv.URL, "http://")+"/", "http://localhost/")
 	if err != nil {
 		t.Fatalf("dial telemetry WS: %v", err)
 	}
@@ -920,7 +921,7 @@ func TestTelemetryWSPanelsPush(t *testing.T) {
 
 	srv := httptest.NewServer(websocket.Handler(handleWSTelemetry))
 	defer srv.Close()
-	ws, err := websocket.Dial("ws://"+strings.TrimPrefix(srv.URL, "http://")+"/", "", "http://localhost/")
+	ws, err := dialWithSession(t, "ws://"+strings.TrimPrefix(srv.URL, "http://")+"/", "http://localhost/")
 	if err != nil {
 		t.Fatalf("dial telemetry WS: %v", err)
 	}
@@ -7229,4 +7230,86 @@ func TestLoginTokenReadVsRotation(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// dialAuthedWS logs into a test server and opens the websocket at path with
+// the session cookie.
+func dialAuthedWS(t *testing.T, path string) *websocket.Conn {
+	t.Helper()
+	initTestHardware(t) // the telemetry first paint reads hwManager
+	origSessions := sessions
+	sessions = newSessionStore()
+	t.Cleanup(func() { sessions = origSessions })
+	srv := httptest.NewServer(newRemoteMux())
+	t.Cleanup(srv.Close)
+	id := sessions.create(time.Hour)
+	cfg, err := websocket.NewConfig("ws"+strings.TrimPrefix(srv.URL, "http")+path, srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Header.Set("Cookie", remoteSessionCookie+"="+id)
+	ws, err := websocket.DialConfig(cfg)
+	if err != nil {
+		t.Fatalf("dial %s: %v", path, err)
+	}
+	t.Cleanup(func() { ws.Close() })
+	return ws
+}
+
+// expectWSClosed reads until the server closes the socket.
+func expectWSClosed(t *testing.T, ws *websocket.Conn, within time.Duration) {
+	t.Helper()
+	ws.SetReadDeadline(time.Now().Add(within))
+	var msg string
+	for {
+		if err := websocket.Message.Receive(ws, &msg); err != nil {
+			var ne net.Error
+			if errors.As(err, &ne) && ne.Timeout() {
+				t.Fatal("websocket still streaming after its session was revoked")
+			}
+			return
+		}
+	}
+}
+
+// requireAuth only checks the handshake: the meter stream used to keep
+// flowing after logout or a token rotation (the response to a compromised
+// token). It must close once the session is revoked.
+func TestWSMeterClosesWhenSessionRevoked(t *testing.T) {
+	ws := dialAuthedWS(t, "/ws/meter")
+	var msg string
+	ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := websocket.Message.Receive(ws, &msg); err != nil {
+		t.Fatalf("no meter frame while the session is valid: %v", err)
+	}
+	sessions.revokeAll()
+	expectWSClosed(t, ws, 2*time.Second)
+}
+
+// Same for the telemetry socket, which is fed by the broadcast loop.
+func TestWSTelemetryClosesWhenSessionRevoked(t *testing.T) {
+	ws := dialAuthedWS(t, "/ws/telemetry")
+	var msg string
+	ws.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if err := websocket.Message.Receive(ws, &msg); err != nil {
+		t.Fatalf("no telemetry frame while the session is valid: %v", err)
+	}
+	sessions.revokeAll()
+	broadcastTelemetry()
+	expectWSClosed(t, ws, 3*time.Second)
+}
+
+// dialWithSession opens a websocket carrying a live session cookie: the
+// telemetry broadcast re-checks the session before every push, so a socket
+// without one is closed.
+func dialWithSession(t *testing.T, url, origin string) (*websocket.Conn, error) {
+	t.Helper()
+	cfg, err := websocket.NewConfig(url, origin)
+	if err != nil {
+		return nil, err
+	}
+	id := sessions.create(time.Hour)
+	t.Cleanup(func() { sessions.revoke(id) })
+	cfg.Header.Set("Cookie", remoteSessionCookie+"="+id)
+	return websocket.DialConfig(cfg)
 }
