@@ -7550,3 +7550,32 @@ func TestPollUSBStatsOutsideMutex(t *testing.T) {
 		t.Fatalf("poll result mounted=%v size=%q", mounted, size)
 	}
 }
+
+// budgetWriter accepts n bytes, then fails.
+type budgetWriter struct{ n int }
+
+func (w *budgetWriter) Write(p []byte) (int, error) {
+	if len(p) > w.n {
+		k := w.n
+		w.n = 0
+		return k, errors.New("client went away")
+	}
+	w.n -= len(p)
+	return len(p), nil
+}
+
+// The archive's central directory is written by Close; its error used to be
+// dropped, so a download that failed at the very end was never reported.
+func TestWriteRecordingZipReportsCloseError(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "a_20240101_120000_ch2_48kHz.wav")
+	os.WriteFile(f, make([]byte, 4096), 0644)
+	var full bytes.Buffer
+	if err := writeRecordingZip(&full, dir, []string{f}); err != nil {
+		t.Fatal(err)
+	}
+	// Fail only inside the trailing central directory.
+	if err := writeRecordingZip(&budgetWriter{n: full.Len() - 10}, dir, []string{f}); err == nil {
+		t.Fatal("a failure while writing the central directory was not reported")
+	}
+}

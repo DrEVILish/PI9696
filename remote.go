@@ -4401,9 +4401,16 @@ func handleDownloadAll(w http.ResponseWriter, r *http.Request) {
 // across days don't collide. base is the path prefix against which rel is
 // computed; it's a parameter so the same streaming logic is testable against a
 // temp directory without touching the real RecordPath.
-func writeRecordingZip(dst io.Writer, base string, files []string) error {
+func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 	zw := zip.NewWriter(dst)
-	defer zw.Close()
+	// Close writes the central directory; without it the archive is
+	// unreadable. Its error used to be dropped, so a client that went away
+	// at the very end was never logged as a failed download.
+	defer func() {
+		if cerr := zw.Close(); err == nil {
+			err = cerr
+		}
+	}()
 
 	var manifest strings.Builder
 	fmt.Fprintf(&manifest, "PI9696 recording bundle\nGenerated: %s\nFiles: %d\n\n", time.Now().Format("2006-01-02 15:04:05"), len(files))
@@ -4421,17 +4428,21 @@ func writeRecordingZip(dst io.Writer, base string, files []string) error {
 			continue
 		}
 
+		// Open before writing the entry header: opening after it left an
+		// empty entry in the archive for a file that could not be read.
+		in, err := os.Open(f)
+		if err != nil {
+			logErrorf("download-all: skipping %s: %v", entry, err)
+			continue
+		}
 		// PCM WAV is incompressible noise to Deflate: Store skips the
 		// CPU burn and streams multi-GB takes at disk speed instead.
 		hdr := &zip.FileHeader{Name: entry, Method: zip.Store}
 		hdr.SetModTime(info.ModTime())
 		wc, err := zw.CreateHeader(hdr)
 		if err != nil {
+			in.Close()
 			return err
-		}
-		in, err := os.Open(f)
-		if err != nil {
-			continue
 		}
 		_, copyErr := io.Copy(wc, in)
 		in.Close()
