@@ -323,10 +323,13 @@ func TestSuiteDoesNotTouchInstalledInferno(t *testing.T) {
 
 // Traps SIGTERM and exits cleanly, standing in for both cargo (Inferno) and
 // ffmpeg (playback) - both are just long-running children that must respond
-// to SIGTERM for the worker/playback-goroutine cleanup paths under test.
+// to SIGTERM for the worker/playback-goroutine cleanup paths under test. The
+// background sleep gets no stdio and is killed on TERM: inheriting the
+// captured stderr pipe, it made every reap sit out cmd.WaitDelay, and it
+// outlived the test as an orphan.
 const fakeChildScript = `#!/bin/sh
-trap 'exit 0' TERM
-sleep 300 &
+trap 'kill $! 2>/dev/null; exit 0' TERM
+sleep 300 >/dev/null 2>&1 &
 wait $!
 `
 
@@ -443,8 +446,8 @@ func TestMeterReaderParsesAstatsOutput(t *testing.T) {
 // blocking on it (see startRecording's comment on why cmd.Wait() moved off
 // the caller and into its own goroutine).
 const fakeFfmpegDelayedExitScript = `#!/bin/sh
-trap 'sleep 0.3; exit 0' TERM
-sleep 300 &
+trap 'kill $! 2>/dev/null; sleep 0.3; exit 0' TERM
+sleep 300 >/dev/null 2>&1 &
 wait $!
 `
 
@@ -3584,8 +3587,8 @@ func TestTerminateFfmpegLetsWellBehavedChildExit(t *testing.T) {
 	t.Cleanup(func() { ffmpegStopGrace = orig })
 
 	fakeExecutable(t, "polite", `#!/bin/sh
-trap 'exit 0' TERM
-sleep 300 &
+trap 'kill $! 2>/dev/null; exit 0' TERM
+sleep 300 >/dev/null 2>&1 &
 wait $!
 `)
 	cmd := exec.Command("polite")
@@ -6318,8 +6321,8 @@ func TestEnsureTxHolderNoopInProcRX(t *testing.T) {
 // command a take was started with.
 const fakeFfmpegArgsScript = `#!/bin/sh
 printf '%s\n' "$@" > "$FAKE_FFMPEG_ARGS"
-trap 'exit 0' TERM
-sleep 300 &
+trap 'kill $! 2>/dev/null; exit 0' TERM
+sleep 300 >/dev/null 2>&1 &
 wait $!
 `
 
@@ -6495,8 +6498,8 @@ func TestRecordRefusedWhileInfernoRestartPending(t *testing.T) {
 // exit on SIGTERM, holding the worker inside doStopInferno long enough for a
 // test to act mid-restart.
 const fakeSlowTermScript = `#!/bin/sh
-trap 'sleep 0.5; exit 0' TERM
-sleep 300 &
+trap 'kill $! 2>/dev/null; sleep 0.5; exit 0' TERM
+sleep 300 >/dev/null 2>&1 &
 wait $!
 `
 
