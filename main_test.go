@@ -7868,3 +7868,77 @@ func TestTxHolderEnvSendsUndithered24Bit(t *testing.T) {
 		t.Fatalf("TX holder env %v lacks INFERNO_TX_SOURCE_BIT_DEPTH=24", env)
 	}
 }
+
+func (f *fakeTxHolder) writeCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.writes)
+}
+
+func waitWrites(t *testing.T, f *fakeTxHolder, atLeast int, within time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for f.writeCount() < atLeast {
+		if time.Now().After(deadline) {
+			t.Fatalf("only %d writes after %v, want %d", f.writeCount(), within, atLeast)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// The playback pump used to take the app mutex before every chunk; render()
+// holds it for up to ~95 ms, so the pump stalled, the 120 ms device buffer
+// underran 2 s into playback, and the plugin restarted its transmitter. The
+// pump must keep writing while the app mutex is held.
+func TestTxPumpKeepsWritingWhileAppMutexHeld(t *testing.T) {
+	saveTxGlobals(t)
+	resetTransportCleanup(t)
+	holder := &fakeTxHolder{}
+	cmd := &exec.Cmd{}
+	mutex.Lock()
+	txHolder, txHolderReady = holder, true
+	playbackCmd, currentState = cmd, StatePlaying
+	mutex.Unlock()
+
+	pr, pw := io.Pipe()
+	stopFeed := make(chan struct{})
+	go func() {
+		buf := make([]byte, txPumpFrames*2*4)
+		for i := range buf {
+			buf[i] = 1
+		}
+		for {
+			select {
+			case <-stopFeed:
+				pw.Close()
+				return
+			default:
+			}
+			if _, err := pw.Write(buf); err != nil {
+				return
+			}
+		}
+	}()
+	pumpDone := make(chan struct{})
+	go func() {
+		pumpPlaybackToTx(cmd, pr, holder, 2)
+		close(pumpDone)
+	}()
+	waitWrites(t, holder, 2, 2*time.Second)
+
+	mutex.Lock()
+	before := holder.writeCount()
+	time.Sleep(300 * time.Millisecond)
+	during := holder.writeCount() - before
+	playbackCmd = nil // end of take, seen once the mutex is free
+	mutex.Unlock()
+	if during < 5 {
+		t.Errorf("pump wrote %d chunks in 300 ms with the app mutex held; it is blocking on the mutex", during)
+	}
+	close(stopFeed)
+	select {
+	case <-pumpDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("pump did not finish after the take ended")
+	}
+}

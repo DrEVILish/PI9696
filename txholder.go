@@ -728,17 +728,23 @@ func txSilenceFrames(rate int) int {
 // which hung the app (see INFERNO-UPSTREAM.md). A pump retired by a seek
 // leaves the device to its successor.
 func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int) {
+	// Same TryLock discipline as the pump: a blocked superseded check is a
+	// stalled write and an underrun.
+	gone := false
 	superseded := func() bool {
-		mutex.Lock()
-		defer mutex.Unlock()
-		return txHolder != holder || (playbackCmd != nil && playbackCmd != cmd)
-	}
-	if superseded() {
-		return
+		if mutex.TryLock() {
+			gone = txHolder != holder || (playbackCmd != nil && playbackCmd != cmd)
+			mutex.Unlock()
+		}
+		return gone
 	}
 	mutex.Lock()
 	rate := sampleRates[sampleRateIdx]
+	gone = txHolder != holder || (playbackCmd != nil && playbackCmd != cmd)
 	mutex.Unlock()
+	if gone {
+		return
+	}
 	zeros := make([]int32, txPumpFrames*channels)
 	for left := txSilenceFrames(rate); left > 0; left -= txPumpFrames {
 		if superseded() {
@@ -763,11 +769,22 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 	zeros := make([]int32, txPumpFrames*channels)
 	samples := make([]int32, txPumpFrames*channels)
 
+	mutex.Lock()
+	alive := playbackCmd == cmd && txHolder == holder
+	paused := currentState == StatePaused
+	mutex.Unlock()
 	for {
-		mutex.Lock()
-		alive := playbackCmd == cmd && txHolder == holder
-		paused := currentState == StatePaused
-		mutex.Unlock()
+		// Refresh the state only when the app mutex is free. Blocking on it
+		// stalled the pump while render() held it (up to ~95 ms against a
+		// 120 ms device buffer): an underrun 2 s into every playback, and
+		// an underrun restarts the plugin's transmitter (REPORT F2,
+		// e2e_bitperfect.py). A state change is seen on the next free
+		// chunk, ~21 ms later at most in practice.
+		if mutex.TryLock() {
+			alive = playbackCmd == cmd && txHolder == holder
+			paused = currentState == StatePaused
+			mutex.Unlock()
+		}
 		if !alive {
 			finishTxPump(cmd, holder, channels)
 			return
