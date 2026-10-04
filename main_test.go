@@ -6821,11 +6821,12 @@ func TestInfernoRetryBackoff(t *testing.T) {
 	mutex.Lock()
 	defer mutex.Unlock()
 	origState, origRec, origDemo, origRestart := infernoState, isRecording, demoMode, infernoRestarting
-	origBackoff, origAt := infernoRetryBackoff, infernoRetryAt
+	origBackoff, origAt, origNoRetry := infernoRetryBackoff, infernoRetryAt, infernoNoRetry
 	defer func() {
 		infernoState, isRecording, demoMode, infernoRestarting = origState, origRec, origDemo, origRestart
-		infernoRetryBackoff, infernoRetryAt = origBackoff, origAt
+		infernoRetryBackoff, infernoRetryAt, infernoNoRetry = origBackoff, origAt, origNoRetry
 	}()
+	infernoNoRetry = false
 	infernoState, isRecording, demoMode, infernoRestarting = InfernoFailed, false, false, false
 	infernoRetryBackoff, infernoRetryAt = 0, time.Time{}
 
@@ -6853,12 +6854,14 @@ func TestInfernoRetryBackoff(t *testing.T) {
 
 	far := infernoRetryAt.Add(time.Hour)
 	for name, set := range map[string]func(){
+		"no-retry":   func() { infernoNoRetry = true },
 		"recording":  func() { isRecording = true },
 		"demo":       func() { demoMode = true },
 		"restarting": func() { infernoRestarting = true },
 		"running":    func() { infernoState = InfernoRunning },
 	} {
 		infernoState, isRecording, demoMode, infernoRestarting = InfernoFailed, false, false, false
+		infernoNoRetry = false
 		set()
 		if infernoRetryDueLocked(far) {
 			t.Errorf("retry due while %s", name)
@@ -7787,5 +7790,32 @@ func TestInfernoCrashPanicReachesLog(t *testing.T) {
 	}
 	if out := logBuf.String(); !strings.Contains(out, "panicked at src/flows_rx.rs") {
 		t.Fatalf("the crash's panic line never reached the log:\n%s", out)
+	}
+}
+
+// A missing server binary is not transient: the backoff retry would log it
+// once a minute forever on a dev box. It must not book retries.
+func TestMissingInfernoBinaryIsNotRetried(t *testing.T) {
+	initTestHardware(t)
+	resetTransportCleanup(t)
+	orig := InfernoBinary
+	InfernoBinary = filepath.Join(t.TempDir(), "no-such-inferno2pipe")
+	t.Cleanup(func() {
+		InfernoBinary = orig
+		mutex.Lock()
+		infernoState, infernoNoRetry = InfernoStopped, false
+		mutex.Unlock()
+	})
+	done := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: done}
+	<-done
+	mutex.Lock()
+	defer mutex.Unlock()
+	if infernoState != InfernoFailed {
+		t.Fatalf("state %v, want failed", infernoState)
+	}
+	infernoRetryAt = time.Time{}
+	if infernoRetryDueLocked(time.Now()) {
+		t.Fatal("a missing binary booked an automatic retry")
 	}
 }

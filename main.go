@@ -2858,6 +2858,10 @@ func doStartInferno() {
 		logErrorf("Cannot start Inferno server: built binary %s not found (%v) - build the Inferno binary first", binary, err)
 		mutex.Lock()
 		infernoState = InfernoFailed
+		// Not transient: the backoff retry would log this once a minute
+		// forever on a dev box or simulator. A link flap or an explicit
+		// restart still tries again.
+		infernoNoRetry = true
 		closeFifoKeeperLocked()
 		mutex.Unlock()
 		os.Remove(path)
@@ -2905,6 +2909,7 @@ func doStartInferno() {
 	fifoPath = path
 	infernoState = InfernoRunning
 	infernoRetryBackoff = 0
+	infernoNoRetry = false
 	lastSampleRate = sampleRate
 	lastChannelCount = channels
 	// Input monitoring should be on from the moment the unit boots, not only
@@ -2990,6 +2995,10 @@ func infernoFailedLocked() {
 var infernoRetryBackoff time.Duration
 var infernoRetryAt time.Time
 
+// infernoNoRetry marks a failure retrying cannot fix (the server binary is
+// missing). Cleared by a successful start. Guarded by the app mutex.
+var infernoNoRetry bool
+
 const (
 	infernoRetryMin = 5 * time.Second
 	infernoRetryMax = time.Minute
@@ -3003,7 +3012,7 @@ const (
 // Never while recording (the restart would defer anyway), during a restart,
 // or in demo mode. Caller holds the app mutex.
 func infernoRetryDueLocked(now time.Time) bool {
-	if demoMode || isRecording || infernoRestarting || infernoState != InfernoFailed {
+	if demoMode || isRecording || infernoRestarting || infernoNoRetry || infernoState != InfernoFailed {
 		return false
 	}
 	if now.Before(infernoRetryAt) {
