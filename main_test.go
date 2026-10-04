@@ -7748,3 +7748,44 @@ func TestLoadAndImportClampAlike(t *testing.T) {
 		t.Errorf("out-of-range brightness applied: %d", oledBrightnessPct)
 	}
 }
+
+// A crashing server's last stderr lines (the panic saying why) must reach
+// the log: cmd.Wait closes the stderr pipe, so reaping before the consumer
+// has drained it threw them away.
+func TestInfernoCrashPanicReachesLog(t *testing.T) {
+	initTestHardware(t)
+	resetTransportCleanup(t)
+	var logBuf syncBuffer
+	captureLogs(t, &logBuf)
+	// ~120 KB of debug chatter first: at exit a pipe-buffer's worth is
+	// still unread, which is what a premature Wait discards.
+	useFakeInfernoBinary(t, "#!/bin/sh\nsleep 0.3\n"+
+		"i=0; while [ $i -lt 1200 ]; do echo \"[2026-10-04T00:00:00Z DEBUG inferno_aoip::flows_rx] chatter line $i padding padding padding padding\" >&2; i=$((i+1)); done\n"+
+		"echo \"thread 'main' panicked at src/flows_rx.rs:42:5: boom\" >&2\nexit 101\n")
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+	done := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: done}
+	<-done
+	t.Cleanup(func() {
+		stopInfernoAndWait()
+		mutex.Lock()
+		infernoState, sysNotice = InfernoStopped, ""
+		mutex.Unlock()
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		mutex.Lock()
+		failed := infernoState == InfernoFailed
+		mutex.Unlock()
+		if failed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("crash not detected")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if out := logBuf.String(); !strings.Contains(out, "panicked at src/flows_rx.rs") {
+		t.Fatalf("the crash's panic line never reached the log:\n%s", out)
+	}
+}

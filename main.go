@@ -2866,8 +2866,18 @@ func doStartInferno() {
 
 	cmd := exec.Command(binary, "-c", fmt.Sprintf("%d", channels), "-o", path)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if stderr, err := cmd.StderrPipe(); err == nil {
-		go consumeInfernoStderr(stderr)
+	// stderrDone closes when the consumer has read stderr to EOF; the
+	// reaper waits for it before releasing the pipe (see reapInferno).
+	stderrDone := make(chan struct{})
+	stderr, err := cmd.StderrPipe()
+	if err == nil {
+		go func() {
+			consumeInfernoStderr(stderr)
+			close(stderrDone)
+		}()
+	} else {
+		stderr = nil
+		close(stderrDone)
 	}
 	// Scrubbed base environment (see scrubbedInfernoEnv): the TX holder's
 	// INFERNO_* instance keys live in this process's env and must not leak
@@ -2910,9 +2920,13 @@ func doStartInferno() {
 		}
 	}
 	mutex.Unlock()
-	go reapInferno(cmd, exited)
+	go reapInferno(cmd, exited, stderr, stderrDone)
 	logInfof("Inferno server started with %dkHz, %d channels", sampleRate/1000, channels)
 }
+
+// infernoStderrDrainWait bounds how long reapInferno lets the stderr
+// consumer finish after the server exits.
+var infernoStderrDrainWait = 2 * time.Second
 
 // infernoExited is closed by reapInferno when the running server's process
 // has exited; doStopInferno waits on it instead of calling Wait itself.
@@ -2925,8 +2939,24 @@ var infernoExited chan struct{}
 // lied, and new takes recorded an empty FIFO. A requested stop disowns the
 // child first (doStopInferno clears infernoCmd), so an exit while it is
 // still infernoCmd is a fault.
-func reapInferno(cmd *exec.Cmd, exited chan struct{}) {
-	err := cmd.Wait()
+//
+// It reaps with Process.Wait rather than cmd.Wait: cmd.Wait closes the
+// stderr pipe as soon as the child exits, discarding whatever the consumer
+// has not read yet - which for a crash is the panic saying why. The
+// consumer gets until EOF (bounded, in case an orphaned grandchild holds the
+// pipe open) before the pipe is closed here.
+func reapInferno(cmd *exec.Cmd, exited chan struct{}, stderr io.Closer, stderrDone <-chan struct{}) {
+	state, err := cmd.Process.Wait()
+	select {
+	case <-stderrDone:
+	case <-time.After(infernoStderrDrainWait):
+	}
+	if stderr != nil {
+		stderr.Close()
+	}
+	if err == nil && state != nil && !state.Success() {
+		err = errors.New(state.String())
+	}
 	close(exited)
 	mutex.Lock()
 	defer mutex.Unlock()
