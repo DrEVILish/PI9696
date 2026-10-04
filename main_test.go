@@ -7500,3 +7500,53 @@ func TestTxStatusNamesSingleInstanceDevice(t *testing.T) {
 		t.Errorf("single-instance status %q, want the unit's own name", long)
 	}
 }
+
+// detectUSB used to Statfs the stick while holding the app mutex, so a slow
+// stick froze the UI every second. The stat must run with the mutex free.
+func TestPollUSBStatsOutsideMutex(t *testing.T) {
+	initTestHardware(t)
+	device, _ := fakeUSBDisk(t)
+	mp := t.TempDir()
+	mounts := filepath.Join(t.TempDir(), "mounts")
+	os.WriteFile(mounts, []byte(device+" "+mp+" exfat rw 0 0\n"), 0644)
+	origMounts, origMP, origStat := procMountsPath, USBMountPoint, usbStatfs
+	procMountsPath, USBMountPoint = mounts, mp
+	heldDuringStat, called := false, false
+	usbStatfs = func(path string, st *syscall.Statfs_t) error {
+		called = true
+		// Poll briefly so another goroutine's momentary hold can't fail
+		// the test; a hold by our own caller would last the whole call.
+		heldDuringStat = true
+		for i := 0; i < 50; i++ {
+			if mutex.TryLock() {
+				mutex.Unlock()
+				heldDuringStat = false
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		return syscall.Statfs(path, st)
+	}
+	mutex.Lock()
+	origUSB, origSize := usbMounted, usbSize
+	mutex.Unlock()
+	t.Cleanup(func() {
+		procMountsPath, USBMountPoint, usbStatfs = origMounts, origMP, origStat
+		mutex.Lock()
+		usbMounted, usbSize = origUSB, origSize
+		mutex.Unlock()
+	})
+	pollUSBOnce()
+	if !called {
+		t.Fatal("mounted stick was never stat'd")
+	}
+	if heldDuringStat {
+		t.Fatal("Statfs ran with the app mutex held")
+	}
+	mutex.Lock()
+	mounted, size := usbMounted, usbSize
+	mutex.Unlock()
+	if !mounted || size == "" {
+		t.Fatalf("poll result mounted=%v size=%q", mounted, size)
+	}
+}

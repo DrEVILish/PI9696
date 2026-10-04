@@ -4734,28 +4734,36 @@ func detectUSB() {
 		// mounted when nothing was actually there, then copy files onto the
 		// SD card. Now USB counts as mounted only if the mountpoint is a real
 		// mount (present in /proc/mounts).
-		mounted := false
-		if _, err := usbDevicePath(); err == nil {
-			mounted = true
-		}
-		if mounted {
-			mutex.Lock()
-			usbMounted = true
-			usbSize = getUSBSize()
-			mutex.Unlock()
-		} else {
-			mutex.Lock()
-			usbMounted = false
-			usbSize = ""
-			mutex.Unlock()
-		}
+		pollUSBOnce()
 		time.Sleep(1 * time.Second)
 	}
 }
 
+// pollUSBOnce refreshes usbMounted/usbSize. The Statfs behind the size runs
+// before taking the app mutex: a slow or wedged stick can block it for
+// seconds, and doing it under the lock froze render, buttons and the WebUI
+// for that long, every second.
+func pollUSBOnce() {
+	mounted := false
+	if _, err := usbDevicePath(); err == nil {
+		mounted = true
+	}
+	size := ""
+	if mounted {
+		size = getUSBSize()
+	}
+	mutex.Lock()
+	usbMounted = mounted
+	usbSize = size
+	mutex.Unlock()
+}
+
+// usbStatfs is syscall.Statfs, a seam so tests can observe the call.
+var usbStatfs = syscall.Statfs
+
 func getUSBSize() string {
 	var stat syscall.Statfs_t
-	if err := syscall.Statfs(USBMountPoint, &stat); err != nil {
+	if err := usbStatfs(USBMountPoint, &stat); err != nil {
 		return ""
 	}
 
