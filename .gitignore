@@ -54,3 +54,6 @@ web/uPlot.min.css
 # .vscode/
 # Local dev-tool config (machine-specific permissions etc.)
 .claude/
+
+# Locally built test binaries
+/pi9696-test
