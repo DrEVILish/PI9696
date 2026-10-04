@@ -7156,3 +7156,44 @@ func TestCopyReportsFailedFiles(t *testing.T) {
 		t.Errorf("copy with a missing file: notice %q, want COPY FAILED: 1 FILES", got)
 	}
 }
+
+// A burst of concurrent login attempts used to pass the limiter all at once
+// (failures were counted only after each token compare), giving N guesses
+// per lockout window. Exactly loginMaxAttempts may get through.
+func TestLoginLimiterCapsConcurrentAttempts(t *testing.T) {
+	l := newLoginLimiter()
+	var wg sync.WaitGroup
+	var passed atomic.Int32
+	for i := 0; i < 200; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if l.allowed("198.51.100.7") {
+				passed.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if got := passed.Load(); got != loginMaxAttempts {
+		t.Fatalf("%d of 200 concurrent attempts passed, want %d", got, loginMaxAttempts)
+	}
+	// A success resets the address.
+	l.recordSuccess("198.51.100.7")
+	if !l.allowed("198.51.100.7") {
+		t.Fatal("address still locked after a successful login")
+	}
+}
+
+// Sequential behaviour is unchanged: five failures, then locked out.
+func TestLoginLimiterSequentialLockout(t *testing.T) {
+	l := newLoginLimiter()
+	for i := 0; i < loginMaxAttempts; i++ {
+		if !l.allowed("198.51.100.8") {
+			t.Fatalf("attempt %d refused", i+1)
+		}
+		l.recordFailure("198.51.100.8")
+	}
+	if l.allowed("198.51.100.8") {
+		t.Fatal("sixth attempt allowed after five failures")
+	}
+}

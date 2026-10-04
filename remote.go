@@ -131,16 +131,31 @@ func (l *loginLimiter) allowed(ip string) bool {
 			}
 		}
 	}
+	// Reserve the attempt here, in the same critical section as the
+	// check. Counting only on failure let a burst of N concurrent POSTs all
+	// pass this check before any failure was recorded: N guesses per
+	// lockout window instead of loginMaxAttempts. A success clears the
+	// reservation (recordSuccess).
+	if l.failures[ip] >= loginMaxAttempts {
+		l.lockedAt[ip] = time.Now()
+		return false
+	}
+	l.failures[ip]++
 	l.seenAt[ip] = time.Now()
 	return true
 }
 
+// loginMaxAttempts is how many login attempts an address gets before a
+// minute's lockout.
+const loginMaxAttempts = 5
+
+// recordFailure closes a failed attempt that allowed already counted; the
+// last permitted one starts the lockout.
 func (l *loginLimiter) recordFailure(ip string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.failures[ip]++
 	l.seenAt[ip] = time.Now()
-	if l.failures[ip] >= 5 {
+	if l.failures[ip] >= loginMaxAttempts {
 		l.lockedAt[ip] = time.Now()
 	}
 }
