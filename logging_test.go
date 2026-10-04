@@ -78,3 +78,19 @@ func TestStdLogWrittenAtDefaultLevel(t *testing.T) {
 		t.Fatalf("std log output dropped at the default level; log file: %q", data)
 	}
 }
+
+// The app never reopens app.log, so the shipped logrotate config must
+// rotate it in place (copytruncate) and bound it; a rename-based rotation
+// would leave the app writing to the rotated file forever.
+func TestLogrotateConfigCopyTruncates(t *testing.T) {
+	data, err := os.ReadFile("deploy/pi9696.logrotate")
+	if err != nil {
+		t.Fatalf("logrotate config missing: %v", err)
+	}
+	conf := string(data)
+	for _, want := range []string{"/var/log/pi9696/app.log", "copytruncate", "rotate ", "maxsize "} {
+		if !strings.Contains(conf, want) {
+			t.Errorf("deploy/pi9696.logrotate lacks %q", want)
+		}
+	}
+}

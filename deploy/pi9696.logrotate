@@ -1,0 +1,16 @@
+# /etc/logrotate.d/pi9696 - rotate the app's on-device log.
+#
+# The app opens /var/log/pi9696/app.log once, append-only, and never reopens
+# it, so rotation must copy and truncate in place (O_APPEND writes carry on
+# at the new end) rather than rename. Without this the file grew unbounded
+# on the SD card, fastest at the Debug log level.
+/var/log/pi9696/app.log {
+	weekly
+	maxsize 10M
+	rotate 4
+	compress
+	delaycompress
+	missingok
+	notifempty
+	copytruncate
+}

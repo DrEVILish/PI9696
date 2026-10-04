@@ -349,6 +349,7 @@ template carries the mount and hardening decisions that matter:
 
 ```bash
 mkdir -p /rec /var/log/pi9696 /etc/pi9696
+install -m 0644 deploy/pi9696.logrotate /etc/logrotate.d/pi9696   # app.log rotation (logrotate ships with Debian)
 sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696.service \
     > /etc/systemd/system/pi9696.service
 sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696-clock.service \
