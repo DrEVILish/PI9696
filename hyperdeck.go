@@ -119,8 +119,8 @@ var hyperdeckConns = make(map[net.Conn]struct{})
 // hyperdeckMaxSessions bounds concurrent controller sessions. Each session
 // is a command goroutine plus a 500ms notify goroutine/ticker, and the port
 // is unauthenticated by design - without a cap, a connection flood exhausts
-// goroutines and timers. Eight is generous for legitimate use (Dante
-// Controller plus a script or two); excess connections are refused outright
+// goroutines and timers. Eight is generous for legitimate use (an inferno
+// controller plus a script or two); excess connections are refused outright
 // rather than queued, since queuing only moves the exhaustion to memory.
 const hyperdeckMaxSessions = 8
 

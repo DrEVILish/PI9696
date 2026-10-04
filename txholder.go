@@ -1,17 +1,17 @@
-// TX holder and Dante playback-out.
+// TX holder and inferno playback-out.
 //
 // The always-running inferno2pipe process is receive-only (it advertises zero
-// TX channels), so the unit's Dante TX side lives here: the app persistently
+// TX channels), so the unit's inferno TX side lives here: the app persistently
 // holds inferno's ALSA virtual device open for playback, which keeps the TX
 // channels advertised on the network in both RECORDING and PLAYBACK modes.
 // Playback-out pumps ffmpeg-decoded s32le through that holder instead of
-// ffmpeg's own `-f alsa` open, because inferno keeps its Dante instance in a
+// ffmpeg's own `-f alsa` open, because inferno keeps its device instance in a
 // process-global map - a second opener (a per-playback ffmpeg) would be a
-// second instance fighting inferno2pipe for the Dante UDP ports. This mirrors
+// second instance fighting inferno2pipe for the inferno UDP ports. This mirrors
 // the proven inferno-loopback.sh pi9696tx pattern (own NAME, PROCESS_ID and
 // ALT_PORT), productized into the app.
 //
-// Until the RX side moves in-process too this means two Dante devices on the
+// Until the RX side moves in-process too this means two inferno devices on the
 // wire: <name> (RX, inferno2pipe) and <name>-TX (TX, this holder). TX and RX
 // channel counts stay equal because both sides take the single channelCount.
 package main
@@ -32,7 +32,7 @@ import (
 )
 
 const (
-	// Dante instance separation for the TX holder. inferno2pipe holds the
+	// inferno instance separation for the TX holder. inferno2pipe holds the
 	// default UDP ports; only one instance can, so the holder takes its own
 	// block. inferno-loopback.sh uses 10100/10200, hence 10300 here - never
 	// run the loopback script while the app holds TX or the two collide.
@@ -53,7 +53,7 @@ type txFrameWriter interface {
 var (
 	txHolder         txFrameWriter
 	txHolderDevice   string // settings identity the holder was opened with; empty when closed
-	txHolderReady    bool   // warmed up against the clock overlay; open-but-unready refuses Dante playback
+	txHolderReady    bool   // warmed up against the clock overlay; open-but-unready refuses inferno playback
 	txReopenPending  bool   // audio settings moved while playing; reconcile once idle
 	playbackViaDante bool   // current/last take plays through the holder, not local ALSA
 	// Swappable for tests.
@@ -278,7 +278,7 @@ func inProcRxFailed(gen uint64) {
 	}
 }
 
-// sanitizeDanteName maps the unit name onto Dante device-name rules
+// sanitizeDanteName maps the unit name onto inferno device-name rules
 // (letters, digits, hyphen; starts with a letter; max 31 chars). Spaces and
 // the dashboard's underscores become hyphens so "PI 9696_Live" still routes.
 func sanitizeDanteName(s string) string {
@@ -558,10 +558,10 @@ func openVerifiedTxHolder(name string, rate, channels int) (txFrameWriter, bool)
 }
 
 // warmupTxHolder pushes one chunk of silence through a freshly opened holder.
-// The first IO runs the plugin's prepare, which creates the Dante instance
+// The first IO runs the plugin's prepare, which creates the inferno instance
 // (advertising TX from boot) and waits for the clock overlay - up to ~5s
 // with no clock, so this always runs off-mutex. Failure leaves the holder
-// open but unready: Dante playback is refused with a notice until the clock
+// open but unready: inferno playback is refused with a notice until the clock
 // appears, rather than silently playing out of the wrong output.
 func warmupTxHolder(holder txFrameWriter, channels int) {
 	zeros := make([]int32, txPumpFrames*channels)
@@ -579,7 +579,7 @@ func warmupTxHolder(holder txFrameWriter, channels int) {
 	mutex.Unlock()
 }
 
-// txStatusLocked reports the Dante TX state for the UI: short fits one
+// txStatusLocked reports the inferno TX state for the UI: short fits one
 // 256px OLED menu value, long suits the dashboard. Callers hold the app
 // mutex (same discipline as webNoticeIfLive).
 func txStatusLocked() (short, long string) {
@@ -649,7 +649,7 @@ func dantePlaybackCmdFor(file string, pos time.Duration) (*exec.Cmd, io.ReadClos
 }
 
 // buildPlaybackCmd picks the playback sink. Callers hold the app mutex; this
-// only reads holder readiness, never blocks on ALSA. Dante wins when the
+// only reads holder readiness, never blocks on ALSA. The inferno sink wins when the
 // holder is ready, with local ALSA as the fallback (dev/sim/no plugin), so a
 // Pi without the inferno device keeps today's behaviour exactly.
 func buildPlaybackCmd(file string, pos time.Duration) (cmd *exec.Cmd, stdout io.ReadCloser, viaDante bool) {

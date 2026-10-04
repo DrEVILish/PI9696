@@ -2352,7 +2352,7 @@ func infernoWorker() {	for req := range infernoReqCh {
 			time.Sleep(1 * time.Second)
 			doStartInferno()
 			}
-			// The TX holder is independent of the pipe server (own Dante
+			// The TX holder is independent of the pipe server (own inferno
 			// instance on its own ports) but follows the same audio
 			// settings: reconcile after every (re)start, including boot.
 			go ensureTxHolder()
@@ -2456,7 +2456,7 @@ func networkMonitorLoop(stop <-chan struct{}) {
 // infernoRestartNeeded reports whether the running Inferno server no longer
 // matches the audio settings. Only the sample rate and channel count matter:
 // every other setting applies live, so restarting on those would drop the
-// Dante device (and its subscriptions) for no reason. Callers hold the app
+// inferno device (and its subscriptions) for no reason. Callers hold the app
 // mutex; factored out of checkInfernoRestart so the rule is unit-testable.
 func infernoRestartNeeded() bool {
 	if demoMode || infernoState != InfernoRunning {
@@ -3875,7 +3875,7 @@ func startPlayback() {
 	playbackDuration = playbackFileDuration(file)
 
 	// A present-but-unready TX holder means the inferno device exists but
-	// its clock overlay never arrived: Dante transmit is impossible, and
+	// its clock overlay never arrived: inferno transmit is impossible, and
 	// falling back to local ALSA would play out of the wrong output
 	// silently. Refuse with a notice and retry the holder in the
 	// background; an absent holder (dev/sim/no plugin) keeps the local
@@ -4022,7 +4022,7 @@ func pausePlayback() {
 		return
 	}
 	playbackPausedElapsed = time.Since(playbackStart)
-	// The Dante path needs no SIGSTOP: the pump writes silence while paused
+	// The inferno path needs no SIGSTOP: the pump writes silence while paused
 	// and the full stdout pipe back-pressures ffmpeg on its own.
 	if !playbackViaDante {
 		if err := playbackCmd.Process.Signal(syscall.SIGSTOP); err != nil {
@@ -4279,7 +4279,7 @@ func restartPlaybackAt(pos time.Duration) {
 	if wasPaused {
 		currentState = StatePaused
 		playbackPausedElapsed = pos
-		// Local path freezes the decoder with SIGSTOP; Dante needs none
+		// Local path freezes the decoder with SIGSTOP; inferno needs none
 		// (the pump writes silence while paused).
 		if !viaDante {
 			cmd.Process.Signal(syscall.SIGSTOP)

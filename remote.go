@@ -2955,7 +2955,7 @@ function applyMeter(m) {
     document.getElementById('oled').src = '/api/display.png?t=' + Date.now();
   }
 
-  // Dante TX state rides the same tick: clock loss shows without refresh.
+  // inferno TX state rides the same tick: clock loss shows without refresh.
   var txEl = document.getElementById('txstatus');
   if (txEl && typeof m.txStatus === 'string' && txEl.textContent !== m.txStatus) {
     txEl.textContent = m.txStatus;
@@ -3913,7 +3913,7 @@ type meterResponse struct {
 	// DisplaySeq is the OLED framebuffer generation (see render) so the
 	// dashboard mirror reloads on change instead of polling blindly.
 	DisplaySeq uint64 `json:"displaySeq"`
-	// TXStatus is the Dante transmit state (see txholder.go), pushed live
+	// TXStatus is the inferno transmit state (see txholder.go), pushed live
 	// so the dashboard tracks clock loss without a status refresh.
 	TXStatus string `json:"txStatus"`
 }

@@ -3,7 +3,7 @@
 //
 // One Device holds a capture handle and a playback handle on the same ALSA
 // device name. That pairing is the whole point: inferno's plugin keeps its
-// Dante servers in a process-global map keyed by device ID
+// inferno servers in a process-global map keyed by device ID
 // (alsa_pcm_inferno/src/lib.rs, get_or_create_instance), so two handles opened
 // by one process share a single Inferno instance and bind inferno's UDP ports
 // once. Two separate processes cannot do this - the second fails with
@@ -192,7 +192,7 @@ func OpenPlayback(name string, rate, channels int) (*Device, error) {
 //
 // An overrun (EPIPE) is recovered from in place by re-preparing the handle, so
 // a late wakeup costs one dropped buffer rather than tearing the device down
-// and taking the Dante device off the network with it.
+// and taking the inferno device off the network with it.
 func (d *Device) Read(buf []int32) (int, error) {
 	// Argument checks before state, so a malformed call can never divide by
 	// zero or reach ALSA: a sub-frame buffer is a silent no-op whatever the

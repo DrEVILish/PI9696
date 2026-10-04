@@ -3701,7 +3701,7 @@ func TestStartPlaybackRefusesMismatchedTake(t *testing.T) {
 }
 
 // infernoRestartNeeded must fire only on audio-setting drift: restarting on
-// anything else drops the Dante device (and its subscriptions) for no reason,
+// anything else drops the inferno device (and its subscriptions) for no reason,
 // while missing a real drift leaves Inferno recording at a stale rate.
 func TestInfernoRestartNeededOnlyOnAudioChange(t *testing.T) {
 	initTestHardware(t)
@@ -4862,7 +4862,7 @@ func TestBroadcastTelemetryNoClients(t *testing.T) {
 	}
 }
 
-// The TX holder is the unit's Dante transmit side (see txholder.go): these
+// The TX holder is the unit's inferno transmit side (see txholder.go): these
 // cover its device-string contract, the pump, and the lifecycle. The dev box
 // has no inferno ALSA device, so the opener is faked; the real
 // behaviour under test is selection, framing and state handling.
@@ -5037,7 +5037,7 @@ func TestBuildPlaybackCmdSelection(t *testing.T) {
 		t.Errorf("no holder: local cmd = %q, want the default-ALSA command", cmd.Args)
 	}
 
-	// Present but unready (clock missing): still local, never Dante.
+	// Present but unready (clock missing): still local, never inferno.
 	mutex.Lock()
 	txHolder, txHolderReady = &fakeTxHolder{}, false
 	mutex.Unlock()
@@ -5347,7 +5347,7 @@ func TestEnsureTxHolderAbsentWithoutDevice(t *testing.T) {
 	}
 }
 
-// The Dante TX state must be visible in both UIs (see txholder.go): the
+// The inferno TX state must be visible in both UIs (see txholder.go): the
 // formatter matrix, the OLED menu click-through, and the dashboard
 // template/JS hooks.
 
