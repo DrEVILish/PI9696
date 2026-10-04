@@ -7579,3 +7579,26 @@ func TestWriteRecordingZipReportsCloseError(t *testing.T) {
 		t.Fatal("a failure while writing the central directory was not reported")
 	}
 }
+
+// The audio FIFO must not be readable by other local accounts: a second
+// reader steals frames from the take.
+func TestInfernoFifoIsPrivate(t *testing.T) {
+	initTestHardware(t)
+	resetTransportCleanup(t)
+	useFakeInfernoBinary(t, fakeChildScript)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+	done := make(chan struct{})
+	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: done}
+	<-done
+	t.Cleanup(stopInfernoAndWait)
+	mutex.Lock()
+	path := fifoPath
+	mutex.Unlock()
+	st, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat FIFO: %v", err)
+	}
+	if perm := st.Mode().Perm(); perm&0o077 != 0 {
+		t.Fatalf("FIFO mode %o is open to other accounts", perm)
+	}
+}

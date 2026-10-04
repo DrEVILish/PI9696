@@ -2553,6 +2553,13 @@ const (
 	linuxFGetPipeSz = 1032
 )
 
+// audioFifoMode is the permission for the Inferno and demo FIFOs. 0666
+// (0644 after the usual umask) let any local account open the FIFO: a
+// second reader splits frames with ffmpeg, so it could both eavesdrop on
+// the input and punch holes in a take. Only this process (root) and the
+// children it spawns as root use them.
+const audioFifoMode = 0600
+
 // closeFifoKeeperLocked releases the sizing descriptor enlargeFifo returned.
 // Must be called with the app mutex held. The keeper has to die with its
 // FIFO: leaving it open after a failed start leaks the fd and leaves a stale
@@ -2630,7 +2637,7 @@ func startDemoGeneratorLocked() {
 	}
 	path := demoFifoName()
 	os.Remove(path)
-	if err := syscall.Mkfifo(path, 0666); err != nil {
+	if err := syscall.Mkfifo(path, audioFifoMode); err != nil {
 		logErrorf("demo: failed to create FIFO %s: %v", path, err)
 		demoGenFailedLocked()
 		return
@@ -2842,7 +2849,7 @@ func doStartInferno() {
 	os.Remove(path)
 
 	// Create new FIFO
-	if err := syscall.Mkfifo(path, 0666); err != nil {
+	if err := syscall.Mkfifo(path, audioFifoMode); err != nil {
 		logErrorf("Failed to create Inferno FIFO %s: %v", path, err)
 		mutex.Lock()
 		infernoState = InfernoFailed
