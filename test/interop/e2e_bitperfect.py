@@ -113,6 +113,40 @@ def describe(x, name):
     }
 
 
+def coverage(a, b, stall_s):
+    """Underrun-recovery mode: how much of the take reached Pi-B, how long
+    the longest gap is, and whether every frame that arrived is exact."""
+    da, db = describe(a, "Pi-A take"), describe(b, "Pi-B capture")
+    result = {"pi_a_take": da, "pi_b_capture": db}
+    if not da["audio"] or not db["audio"]:
+        result["verdict"] = "no audio"
+        return result, False
+    a_seg = a[da["stream_first_frame"]: da["stream_last_frame"] + 1]
+    full_b = (b != 0).all(axis=1)
+    rows = np.flatnonzero(full_b)
+    kb = timecode(b)[rows, 0]
+    idx = (kb - da["timecode_first"]) % M  # take frame each B frame carries
+    inside = idx < len(a_seg)
+    rows, idx = rows[inside], idx[inside]
+    present = np.zeros(len(a_seg), dtype=bool)
+    present[idx] = True
+    exact = (b[rows] == a_seg[idx]).all(axis=1)
+    missing = np.flatnonzero(~present)
+    gaps = np.split(missing, np.flatnonzero(np.diff(missing) != 1) + 1) if len(missing) else []
+    longest = max((len(g) for g in gaps), default=0)
+    result.update({
+        "take_frames": int(len(a_seg)),
+        "take_frames_received": int(present.sum()),
+        "missing_runs": len(gaps),
+        "longest_gap_s": round(longest / RATE, 3),
+        "received_frames_not_exact": int((~exact).sum()),
+        "stall_s": stall_s,
+    })
+    ok = result["received_frames_not_exact"] == 0 and longest / RATE <= stall_s + 1.0
+    result["verdict"] = "RECOVERED" if ok else "NOT RECOVERED"
+    return result, ok
+
+
 def compare(a, b):
     """Align b to a on the timecode and compare every sample of a's stream."""
     da, db = describe(a, "Pi-A take"), describe(b, "Pi-B capture")
@@ -269,6 +303,9 @@ def main():
     p.add_argument("--secs", type=int, default=20, help="take length")
     p.add_argument("--work", default="/var/tmp/pi9696-e2e")
     p.add_argument("--keep", action="store_true", help="keep the recordings and signal")
+    p.add_argument("--stall-at", type=float, default=None,
+                   help="underrun-recovery mode: freeze Pi-A's app this many seconds into playback")
+    p.add_argument("--stall-ms", type=int, default=400, help="how long to freeze it (forces a TX underrun)")
     a = p.parse_args()
     os.makedirs(a.work, exist_ok=True)
     asoundrc = f"{a.work}/asoundrc"
@@ -337,6 +374,11 @@ def main():
         pia.post("/api/input/button/play")
         time.sleep(1)
         log("  status: " + pia.text("/api/status")[:120])
+        if a.stall_at is not None:
+            time.sleep(max(0, a.stall_at - 1))
+            log(f"Pi-A: freezing the app for {a.stall_ms} ms (forces a TX underrun)")
+            pia.sh("P=$(systemctl show -p MainPID --value pi9696); kill -STOP $P; "
+                   f"sleep {a.stall_ms / 1000}; kill -CONT $P")
         t = time.time()
         while time.time() - t < a.secs + 60 and "Playing back" in pia.text("/api/status"):
             time.sleep(1)
@@ -351,7 +393,10 @@ def main():
         r = subprocess.run(["scp", "-q", f"{pia.ssh}:{take}", local_take], capture_output=True, text=True)
         if r.returncode:
             fail_setup(f"fetching the take: {r.stderr}")
-        result, perfect = compare(load_wav24(local_take, ch), load_raw32(cap, ch))
+        if a.stall_at is not None:
+            result, perfect = coverage(load_wav24(local_take, ch), load_raw32(cap, ch), a.stall_ms / 1000)
+        else:
+            result, perfect = compare(load_wav24(local_take, ch), load_raw32(cap, ch))
         result["take"] = take
         print(json.dumps(result, indent=2))
         log("RESULT: " + result["verdict"])
