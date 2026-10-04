@@ -4957,7 +4957,7 @@ func saveTxGlobals(t *testing.T) {
 	oCmd := playbackCmd
 	oEnv := make(map[string]string)
 	oEnvSet := make(map[string]bool)
-	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT"} {
+	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT", "INFERNO_TX_SOURCE_BIT_DEPTH"} {
 		oEnv[k], oEnvSet[k] = os.LookupEnv(k)
 	}
 	t.Cleanup(func() {
@@ -6285,6 +6285,9 @@ func TestUnifiedInfernoEnv(t *testing.T) {
 	}
 	if os.Getenv("INFERNO_SAMPLE_RATE") != "48000" {
 		t.Errorf("INFERNO_SAMPLE_RATE = %q, want 48000", os.Getenv("INFERNO_SAMPLE_RATE"))
+	}
+	if got := os.Getenv("INFERNO_TX_SOURCE_BIT_DEPTH"); got != "24" {
+		t.Errorf("INFERNO_TX_SOURCE_BIT_DEPTH = %q, want 24 (takes are 24-bit; anything higher makes inferno dither them)", got)
 	}
 	for _, k := range []string{"INFERNO_ALT_PORT", "INFERNO_PROCESS_ID"} {
 		if v, ok := os.LookupEnv(k); ok {
@@ -7853,5 +7856,15 @@ func TestStderrTailSplitsCarriageReturns(t *testing.T) {
 	fmt.Fprint(&tail, "size=1kB time=00:00:01\rsize=2kB time=00:00:02\rav_interleaved_write_frame(): No space left on device\n")
 	if got := tail.String(); got != "size=1kB time=00:00:01 | size=2kB time=00:00:02 | av_interleaved_write_frame(): No space left on device" {
 		t.Fatalf("tail = %q", got)
+	}
+}
+
+// The two-instance TX holder transmits 24-bit takes too: without
+// TX_SOURCE_BIT_DEPTH=24 inferno dithers them and playback is not
+// bit-transparent.
+func TestTxHolderEnvSendsUndithered24Bit(t *testing.T) {
+	env := txInfernoEnv("PI9696", 48000, 8)
+	if env["INFERNO_TX_SOURCE_BIT_DEPTH"] != "24" {
+		t.Fatalf("TX holder env %v lacks INFERNO_TX_SOURCE_BIT_DEPTH=24", env)
 	}
 }

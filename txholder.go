@@ -96,6 +96,7 @@ func applyUnifiedInfernoEnv(name string, rate, channels int) {
 	os.Setenv("INFERNO_SAMPLE_RATE", fmt.Sprintf("%d", rate))
 	os.Setenv("INFERNO_TX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_RX_CHANNELS", fmt.Sprintf("%d", channels))
+	os.Setenv("INFERNO_TX_SOURCE_BIT_DEPTH", txSourceBitDepth)
 	// Clear the TX-only holder's separation keys so the single instance binds
 	// the default ports and the default process id.
 	os.Unsetenv("INFERNO_ALT_PORT")
@@ -333,14 +334,23 @@ func sanitizeDanteName(s string) string {
 // scrubs the instance-separating keys back out of its child's environment.
 func txInfernoEnv(name string, rate, channels int) map[string]string {
 	return map[string]string{
-		"INFERNO_NAME":        sanitizeDanteName(name) + "-TX",
-		"INFERNO_SAMPLE_RATE": fmt.Sprintf("%d", rate),
-		"INFERNO_TX_CHANNELS": fmt.Sprintf("%d", channels),
-		"INFERNO_RX_CHANNELS": "0",
-		"INFERNO_PROCESS_ID":  fmt.Sprintf("%d", txProcessID),
-		"INFERNO_ALT_PORT":    fmt.Sprintf("%d", txAltPort),
+		"INFERNO_NAME":                sanitizeDanteName(name) + "-TX",
+		"INFERNO_SAMPLE_RATE":         fmt.Sprintf("%d", rate),
+		"INFERNO_TX_CHANNELS":         fmt.Sprintf("%d", channels),
+		"INFERNO_RX_CHANNELS":         "0",
+		"INFERNO_PROCESS_ID":          fmt.Sprintf("%d", txProcessID),
+		"INFERNO_ALT_PORT":            fmt.Sprintf("%d", txAltPort),
+		"INFERNO_TX_SOURCE_BIT_DEPTH": txSourceBitDepth,
 	}
 }
+
+// txSourceBitDepth tells inferno what the transmitted samples really are.
+// Takes are 24-bit PCM (OutputBitsPerSample), decoded into s32 with the low
+// byte zero; inferno's default (32) made it TPDF-dither them down to 24 on
+// the wire, so playback changed about a quarter of all samples by 1 LSB and
+// was never bit-transparent (e2e_bitperfect.py, INFERNO-UPSTREAM U3/U4).
+// 24 sends them untouched.
+const txSourceBitDepth = "24"
 
 // applyTxInfernoEnv presses the TX settings into the process environment
 // ahead of the holder open (the plugin reads them per open at define time).
