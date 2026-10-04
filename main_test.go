@@ -7480,3 +7480,23 @@ func TestCaptureXrunReport(t *testing.T) {
 		t.Fatalf("report = %q, %d", msg, cur)
 	}
 }
+
+// Single-instance mode advertises one device under the unit's own name; the
+// TX status must not send the operator looking for a "-TX" device.
+func TestTxStatusNamesSingleInstanceDevice(t *testing.T) {
+	saveTxGlobals(t)
+	mutex.Lock()
+	defer mutex.Unlock()
+	origName := deviceName
+	defer func() { deviceName = origName }()
+	deviceName = "PI9696"
+	txHolder, txHolderReady = &fakeTxHolder{}, true
+	t.Setenv("PI9696_INPROC_RX", "")
+	if _, long := txStatusLocked(); !strings.Contains(long, "(PI9696-TX)") {
+		t.Errorf("two-instance status %q, want the -TX device", long)
+	}
+	t.Setenv("PI9696_INPROC_RX", "1")
+	if _, long := txStatusLocked(); !strings.Contains(long, "(PI9696)") {
+		t.Errorf("single-instance status %q, want the unit's own name", long)
+	}
+}

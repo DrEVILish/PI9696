@@ -584,6 +584,11 @@ func warmupTxHolder(holder txFrameWriter, channels int) {
 // mutex (same discipline as webNoticeIfLive).
 func txStatusLocked() (short, long string) {
 	name := sanitizeDanteName(deviceName) + "-TX"
+	if inProcRX() {
+		// One paired instance advertises the unit's own name; there is no
+		// separate "-TX" device to point the operator at.
+		name = sanitizeDanteName(deviceName)
+	}
 	switch {
 	case txHolder != nil && txHolderReady:
 		return "ready", "Inferno TX ready (" + name + ")"
