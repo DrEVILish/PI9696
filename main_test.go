@@ -7366,3 +7366,35 @@ func TestClientIPDefaultIgnoresForwardedFor(t *testing.T) {
 		t.Fatalf("bad entries = %v, want two", bad)
 	}
 }
+
+// The WebUI server had no timeouts: a client trickling headers held its
+// connection and goroutine forever. It must be cut off after the header
+// timeout.
+func TestRemoteServerDropsSlowHeaders(t *testing.T) {
+	orig := remoteHeaderTimeout
+	remoteHeaderTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { remoteHeaderTimeout = orig })
+	srv := newRemoteHTTPServer()
+	if srv.ReadHeaderTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Fatalf("server timeouts unset: header %v idle %v", srv.ReadHeaderTimeout, srv.IdleTimeout)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go srv.Serve(l)
+	t.Cleanup(func() { srv.Close() })
+
+	c, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte("GET /login HTTP/1.1\r\nHost: x\r\n")) // never finished
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, err = io.ReadAll(c)
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		t.Fatal("connection with unfinished headers still open after 3s")
+	}
+}

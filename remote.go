@@ -4616,11 +4616,7 @@ func startRemoteServer(ip string) (*http.Server, error) {
 		return nil, err
 	}
 
-	// ErrorLog bypasses slog: net/http reports recovered handler panics
-	// through it, and the default (log -> slog at Info) is dropped by the
-	// Error-only default level - a panic holding the app mutex would then
-	// wedge the whole WebUI with nothing in the journal.
-	srv := &http.Server{Handler: newRemoteMux(), ErrorLog: log.New(os.Stderr, "http: ", 0)}
+	srv := newRemoteHTTPServer()
 	go func() {
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
 			logErrorf("Remote control server error: %v", err)
@@ -4629,6 +4625,32 @@ func startRemoteServer(ip string) (*http.Server, error) {
 
 	logInfof("Remote control server listening on http://%s", listener.Addr())
 	return srv, nil
+}
+
+// remoteHeaderTimeout and remoteIdleTimeout bound what a client can hold
+// open without doing anything: the server had no timeouts at all, so a
+// client trickling request headers (or parking idle keep-alives) kept a
+// connection and its goroutine forever. Vars so tests can shrink them.
+// Deliberately no Read/WriteTimeout: Download-all streams multi-GB bodies
+// and the WebSockets live for the session.
+var (
+	remoteHeaderTimeout = 10 * time.Second
+	remoteIdleTimeout   = 2 * time.Minute
+)
+
+// newRemoteHTTPServer builds the WebUI server.
+//
+// ErrorLog bypasses slog: net/http reports recovered handler panics
+// through it, and the default (log -> slog at Info) is dropped by the
+// Error-only default level - a panic holding the app mutex would then
+// wedge the whole WebUI with nothing in the journal.
+func newRemoteHTTPServer() *http.Server {
+	return &http.Server{
+		Handler:           newRemoteMux(),
+		ErrorLog:          log.New(os.Stderr, "http: ", 0),
+		ReadHeaderTimeout: remoteHeaderTimeout,
+		IdleTimeout:       remoteIdleTimeout,
+	}
 }
 
 // anyInterfaceIP returns the first non-loopback IPv4 address on any up
