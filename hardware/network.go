@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"regexp"
@@ -158,39 +159,35 @@ func (nd *NetworkDetector) GetDetailedNetworkInfo() []string {
 
 // getGateway attempts to find the default gateway
 func (nd *NetworkDetector) getGateway() string {
-	// Try to read from /proc/net/route
 	file, err := os.Open("/proc/net/route")
 	if err != nil {
 		return ""
 	}
 	defer file.Close()
+	return parseDefaultGateway(file, nd.interfaceName)
+}
 
-	scanner := bufio.NewScanner(file)
+// parseDefaultGateway reads a /proc/net/route table and returns the default
+// route's gateway (destination 00000000), preferring the route via iface:
+// without the interface match, Network Info could show wlan0's gateway next
+// to eth0's IP. The first other-interface default route is the fallback.
+func parseDefaultGateway(r io.Reader, iface string) string {
+	scanner := bufio.NewScanner(r)
 	fallback := ""
 	for scanner.Scan() {
-		line := scanner.Text()
-		fields := strings.Fields(line)
-
-		// Look for default route (destination 00000000)
-		if len(fields) >= 3 && fields[1] == "00000000" {
-			// Gateway is in field 2, convert from hex
-			gatewayHex := fields[2]
-			if len(gatewayHex) == 8 {
-				gateway := hexToIP(gatewayHex)
-				if gateway == "" {
-					continue
-				}
-				// Prefer the default route via our own interface: without
-				// the interface match, Network Info could show wlan0's
-				// gateway next to eth0's IP. Keep the first other-interface
-				// route only as a fallback.
-				if fields[0] == nd.interfaceName {
-					return gateway
-				}
-				if fallback == "" {
-					fallback = gateway
-				}
-			}
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 3 || fields[1] != "00000000" || len(fields[2]) != 8 {
+			continue
+		}
+		gateway := hexToIP(fields[2])
+		if gateway == "" {
+			continue
+		}
+		if fields[0] == iface {
+			return gateway
+		}
+		if fallback == "" {
+			fallback = gateway
 		}
 	}
 	return fallback

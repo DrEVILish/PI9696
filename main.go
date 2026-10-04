@@ -6411,8 +6411,15 @@ func readCPUStat() ([]cpuStat, bool) {
 	if err != nil {
 		return nil, false
 	}
+	return parseCPUStat(string(data)), true
+}
+
+// parseCPUStat extracts the per-core (cpuN) lines of /proc/stat: total
+// jiffies and idle+iowait. The aggregate "cpu" line and short lines are
+// skipped.
+func parseCPUStat(data string) []cpuStat {
 	var stats []cpuStat
-	for _, line := range strings.Split(string(data), "\n") {
+	for _, line := range strings.Split(data, "\n") {
 		if len(line) < 5 || line[:3] != "cpu" {
 			continue
 		}
@@ -6432,7 +6439,7 @@ func readCPUStat() ([]cpuStat, bool) {
 		iow, _ := strconv.ParseInt(f[5], 10, 64)
 		stats = append(stats, cpuStat{total, idle + iow})
 	}
-	return stats, true
+	return stats
 }
 
 func cpuUsageLoop() {
