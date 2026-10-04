@@ -6854,3 +6854,34 @@ func TestInfernoRetryBackoff(t *testing.T) {
 		}
 	}
 }
+
+// An import can change rate, channels and name and reach the input chain;
+// it must refuse while a take, playback or copy is running (the WebUI route
+// had no guard at all) and leave the settings untouched.
+func TestConfigImportRefusedWhileBusy(t *testing.T) {
+	initTestHardware(t)
+	dir := t.TempDir()
+	mutex.Lock()
+	if err := exportConfigTo(dir); err != nil {
+		mutex.Unlock()
+		t.Fatal(err)
+	}
+	origRec, origCh := isRecording, channelCount
+	data, _ := os.ReadFile(filepath.Join(dir, configExportName))
+	var c PersistedConfig
+	json.Unmarshal(data, &c)
+	c.ChannelCount = origCh%MaxChannelCount + 1
+	data, _ = json.Marshal(&c)
+	os.WriteFile(filepath.Join(dir, configExportName), data, 0644)
+	isRecording = true
+	err := importConfigFrom(dir)
+	got := channelCount
+	isRecording = origRec
+	mutex.Unlock()
+	if err == nil {
+		t.Fatal("import accepted while recording")
+	}
+	if got != origCh {
+		t.Fatalf("refused import still changed channels %d -> %d", origCh, got)
+	}
+}

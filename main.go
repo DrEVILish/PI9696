@@ -392,6 +392,13 @@ func importConfig() error {
 // importConfigFrom does importConfig's work from an arbitrary directory so
 // the round-trip is testable without a mounted drive.
 func importConfigFrom(dir string) error {
+	// Same guard as delete/format: an import can change the rate, channel
+	// count and device name, and through checkInfernoRestart and the demo
+	// toggle reach the input chain a take or playback is using. The WebUI
+	// route had no guard at all.
+	if isRecording || playbackCmd != nil || isCopying {
+		return fmt.Errorf("busy - stop recording, playback or copy first")
+	}
 	src := filepath.Join(dir, configExportName)
 	data, err := os.ReadFile(src)
 	if err != nil {
@@ -2106,6 +2113,10 @@ func handleConfirmClick() {
 		case InfernoRestartConfirm:
 			restartInfernoServer()
 		case ConfigImportConfirm:
+			if isRecording || playbackCmd != nil || isCopying {
+				showSysNotice("BUSY - STOP FIRST")
+				break
+			}
 			if err := importConfig(); err != nil {
 				showSysNotice("IMPORT FAILED")
 				logErrorf("config import: %v", err)
