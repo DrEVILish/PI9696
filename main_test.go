@@ -7197,3 +7197,36 @@ func TestLoginLimiterSequentialLockout(t *testing.T) {
 		t.Fatal("sixth attempt allowed after five failures")
 	}
 }
+
+// handleLoginPost read remoteToken without the mutex that rotation writes
+// it under. Only meaningful under -race (test/gotest.sh): logins and
+// rotations run concurrently and must not be reported as a data race.
+func TestLoginTokenReadVsRotation(t *testing.T) {
+	origToken, origLimiter, origSessions := remoteToken, loginLimit, sessions
+	loginLimit, sessions = newLoginLimiter(), newSessionStore()
+	t.Cleanup(func() {
+		mutex.Lock()
+		remoteToken = origToken
+		mutex.Unlock()
+		loginLimit, sessions = origLimiter, origSessions
+	})
+	mux := newRemoteMux()
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(2)
+		go func(i int) {
+			defer wg.Done()
+			req := httptest.NewRequest("POST", "/login", strings.NewReader("token=WRONG123"))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			req.RemoteAddr = fmt.Sprintf("192.0.2.%d:1", i+10)
+			mux.ServeHTTP(httptest.NewRecorder(), req)
+		}(i)
+		go func() {
+			defer wg.Done()
+			mutex.Lock()
+			remoteToken = generateRemoteToken()
+			mutex.Unlock()
+		}()
+	}
+	wg.Wait()
+}

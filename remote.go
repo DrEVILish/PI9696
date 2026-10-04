@@ -574,7 +574,12 @@ func handleLoginPost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	submitted := normalizeToken(r.FormValue("token"))
-	if subtle.ConstantTimeCompare([]byte(submitted), []byte(remoteToken)) != 1 {
+	// Rotation writes remoteToken under the app mutex; reading it bare here
+	// raced with that write.
+	mutex.Lock()
+	token := remoteToken
+	mutex.Unlock()
+	if subtle.ConstantTimeCompare([]byte(submitted), []byte(token)) != 1 {
 		loginLimit.recordFailure(ip)
 		w.WriteHeader(http.StatusUnauthorized)
 		writeLoginPage(w, loginPageData{Error: "Invalid token", Boxes: boxesFromToken(submitted)})
