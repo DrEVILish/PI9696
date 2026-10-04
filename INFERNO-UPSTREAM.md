@@ -1,19 +1,20 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `06993a1` on the `DrEVILish/inferno` fork's `dev`)
+AoIP stack, pinned at `d0521f0` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
 
 Each entry gives where the problem is, how it was found, its effect on PI9696,
-and the change wanted. Three of the fixes are prototyped in
-[`inferno-patches/`](inferno-patches/) and were verified on the dev server.
+and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
+[`inferno-patches/`](inferno-patches/); they are now commits on the fork's
+`dev` (see "Fork commits, 2026-10-04" below), which is the source of truth.
 
 | # | Component | Issue | PI9696 impact | Status |
 |---|---|---|---|---|
-| U1 | inferno ARC | Bulk unsubscribe (`0x3014`) only removes the first channel | netaudio bulk remove leaves channels subscribed | **patch verified** |
-| U2 | inferno info server | Sample-rate / encoding probes (`0x0081`/`0x0083`) unanswered | rate not visible in netaudio (Q4 requirement) | **patch verified** (`device show`) |
+| U1 | inferno ARC | Bulk unsubscribe (`0x3014`) only removes the first channel | netaudio bulk remove leaves channels subscribed | **fixed in the fork** (`96811a3`) |
+| U2 | inferno info server | Sample-rate / encoding probes (`0x0081`/`0x0083`) unanswered | rate not visible in netaudio (Q4 requirement) | **fixed in the fork** (`b512c60`) |
 | U3 | inferno TX | TPDF dither always applied to 16/24-bit output | playback not bit-transparent; "silence" is ±1 LSB noise | change wanted |
 | U4 | inferno settings | Encoding hard-coded to 24-bit | no PCM32 (undithered) option | change wanted |
 | U5 | ALSA plugin | `plugin_stop` blocking-sends under its own mutex | `snd_pcm_drop` can hang the app forever | change wanted (worked around) |
@@ -24,9 +25,10 @@ and the change wanted. Three of the fixes are prototyped in
 | U10 | inferno2pipe | Logs at debug by default; one "Lost" line per channel | noisy stderr at 128 ch (counted in-app since `b08d6da`) | change wanted |
 | U11 | docs | `inferno2pipe/README.md` documents a CLI the v0.5.4 binary doesn't take | install confusion | already in DEPLOYMENT.md |
 | U12 | netaudio | `device list` leaves Sample Rate blank even when the device answers | rate visible only via `device show` | investigate (netaudio) |
-| **U13** | inferno ARC | RX channel list paged 32 (controllers take 16); a short last page carries zeroed padding | **a receiver with >16 channels, or a transmitter with 33–63, 65–95 … channels, cannot be read or routed by netaudio** | **patch verified** (1–128 ch) |
+| **U13** | inferno ARC | RX channel list paged 32 (controllers take 16); a short last page carries zeroed padding | **a receiver with >16 channels, or a transmitter with 33–63, 65–95 … channels, cannot be read or routed by netaudio** | **fixed in the fork** (`dbd9570`) |
 | U14 | inferno2pipe | A blocked FIFO write stalls the whole runtime | a slow reader takes down ARC (no replies) and media (kernel drops) | change wanted |
 | U15 | inferno (all servers) | Malformed control packets and adverts panic server tasks (upstream issue teodly/inferno#49) | one packet from any LAN host stops routing, flows or TX until restart | **fixed in the fork**, branch `fix/issue-49-malformed-packets` |
+| U16 | ALSA plugin | A panic in any plugin callback aborts the host process; one is reachable by querying the PCM before prepare (teodly/inferno#8) | the app hosts the plugin in-process (`PI9696_INPROC_RX`), so a plugin panic kills the recorder | **fixed in the fork** (`20d639a`, `2af5592`) |
 
 ---
 
@@ -274,3 +276,61 @@ integration test passes on the dev server, and netaudio channel lists and
 bulk subscribe behave as on stock. Not changed: 0x3014 still removes only the
 first listed channel (U1), and channel lists above 16 RX channels still need
 U13; both are next.
+
+## Fork commits, 2026-10-04 (U13, U1, U2 restored; U16)
+
+**What went wrong:** U1, U2 and U13 were verified in September as one patch
+file (`inferno-patches/0001-…`) and a scratch checkout, but never committed to
+the fork. Rebuilding the unit from the fork's `dev` for the #49 fixes
+(2026-10-03) therefore dropped them. From then on netaudio listed PI9696 as
+TX 0 / RX 0 ("malformed binary response" on the 32-channel receive list),
+could not read or remove its subscriptions in bulk, and showed no sample rate.
+
+Now on the fork's `dev`, one commit per fix, on top of `06993a1`:
+
+| Commit | Fix | Tests |
+|---|---|---|
+| `dbd9570` | U13: packed channel-list pages, receive pages of 16 | short last page, full pages, soft-limit cut, 32-entry RX list paged as 16 + 16 |
+| `96811a3` | U1: 0x3014 bulk unsubscribe removes every listed channel | 3-channel bulk remove; out-of-range ids reported, the rest handled |
+| `b512c60` | U2: answer sample-rate (0x0081) and encoding (0x0083) probes | exact reply bytes |
+| `20d639a` | U16: plugin pointer safe before prepare (#8) | `alsa_pcm_inferno/test_status_before_prepare.sh` (aborted before, passes now) |
+| `2af5592` | U16: every plugin callback wrapped in `catch_unwind`; `env_logger` `try_init` | `ffi_guard` unit tests |
+| `d0521f0` | U1 follow-up: a removed subscription is cleared before the reply, so netaudio's readback confirms it | verified on the unit |
+
+121 `inferno_aoip` unit tests and the `loopback_trx` integration test pass on
+the dev server (searchfire's mDNS `client_and_server` test times out there;
+it is untouched by these commits). Verified on the test unit after
+deploying the plugin: `netaudio device list` shows PI9696 with TX 32 / RX 32,
+`netaudio channel list` reads all 64 channels, `device show` reports 48 kHz,
+PCM24 and the supported rates and encodings, and a bulk `subscription remove`
+of three channels clears all three. With `2af5592` netaudio's immediate
+readback still listed them and printed "FAILED" (the entry was cleared only
+on the subscriber task); `d0521f0` clears it before the reply, and netaudio
+now reports each removal as "verified".
+
+## U16 — Plugin panics abort the host (teodly/inferno#8)
+
+**Found:** reproduced on the dev server with a 20-line C client: open the
+`inferno` PCM and call `snd_pcm_status` before `hw_params`/`prepare`. ALSA
+calls the plugin's pointer callback, which unwrapped `stream_info` (set only
+in prepare). A panic cannot unwind out of an `extern "C"` function, so the
+process aborted with "panic in a function that cannot unwind", the same trace
+as #8 (`snd_pcm_status` -> `plugin_pointer`). The plugin's callbacks also
+unwrap lock results and channel sends to the device server, any of which
+would take the host down the same way. **Fixed** by `20d639a` and `2af5592`.
+
+## Upstream issues reviewed 2026-10-04
+
+The open teodly/inferno issues were triaged for PI9696 (read only; nothing
+posted upstream):
+
+| Issue | Relevance | Outcome |
+|---|---|---|
+| #8 plugin panic aborts JACK | high: in-process plugin | fixed (U16) |
+| #41 stale audio on RX route disconnect | medium: could reach a take | not reproduced. The SilenceWriter's end timestamp and the closing timestamps share one timeline, and `close_items_until` keeps the real tail (one latency) before zero-filling. A loopback reproduction on the dev server is set up (`/var/tmp/inferno-review/i41`) but blocked: netaudio drops dev-hosted instances ("invalid mac") so it cannot route them |
+| #23 clock-stats not updated when the leader disappears | low | PI9696 gates recording on statime's observation socket, not clock-stats |
+| #26, #45 interop with specific hardware and controllers (Red 8Pre; a controller's unknown opcode 0x3010) | unknown | need captures from that hardware |
+| #36 flow timeouts at 250 µs sender latency | low | sender-side clocking (per the maintainer) |
+| #13 32-bit timestamps | none (arm64) | fixed upstream |
+| #1, #2, #3, #7, #9, #28, #40 | none | features and docs |
+

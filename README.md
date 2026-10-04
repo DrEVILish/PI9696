@@ -23,7 +23,7 @@ go build -o pi9696 . && sudo ./pi9696
 | Target | Raspberry Pi 5 deployment (`/dev/ptp0` hardware timestamping); must also run error-free on Pi 4 (software-timestamping fallback) |
 | Input | AES67 via Inferno (Ethernet only; no analog/USB audio) |
 | Rates | 44.1 / 48 / 96 / 192 kHz |
-| Channels | 1–128. Measured on a Pi 4 at 48 kHz: 1–128 ch bit-exact, 58% CPU at 128 ch (REPORT.md round 3). Above 16 ch needs the inferno U13 patch (Known Limitations #11) |
+| Channels | 1–128. Measured on a Pi 4 at 48 kHz: 1–128 ch bit-exact, 58% CPU at 128 ch (REPORT.md round 3). Above 16 ch relies on the U13 paging fix, in the pinned fork commit (Known Limitations #11) |
 | Format | WAV PCM 24-bit on disk (32-bit internal); `-rf64 auto`, so a take past 4 GiB (under 4 min at 128 ch/48 kHz) is finalised as RF64 instead of with wrapped RIFF sizes |
 | File naming | `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` in `/rec/YYYY-MM-DD/` |
 | Display | SSD1322 256×64 OLED (SPI), FiraCode TTF |
@@ -137,7 +137,7 @@ Playback path:
 - Per-channel VU meters over 100 ms WebSocket push
 - INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
 - Status panel shows the clock state (`Synced (PTP slave, 8µs)` / `Locking` / `Not synced (…)`) and the TX state in inferno terms (`Inferno TX ready (PI9696-TX)`)
-- Sample rate must be visible to an inferno controller (netaudio) for both TX and RX (owner requirement). Not yet met: needs inferno to answer the rate probe (INFERNO-UPSTREAM.md U2, patch verified) and RX+TX as one inferno instance (U8)
+- Sample rate must be visible to an inferno controller (netaudio) for both TX and RX (owner requirement). inferno now answers the rate probe (INFERNO-UPSTREAM.md U2, in the pinned fork commit: `netaudio device show` reports it); RX+TX as one instance (U8) is the `PI9696_INPROC_RX` single-instance mode
 - Theming: ftl-themes bundles (34 themes, `third_party/ftl-themes` submodule @ `b417e94`, v4.1.0 + unreleased — always track latest upstream; `html[data-theme]` slugs unchanged) —
   one linked stylesheet + `html[data-theme]`; the `third_party/ftl-themes/CONTRACT.md`
   is the integration spec. Markup uses the library's own components (`.btn`, `.table`, `.modal`, `.meter`, `.scroll` — v4 dropped the `ftl-` prefix everywhere),
@@ -196,11 +196,11 @@ Full install record, including the clock service and the kernel limits, is in
 # 1. SPI must be enabled or the app exits at startup (display init opens SPI)
 sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' /boot/firmware/config.txt && sudo reboot
 
-# 2. Inferno (pinned to fork dev 06993a1; note the submodules, and that the binary the app
+# 2. Inferno (pinned to fork dev d0521f0; note the submodules, and that the binary the app
 #    runs is target/release/inferno2pipe, not "inferno")
 sudo apt install -y build-essential pkg-config libasound2-dev libudev-dev
 git clone https://github.com/DrEVILish/inferno inferno
-cd inferno && git checkout 06993a1 && git submodule update --init --recursive
+cd inferno && git checkout d0521f0 && git submodule update --init --recursive
 cargo build --release && cd ..
 
 # 3. A clock source must be exporting the usrvclock overlay, or Inferno starts
@@ -305,7 +305,7 @@ Design debt worth flagging here:
 8. **Sim config path** — `PI9696_SIM=1` writes to `/tmp/pi9696-config.json`; real Pi writes to `/etc/pi9696/config.json`. Resolved once in `init()`: set `PI9696_CONFIG` before startup to override (tests reassign `ConfigPath` directly).
 9. **FIFO buffer needs `CAP_SYS_RESOURCE`** — the 4 MB raw FIFO needs the capability to grow; a `CapabilityBoundingSet` on the unit silently costs it, and the recorder keeps working at the 64 KB default. See DEPLOYMENT.md.
 10. **Stuck takes are always stoppable** — `stopRecording`/`stopMonitor` escalate from SIGTERM to SIGKILL after 10 s (`ffmpegStopGrace`): an ffmpeg blocked reading an empty FIFO never acts on SIGTERM, which used to wedge the transport. The grace is long enough for ffmpeg to finalize a partial WAV on slow storage.
-11. **Above 16 channels needs patched inferno** — stock inferno pages its receive-channel list 32 at a time and pads short pages, so netaudio cannot read or subscribe PI9696 beyond 16 channels (INFERNO-UPSTREAM.md U13). With `inferno-patches/0001-…` applied it routes and records 1–128 ch (verified on the unit). Until that lands in the inferno fork, run the receiver from a patched build (`PI9696_INFERNO_BIN`).
+11. **Above 16 channels relies on the U13 fix** — stock inferno pages its receive-channel list 32 at a time and pads short pages, so netaudio cannot read or subscribe a receiver beyond 16 channels (INFERNO-UPSTREAM.md U13). The fix is on the fork's `dev` (`dbd9570`, in the pinned `d0521f0`); a build without it shows PI9696 as TX 0 / RX 0 in netaudio, which is what happened between the #49 deploy and 2026-10-04 (the fix had only been a patch file).
 
 ---
 
