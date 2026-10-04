@@ -1,7 +1,7 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `d0521f0` on the `DrEVILish/inferno` fork's `dev`)
+AoIP stack, pinned at `b837e3d` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
@@ -29,6 +29,7 @@ and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
 | U14 | inferno2pipe | A blocked FIFO write stalls the whole runtime | a slow reader takes down ARC (no replies) and media (kernel drops) | change wanted |
 | U15 | inferno (all servers) | Malformed control packets and adverts panic server tasks (upstream issue teodly/inferno#49) | one packet from any LAN host stops routing, flows or TX until restart | **fixed in the fork**, branch `fix/issue-49-malformed-packets` |
 | U16 | ALSA plugin | A panic in any plugin callback aborts the host process; one is reachable by querying the PCM before prepare (teodly/inferno#8) | the app hosts the plugin in-process (`PI9696_INPROC_RX`), so a plugin panic kills the recorder | **fixed in the fork** (`20d639a`, `2af5592`) |
+| U17 | inferno RX | Stale audio after an RX channel is disconnected: clicks from the previous ring cycle, and sometimes one channel replaying its last 0.34 s until the stream stops (teodly/inferno#41) | old audio lands in a take after a source is unrouted | **fixed in the fork** (`d6f04ab`, `66d67fa`, `d2c936f`; test `b837e3d`) |
 
 ---
 
@@ -327,10 +328,49 @@ posted upstream):
 | Issue | Relevance | Outcome |
 |---|---|---|
 | #8 plugin panic aborts JACK | high: in-process plugin | fixed (U16) |
-| #41 stale audio on RX route disconnect | medium: could reach a take | not reproduced. The SilenceWriter's end timestamp and the closing timestamps share one timeline, and `close_items_until` keeps the real tail (one latency) before zero-filling. A loopback reproduction on the dev server is set up (`/var/tmp/inferno-review/i41`) but blocked: netaudio drops dev-hosted instances ("invalid mac") so it cannot route them |
+| #41 stale audio on RX route disconnect | medium: could reach a take | **fixed** (U17, below) |
 | #23 clock-stats not updated when the leader disappears | low | PI9696 gates recording on statime's observation socket, not clock-stats |
 | #26, #45 interop with specific hardware and controllers (Red 8Pre; a controller's unknown opcode 0x3010) | unknown | need captures from that hardware |
 | #36 flow timeouts at 250 µs sender latency | low | sender-side clocking (per the maintainer) |
 | #13 32-bit timestamps | none (arm64) | fixed upstream |
 | #1, #2, #3, #7, #9, #28, #40 | none | features and docs |
+
+## U17 — Stale audio after an RX disconnect (teodly/inferno#41)
+
+**Reproduced** on the dev server with `alsa_pcm_inferno/test_disconnect_tail.py`
+(fork `b837e3d`): one plugin instance transmits a counting ramp, a second
+captures it with arecord, a raw ARC request subscribes it and a raw 0x3014
+unsubscribes it mid-capture, and the capture after the disconnect is checked
+for anything but the real tail and silence. netaudio is not involved, because
+it refuses to route instances hosted on the dev server ("invalid mac").
+
+Two faults, both visible to an application reading the plugin's buffer:
+
+- **Clicks** (every run): received samples are written ahead of the media
+  clock by the channel's shift (start offset + latency), but the
+  SilenceWriter, and hole closing for live channels, cleared only up to the
+  clock, once per closing tick (42.7 ms with arecord's period). The reader
+  ran past the cleared range between ticks and played a few samples from the
+  previous ring cycle each time. Fixed by `d6f04ab`: silence and hole closing
+  run two closing intervals ahead on the plugin path. (inferno2pipe reads
+  through `readable_pos`, never saw it, and is unchanged.)
+- **Endless replay** (about 1 run in 3): the receive thread learned the start
+  time only when a packet arrived, so a channel connected before the first
+  packet kept its ring position on the absolute timeline, and nothing it
+  wrote afterwards cleared that channel's buffer: after a disconnect it
+  replayed its last 0.34 s until the stream stopped. Fixed by `d2c936f`
+  (start time polled before commands, connected sinks rebased when it
+  arrives; a closed start channel no longer panics the receive thread). This
+  is the path the recorder takes when inferno restores saved subscriptions
+  before capture starts.
+
+`66d67fa` closes a related ordering race: a flow's socket removed before its
+channels' disconnects arrive now silences the sinks still attached instead of
+dropping them.
+
+Results: before, every run failed; after, 12 of 12 pass, with the stream
+itself unchanged (same length, no gaps). All `inferno_aoip` tests and
+`loopback_trx` pass. Deployed on the test unit: netaudio lists TX 32 / RX 32,
+all 64 channels and 48 kHz, and a 3-channel subscribe / bulk remove is
+verified.
 

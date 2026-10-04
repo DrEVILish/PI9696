@@ -67,18 +67,18 @@ submodules, and they must be initialised too).
 cd /opt/pi9696
 git clone https://github.com/DrEVILish/inferno inferno
 cd inferno
-git checkout d0521f0                     # fork dev: v0.5.4 + 13 dev commits + #49 + U13/U1/U2 + #8 fixes
+git checkout b837e3d                     # fork dev: v0.5.4 + 13 dev commits + #49 + U13/U1/U2 + #8 + #41 fixes
 git submodule update --init --recursive  # searchfire, alsa-sys-all, usrvclock-rs
 cargo build --release                    # ~7 min on a Pi 4
 ```
 
 ### Why this commit
 
-The fork's `dev` at `d0521f0` is `v0.5.4` (`04c0efe`), the 13 later `dev`
+The fork's `dev` at `b837e3d` is `v0.5.4` (`04c0efe`), the 13 later `dev`
 commits (tests, dependency bumps, configurable TX dither with the old 32-bit
 default), the malformed-packet fixes (INFERNO-UPSTREAM.md U15), the
-channel-list paging, bulk unsubscribe and rate-probe fixes (U13, U1, U2) and
-the plugin panic guard (U16).
+channel-list paging, bulk unsubscribe and rate-probe fixes (U13, U1, U2), the
+plugin panic guard (U16) and the stale-audio-after-disconnect fixes (U17).
 `inferno2pipe` is unchanged since `v0.5.4`, so it keeps the
 `-c <channels> -o <path>` + `INFERNO_SAMPLE_RATE`/`INFERNO_NAME` contract the
 app depends on. (An earlier note here said `dev`'s `inferno2pipe` took a
