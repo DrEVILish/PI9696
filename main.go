@@ -469,7 +469,7 @@ func importConfigFrom(dir string) error {
 			logWarnf("config import: Wi-Fi settings skipped: %s", msg)
 		} else {
 			wifiSSID, wifiPassword, wifiEnabled = c.WifiSSID, c.WifiPassword, c.WifiEnabled
-			go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
+			go applyLatestWifiConfig()
 		}
 	}
 
@@ -618,10 +618,31 @@ func applyWifiConfig(ssid, pass string, enabled bool) {
 // goroutine).
 func setWifiEnabled(on bool) {
 	wifiEnabled = on
-	ssid := wifiSSID
-	pass := wifiPassword
 	persistConfig()
-	go applyWifiConfig(ssid, pass, on)
+	go applyLatestWifiConfig()
+}
+
+// wifiApplyMu serialises access-point applies. Each save used to start its
+// own applyWifiConfig goroutine with the values it captured, so two quick
+// saves (or a save racing an import) could finish in either order and leave
+// hostapd running the older settings while the config and QR showed the
+// newer ones.
+var wifiApplyMu sync.Mutex
+
+// applyWifi is the apply step, a seam so tests can observe applies without
+// touching hostapd.
+var applyWifi = applyWifiConfig
+
+// applyLatestWifiConfig applies whatever the settings are when it gets its
+// turn: whichever apply runs last therefore applies the newest values.
+// Called without the app mutex (it takes it briefly to read the settings).
+func applyLatestWifiConfig() {
+	wifiApplyMu.Lock()
+	defer wifiApplyMu.Unlock()
+	mutex.Lock()
+	ssid, pass, on := wifiSSID, wifiPassword, wifiEnabled
+	mutex.Unlock()
+	applyWifi(ssid, pass, on)
 }
 
 // updateWifiCredentials updates the AP SSID/password (e.g. set via the web

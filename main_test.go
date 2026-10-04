@@ -6940,3 +6940,42 @@ func TestConfigImportSkipsInvalidWifi(t *testing.T) {
 		}
 	}
 }
+
+// Two quick saves used to start independent applies with captured values
+// that could finish in either order, leaving hostapd on the older settings.
+// The last apply to run must carry the newest settings.
+func TestWifiAppliesEndOnNewestSettings(t *testing.T) {
+	var mu sync.Mutex
+	var applied []string
+	orig := applyWifi
+	applyWifi = func(ssid, pass string, on bool) {
+		time.Sleep(20 * time.Millisecond) // a slow systemctl
+		mu.Lock()
+		applied = append(applied, ssid)
+		mu.Unlock()
+	}
+	mutex.Lock()
+	origSSID, origPass, origOn := wifiSSID, wifiPassword, wifiEnabled
+	mutex.Unlock()
+	t.Cleanup(func() {
+		applyWifi = orig
+		mutex.Lock()
+		wifiSSID, wifiPassword, wifiEnabled = origSSID, origPass, origOn
+		mutex.Unlock()
+	})
+
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		mutex.Lock()
+		wifiSSID, wifiPassword, wifiEnabled = fmt.Sprintf("AP%d", i), "password1", true
+		mutex.Unlock()
+		wg.Add(1)
+		go func() { defer wg.Done(); applyLatestWifiConfig() }()
+	}
+	wg.Wait()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(applied) != 5 || applied[len(applied)-1] != "AP4" {
+		t.Fatalf("applies %v: the last one must carry the newest SSID AP4", applied)
+	}
+}

@@ -1869,11 +1869,11 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 	persistConfig()
 	// Capture under the about-to-release lock: the globals are reread by
 	// concurrent saves/imports, so passing them after Unlock races.
-	ssid, pass, apEnabled := wifiSSID, wifiPassword, wifiEnabled
+	ssid, pass = wifiSSID, wifiPassword
 	mutex.Unlock()
 
 	// Re-apply the AP configuration (hostapd restart)
-	go applyWifiConfig(ssid, pass, apEnabled)
+	go applyLatestWifiConfig()
 
 	// Return updated fragment with new QR code
 	var qrBuf bytes.Buffer
