@@ -833,8 +833,23 @@ func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int) {
 // playhead machinery is untouched. A dead sink kills the decoder so the
 // existing reaper drives the deck back to idle instead of stranding it.
 func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channels int) {
-	txPumpsActive.Add(1)
-	defer txPumpsActive.Add(-1)
+	// The pump takes over from the idle feeder only once it has something
+	// to write: counted at its first decoded chunk (or first paused
+	// silence), not at start. Counting at start stopped the feeder while
+	// ffmpeg was still starting (~200 ms), and that gap underran the device
+	// at the start of every playback (e2e_bitperfect.py: -10974 samples).
+	counted := false
+	takeOver := func() {
+		if !counted {
+			counted = true
+			txPumpsActive.Add(1)
+		}
+	}
+	defer func() {
+		if counted {
+			txPumpsActive.Add(-1)
+		}
+	}()
 	frameBytes := channels * 4
 	tmp := make([]byte, txPumpFrames*frameBytes)
 	carry := make([]byte, 0, txPumpFrames*frameBytes)
@@ -862,6 +877,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 			return
 		}
 		if paused {
+			takeOver()
 			if _, err := txWrite(holder, zeros); err != nil {
 				break
 			}
@@ -869,6 +885,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 		}
 		n, rerr := src.Read(tmp)
 		if n > 0 {
+			takeOver()
 			carry = append(carry, tmp[:n]...)
 			failed := false
 			for len(carry) >= frameBytes {

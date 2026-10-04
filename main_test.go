@@ -8030,3 +8030,45 @@ func TestTxPumpKeepsWritingWhileAppMutexHeld(t *testing.T) {
 		t.Fatal("pump did not finish after the take ended")
 	}
 }
+
+// The playback pump must not silence the idle feeder before it has audio
+// of its own: counting itself active at start left the device unfed while
+// ffmpeg started (~200 ms) and underran it at the start of every playback.
+func TestTxPumpTakesOverOnlyWithData(t *testing.T) {
+	saveTxGlobals(t)
+	resetTransportCleanup(t)
+	holder := &fakeTxHolder{}
+	cmd := &exec.Cmd{}
+	mutex.Lock()
+	txHolder, txHolderReady = holder, true
+	playbackCmd, currentState = cmd, StatePlaying
+	mutex.Unlock()
+	base := txPumpsActive.Load()
+
+	pr, pw := io.Pipe() // no data yet: the decoder is still starting
+	pumpDone := make(chan struct{})
+	go func() {
+		pumpPlaybackToTx(cmd, pr, holder, 2)
+		close(pumpDone)
+	}()
+	time.Sleep(100 * time.Millisecond)
+	if got := txPumpsActive.Load(); got != base {
+		t.Fatalf("pump counted itself active (%d) before it had data; the feeder would stop and the device underrun", got-base)
+	}
+	go pw.Write(make([]byte, txPumpFrames*2*4))
+	deadline := time.Now().Add(2 * time.Second)
+	for txPumpsActive.Load() == base {
+		if time.Now().After(deadline) {
+			t.Fatal("pump never took over after its first decoded chunk")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	mutex.Lock()
+	playbackCmd = nil
+	mutex.Unlock()
+	pw.Close()
+	<-pumpDone
+	if got := txPumpsActive.Load(); got != base {
+		t.Fatalf("pump left txPumpsActive at %d after exiting", got-base)
+	}
+}
