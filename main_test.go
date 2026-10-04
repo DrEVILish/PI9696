@@ -6241,3 +6241,127 @@ func TestEnsureTxHolderNoopInProcRX(t *testing.T) {
 		t.Error("ensureTxHolder opened a TX device in single-instance mode (would be a second instance)")
 	}
 }
+
+// fakeFfmpegArgsScript records its argv (one per line) to $FAKE_FFMPEG_ARGS
+// and then behaves like fakeChildScript, so a test can assert on the exact
+// command a take was started with.
+const fakeFfmpegArgsScript = `#!/bin/sh
+printf '%s\n' "$@" > "$FAKE_FFMPEG_ARGS"
+trap 'exit 0' TERM
+sleep 300 &
+wait $!
+`
+
+// startFakeTake starts a take against a fake Inferno FIFO and a fake ffmpeg
+// that records its arguments, and returns them. The take is stopped and
+// reaped in cleanup. Inferno state is faked directly (no worker round-trip):
+// only startRecording's own command construction is under test.
+func startFakeTake(t *testing.T) []string {
+	t.Helper()
+	initTestHardware(t)
+	argsFile := filepath.Join(t.TempDir(), "args")
+	t.Setenv("FAKE_FFMPEG_ARGS", argsFile)
+	fakeExecutable(t, "ffmpeg", fakeFfmpegArgsScript)
+
+	mutex.Lock()
+	origState, origFifo, origCur := infernoState, fifoPath, currentState
+	origRate, origCh := lastSampleRate, lastChannelCount
+	infernoState = InfernoRunning
+	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
+	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	currentState = StateIdle
+	startRecording()
+	started := isRecording
+	done := recordingDone
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		if isRecording {
+			stopRecording()
+		}
+		mutex.Unlock()
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Error("fake take was not reaped")
+			}
+		}
+		mutex.Lock()
+		infernoState, fifoPath, currentState = origState, origFifo, origCur
+		lastSampleRate, lastChannelCount = origRate, origCh
+		mutex.Unlock()
+	})
+	if !started {
+		t.Fatal("startRecording did not start a take")
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if data, err := os.ReadFile(argsFile); err == nil && len(data) > 0 {
+			return strings.Split(strings.TrimSpace(string(data)), "\n")
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fake ffmpeg never recorded its arguments")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A take past 4 GiB (under 4 minutes at 128ch/48kHz/24-bit) cannot be
+// described by a RIFF header's 32-bit sizes; ffmpeg's default (-rf64 never)
+// writes wrapped sizes. Takes must be started with -rf64 auto.
+func TestRecordingUsesRF64Auto(t *testing.T) {
+	args := startFakeTake(t)
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-rf64" {
+			if args[i+1] != "auto" {
+				t.Fatalf("-rf64 %s, want auto", args[i+1])
+			}
+			return
+		}
+	}
+	t.Fatalf("take started without -rf64 auto: %q", args)
+}
+
+// An RF64 take carries the 0xFFFFFFFF placeholder in its data chunk and the
+// real 64-bit size in ds64; duration must come from ds64, and a plain RIFF
+// header must keep working.
+func TestWavDataBytesRF64(t *testing.T) {
+	const want = int64(5_000_000_000) // past the 32-bit limit
+	var b []byte
+	b = append(b, "RF64"...)
+	b = binary.LittleEndian.AppendUint32(b, 0xFFFFFFFF)
+	b = append(b, "WAVE"...)
+	b = append(b, "ds64"...)
+	b = binary.LittleEndian.AppendUint32(b, 28)
+	b = binary.LittleEndian.AppendUint64(b, uint64(want+36)) // riff size
+	b = binary.LittleEndian.AppendUint64(b, uint64(want))    // data size
+	b = binary.LittleEndian.AppendUint64(b, 0)               // sample count
+	b = binary.LittleEndian.AppendUint32(b, 0)               // table length
+	b = append(b, "fmt "...)
+	b = binary.LittleEndian.AppendUint32(b, 16)
+	b = append(b, make([]byte, 16)...)
+	b = append(b, "data"...)
+	b = binary.LittleEndian.AppendUint32(b, 0xFFFFFFFF)
+	if got := wavDataBytes(bytes.NewReader(b)); got != want {
+		t.Fatalf("RF64 data size = %d, want %d (from ds64)", got, want)
+	}
+
+	// -rf64 auto on a short take: plain RIFF with a JUNK reservation.
+	var r []byte
+	r = append(r, "RIFF"...)
+	r = binary.LittleEndian.AppendUint32(r, 0)
+	r = append(r, "WAVE"...)
+	r = append(r, "JUNK"...)
+	r = binary.LittleEndian.AppendUint32(r, 28)
+	r = append(r, make([]byte, 28)...)
+	r = append(r, "data"...)
+	r = binary.LittleEndian.AppendUint32(r, 1234)
+	if got := wavDataBytes(bytes.NewReader(r)); got != 1234 {
+		t.Fatalf("RIFF data size = %d, want 1234", got)
+	}
+
+	if got := wavDataBytes(bytes.NewReader([]byte("not a wav file at all"))); got != 0 {
+		t.Fatalf("garbage header = %d, want 0", got)
+	}
+}

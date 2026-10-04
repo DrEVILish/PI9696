@@ -2967,6 +2967,12 @@ func startRecording() {
 	}
 	// Only output format is WAV (PCM 24-bit) - see OutputBitsPerSample.
 	args = append(args, "-c:a", "pcm_s24le")
+	// A RIFF header's 32-bit sizes cap a WAV at 4 GiB - under 4 minutes at
+	// 128ch/48kHz/24-bit - and ffmpeg's default (-rf64 never) then writes
+	// wrapped sizes that make readers truncate or reject the take. auto
+	// reserves room up front and switches to an RF64 header only when the
+	// take actually crosses the limit, so short takes stay plain WAV.
+	args = append(args, "-rf64", "auto")
 
 	// ffmpeg's -metadata maps onto the WAV container's LIST/INFO chunk. WAV's
 	// INFO chunk only maps a fixed field set and silently drops arbitrary keys

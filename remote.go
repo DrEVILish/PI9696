@@ -4088,26 +4088,7 @@ func recordingDuration(path string, channels, sampleRate int) time.Duration {
 	const bytesPerSample = 3 // pcm_s24le
 	dataBytes := int64(0)
 	if f, err := os.Open(path); err == nil {
-		var hdr [12]byte
-		if _, err := io.ReadFull(f, hdr[:]); err == nil && string(hdr[0:4]) == "RIFF" && string(hdr[8:12]) == "WAVE" {
-			for {
-				var ch [8]byte
-				if _, err := io.ReadFull(f, ch[:]); err != nil {
-					break
-				}
-				size := int64(binary.LittleEndian.Uint32(ch[4:8]))
-				if string(ch[0:4]) == "data" {
-					dataBytes = size
-					break
-				}
-				if size%2 == 1 {
-					size++ // chunks are word-aligned
-				}
-				if _, err := f.Seek(size, io.SeekCurrent); err != nil {
-					break
-				}
-			}
-		}
+		dataBytes = wavDataBytes(f)
 		f.Close()
 	}
 	if dataBytes <= 0 || dataBytes > info.Size()-12 {
@@ -4136,6 +4117,53 @@ func recordingDuration(path string, channels, sampleRate int) time.Duration {
 		return time.Duration(secs)*time.Second + time.Duration(rem)*time.Second/time.Duration(bytesPerSec)
 	}
 	return time.Duration(secs) * time.Second
+}
+
+// wavDataBytes returns the data-chunk size declared by a RIFF or RF64 WAV
+// header, or 0 when there is none. Takes are written with -rf64 auto, so one
+// past 4 GiB carries an RF64 header whose data chunk size is the 0xFFFFFFFF
+// placeholder and whose real 64-bit size lives in the leading ds64 chunk.
+func wavDataBytes(r io.ReadSeeker) int64 {
+	var hdr [12]byte
+	if _, err := io.ReadFull(r, hdr[:]); err != nil || string(hdr[8:12]) != "WAVE" {
+		return 0
+	}
+	rf64 := string(hdr[0:4]) == "RF64"
+	if !rf64 && string(hdr[0:4]) != "RIFF" {
+		return 0
+	}
+	ds64Data := int64(0)
+	for {
+		var ch [8]byte
+		if _, err := io.ReadFull(r, ch[:]); err != nil {
+			return 0
+		}
+		size := int64(binary.LittleEndian.Uint32(ch[4:8]))
+		switch string(ch[0:4]) {
+		case "ds64":
+			// riffSize(8) dataSize(8) sampleCount(8) [table...]
+			var ds [16]byte
+			if size < 16 {
+				return 0
+			}
+			if _, err := io.ReadFull(r, ds[:]); err != nil {
+				return 0
+			}
+			ds64Data = int64(binary.LittleEndian.Uint64(ds[8:16]))
+			size -= 16
+		case "data":
+			if rf64 && size == 0xFFFFFFFF {
+				return ds64Data
+			}
+			return size
+		}
+		if size%2 == 1 {
+			size++ // chunks are word-aligned
+		}
+		if _, err := r.Seek(size, io.SeekCurrent); err != nil {
+			return 0
+		}
+	}
 }
 
 func buildRecordingRow(path string) recordingRow {
