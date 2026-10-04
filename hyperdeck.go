@@ -96,11 +96,24 @@ func stopHyperdeckServer() {
 	hyperdeckMu.Lock()
 	l := hyperdeckListener
 	hyperdeckListener = nil
+	conns := hyperdeckConns
+	hyperdeckConns = make(map[net.Conn]struct{})
 	hyperdeckMu.Unlock()
 	if l != nil {
-		l.Close() // accept loop exits; open conns drain on next read/write
+		l.Close() // accept loop exits
+	}
+	// Closing the listener alone left connected controllers in charge:
+	// their sessions kept reading commands, so switching HyperDeck off
+	// did not stop a controller that was already attached from starting
+	// and stopping takes. Close them; each read loop ends at once.
+	for c := range conns {
+		c.Close()
 	}
 }
+
+// hyperdeckConns is the set of live controller connections, so turning the
+// server off can drop them. Guarded by hyperdeckMu.
+var hyperdeckConns = make(map[net.Conn]struct{})
 
 // hyperdeckMaxSessions bounds concurrent controller sessions. Each session
 // is a command goroutine plus a 500ms notify goroutine/ticker, and the port
@@ -127,6 +140,13 @@ func hyperdeckAcceptLoop(l net.Listener) {
 			return // listener closed
 		}
 		hyperdeckMu.Lock()
+		if hyperdeckListener != l {
+			// Stopped between Accept returning and here: the conn set was
+			// already swept, so this one would escape it.
+			hyperdeckMu.Unlock()
+			c.Close()
+			continue
+		}
 		if hyperdeckSessions >= hyperdeckMaxSessions {
 			hyperdeckMu.Unlock()
 			// Refused at debug: a flood would turn a louder log into
@@ -136,11 +156,13 @@ func hyperdeckAcceptLoop(l net.Listener) {
 			continue
 		}
 		hyperdeckSessions++
+		hyperdeckConns[c] = struct{}{}
 		hyperdeckMu.Unlock()
 		go func() {
 			handleHyperdeckConn(c)
 			hyperdeckMu.Lock()
 			hyperdeckSessions--
+			delete(hyperdeckConns, c)
 			hyperdeckMu.Unlock()
 		}()
 	}

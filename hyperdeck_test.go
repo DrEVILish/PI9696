@@ -437,3 +437,27 @@ func TestHyperdeckWriteFailureClosesSession(t *testing.T) {
 		}
 	}
 }
+
+// Turning HyperDeck off used to close only the listener: a controller that
+// was already connected kept driving the transport. Its session must end.
+func TestHyperdeckDisableDropsSessions(t *testing.T) {
+	sc, c, cleanup := hyperdeckDial(t)
+	defer cleanup()
+	_ = sc
+	mutex.Lock()
+	setHyperdeckEnabledLocked(false)
+	mutex.Unlock()
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	buf := make([]byte, 256)
+	for {
+		_, err := c.Read(buf)
+		if err == nil {
+			continue // drain anything already in flight
+		}
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			t.Fatal("session still open after HyperDeck was switched off")
+		}
+		return // EOF/reset: dropped
+	}
+}
