@@ -7468,3 +7468,15 @@ func TestDeferredRestartResumesWhenIdle(t *testing.T) {
 		t.Fatal("restart queued with nothing deferred and settings matching")
 	}
 }
+
+// Capture overruns were recovered silently inside alsapcm.Read: each is a
+// gap in the take. The capture loop reports growth in the count.
+func TestCaptureXrunReport(t *testing.T) {
+	if msg, cur := captureXrunReport(0, 0); msg != "" || cur != 0 {
+		t.Fatalf("no overruns reported %q", msg)
+	}
+	msg, cur := captureXrunReport(2, 5)
+	if cur != 5 || !strings.Contains(msg, "3 capture overrun") || !strings.Contains(msg, "5 total") {
+		t.Fatalf("report = %q, %d", msg, cur)
+	}
+}

@@ -87,6 +87,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 )
 
@@ -117,7 +118,14 @@ type Device struct {
 	channels      int
 	framesPerIO   int
 	closed        bool
+	// xruns counts overruns/underruns recovered in place. Each one is a gap
+	// in the audio that Read/Write otherwise hide from the caller.
+	xruns atomic.Int64
 }
+
+// Xruns returns how many overruns (capture) and underruns (playback) the
+// device has recovered from since it was opened.
+func (d *Device) Xruns() int64 { return d.xruns.Load() }
 
 // Open opens the named ALSA device for both capture and playback at the given
 // rate and channel count. Both settings come from the app's audio settings, so
@@ -213,6 +221,7 @@ func (d *Device) Read(buf []int32) (int, error) {
 		if !recoverable(rc) {
 			return 0, fmt.Errorf("alsapcm: read: %w", alsaErr(rc))
 		}
+		d.xruns.Add(1)
 		var prc C.int
 		C.pcm_prepare(d.cap, &prc)
 		if prc != 0 {
@@ -251,6 +260,7 @@ func (d *Device) Write(buf []int32) (int, error) {
 		if !recoverable(rc) {
 			return 0, fmt.Errorf("alsapcm: write: %w", alsaErr(rc))
 		}
+		d.xruns.Add(1)
 		var prc C.int
 		C.pcm_prepare(d.play, &prc)
 		if prc != 0 {

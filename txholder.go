@@ -196,11 +196,20 @@ func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done 
 	const chunkFrames = txPumpFrames
 	frames := make([]int32, chunkFrames*channels)
 	buf := make([]byte, chunkFrames*channels*4)
+	var xrunsReported int64
+	var xrunsAt time.Time
 	for {
 		select {
 		case <-quit:
 			return
 		default:
+		}
+		// Read recovers capture overruns in place, so each one is a gap
+		// in the take that nothing reported. Surface them, at most once
+		// per infernoLogSummaryEvery.
+		if msg, cur := captureXrunReport(xrunsReported, dev.Xruns()); msg != "" && time.Since(xrunsAt) >= infernoLogSummaryEvery {
+			logErrorf("%s", msg)
+			xrunsReported, xrunsAt = cur, time.Now()
 		}
 		n, err := dev.Read(frames)
 		if err != nil {
@@ -247,6 +256,15 @@ func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done 
 			off += w
 		}
 	}
+}
+
+// captureXrunReport returns a log line when the device's overrun count has
+// grown past what was last reported, plus the count to remember.
+func captureXrunReport(reported, current int64) (string, int64) {
+	if current <= reported {
+		return "", reported
+	}
+	return fmt.Sprintf("in-process inferno: %d capture overrun(s) since the last report (%d total) - audio gaps in the input", current-reported, current), current
 }
 
 // inProcRxFailed marks the server failed when the capture loop of the
