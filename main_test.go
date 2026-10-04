@@ -7843,3 +7843,12 @@ func TestMissingInfernoBinaryIsNotRetried(t *testing.T) {
 		t.Fatal("a missing binary booked an automatic retry")
 	}
 }
+
+// ffmpeg's progress lines end in \r; the tail must still surface the error.
+func TestStderrTailSplitsCarriageReturns(t *testing.T) {
+	var tail stderrTail
+	fmt.Fprint(&tail, "size=1kB time=00:00:01\rsize=2kB time=00:00:02\rav_interleaved_write_frame(): No space left on device\n")
+	if got := tail.String(); got != "size=1kB time=00:00:01 | size=2kB time=00:00:02 | av_interleaved_write_frame(): No space left on device" {
+		t.Fatalf("tail = %q", got)
+	}
+}

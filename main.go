@@ -752,7 +752,9 @@ func (t *stderrTail) String() string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	var lines []string
-	for _, l := range strings.Split(string(t.buf), "\n") {
+	// ffmpeg ends progress updates with \r, not \n: split on both, or the
+	// "last line" is one progress blob with the real error buried in it.
+	for _, l := range strings.FieldsFunc(string(t.buf), func(r rune) bool { return r == '\n' || r == '\r' }) {
 		if l = strings.TrimSpace(l); l != "" {
 			lines = append(lines, l)
 		}
