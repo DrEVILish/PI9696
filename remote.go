@@ -19,6 +19,7 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -251,12 +252,77 @@ var sessions = newSessionStore()
 // sessionLifetime is how long a login session lasts server-side.
 const sessionLifetime = 12 * time.Hour
 
+// clientIP is the address the login limiter keys on. Normally the TCP
+// peer. When the peer is a reverse proxy listed in PI9696_TRUSTED_PROXIES
+// (both units sit behind one), every client would otherwise share the
+// proxy's address, so five bad tokens from anyone locked everyone out for
+// a minute, repeatably. For a trusted peer the client is the rightmost
+// X-Forwarded-For entry that is not itself a trusted proxy (entries to its
+// left are client-supplied and spoofable). Untrusted peers' headers are
+// ignored, so the default - no list - is the old behaviour.
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	if !isTrustedProxy(host) {
+		return host
+	}
+	hops := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop := strings.TrimSpace(hops[i])
+		if _, err := netip.ParseAddr(hop); err != nil {
+			break // malformed chain: trust nothing further left
+		}
+		if !isTrustedProxy(hop) {
+			return hop
+		}
 	}
 	return host
+}
+
+// trustedProxies parses PI9696_TRUSTED_PROXIES once: comma-separated
+// addresses or CIDR prefixes of reverse proxies whose X-Forwarded-For may
+// be believed. A var so tests can substitute a list.
+var trustedProxies = sync.OnceValue(func() []netip.Prefix {
+	list, bad := parseTrustedProxies(os.Getenv("PI9696_TRUSTED_PROXIES"))
+	for _, b := range bad {
+		logErrorf("PI9696_TRUSTED_PROXIES: ignoring %q (not an address or CIDR prefix)", b)
+	}
+	return list
+})
+
+// parseTrustedProxies returns the valid prefixes in s (a bare address is a
+// single-address prefix) and the entries it could not parse.
+func parseTrustedProxies(s string) (list []netip.Prefix, bad []string) {
+	for _, f := range strings.Split(s, ",") {
+		f = strings.TrimSpace(f)
+		if f == "" {
+			continue
+		}
+		if p, err := netip.ParsePrefix(f); err == nil {
+			list = append(list, p.Masked())
+		} else if a, err := netip.ParseAddr(f); err == nil {
+			list = append(list, netip.PrefixFrom(a.Unmap(), a.Unmap().BitLen()))
+		} else {
+			bad = append(bad, f)
+		}
+	}
+	return list, bad
+}
+
+func isTrustedProxy(ip string) bool {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return false
+	}
+	a = a.Unmap()
+	for _, p := range trustedProxies() {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
 }
 
 // validSession checks the cookie against the server-side session store (a

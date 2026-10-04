@@ -150,7 +150,9 @@ Playback path:
 ### Auth & Security
 
 - Token (8-char, shown on OLED and printed to the journal at startup/rotation: `journalctl -u pi9696 -b | grep "access code"`; root/adm only) → session cookie (12 h, server-side)
-- Login rate-limited per IP; token compared in constant time
+- Login rate-limited per IP (5 attempts, then a minute's lockout; concurrent attempts count up front); token compared in constant time
+- Behind a reverse proxy, list it in `PI9696_TRUSTED_PROXIES` (comma-separated addresses or CIDR prefixes, in `.env`): the limiter then keys on the client from that proxy's `X-Forwarded-For` (rightmost untrusted hop) instead of locking every client out together. Unset (the default), forwarded headers are ignored.
+- WebSocket streams (meters, telemetry) re-check the session on every push and close once it is logged out, expired or revoked by a token rotation
 - Downloads whitelisted against recording list (no arbitrary file access)
 
 **⚠ Known security limitation:** Plain HTTP only — treat as unencrypted admin page. Anyone sniffing the LAN can see the token and hijack the session. Do not expose beyond a trusted network without adding HTTPS.
