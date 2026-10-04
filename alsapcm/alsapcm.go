@@ -86,6 +86,7 @@ import "C"
 import (
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -102,12 +103,20 @@ const LatencyUs = 120000
 
 // Device is an open pair of ALSA handles on one Inferno virtual soundcard.
 type Device struct {
-	cap, play   *C.snd_pcm_t
-	name        string
-	rate        int
-	channels    int
-	framesPerIO int
-	closed      bool
+	// capMu and playMu are held across each Read and Write respectively,
+	// and Close takes both: closing a handle while another goroutine is
+	// inside snd_pcm_readi/writei on it is a use-after-free in C. The app
+	// does exactly that shape - the capture loop, the playback pump and the
+	// TX warm-up each run on their own goroutine against one paired device
+	// that a restart closes. One lock per direction, so a blocked capture
+	// read never stalls playback writes.
+	capMu, playMu sync.Mutex
+	cap, play     *C.snd_pcm_t
+	name          string
+	rate          int
+	channels      int
+	framesPerIO   int
+	closed        bool
 }
 
 // Open opens the named ALSA device for both capture and playback at the given
@@ -187,6 +196,8 @@ func (d *Device) Read(buf []int32) (int, error) {
 	if want == 0 {
 		return 0, nil
 	}
+	d.capMu.Lock()
+	defer d.capMu.Unlock()
 	if d.closed || d.cap == nil {
 		return 0, fmt.Errorf("alsapcm: read on closed device")
 	}
@@ -223,6 +234,8 @@ func (d *Device) Write(buf []int32) (int, error) {
 	if want == 0 {
 		return 0, nil
 	}
+	d.playMu.Lock()
+	defer d.playMu.Unlock()
 	if d.closed || d.play == nil {
 		return 0, fmt.Errorf("alsapcm: write on closed device")
 	}
@@ -254,9 +267,17 @@ func recoverable(err C.int) bool {
 }
 
 // Close releases both handles. Safe to call more than once, which matters
-// because it is also a finalizer.
+// because it is also a finalizer. It waits for any Read or Write in
+// progress on another goroutine to return before freeing the handles.
 func (d *Device) Close() error {
-	if d == nil || d.closed {
+	if d == nil {
+		return nil
+	}
+	d.capMu.Lock()
+	defer d.capMu.Unlock()
+	d.playMu.Lock()
+	defer d.playMu.Unlock()
+	if d.closed {
 		return nil
 	}
 	d.closed = true

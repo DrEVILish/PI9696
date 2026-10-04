@@ -1,6 +1,9 @@
 package alsapcm
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // The dev box has no Inferno device, so the wrapper is exercised for its
 // argument handling and its behaviour when the device is absent - the two
@@ -121,5 +124,38 @@ func TestPlaybackOnlyRefusesRead(t *testing.T) {
 	d := &Device{channels: 2, framesPerIO: 1024}
 	if _, err := d.Read(make([]int32, 64)); err == nil {
 		t.Error("Read on a playback-only device returned no error")
+	}
+}
+
+// Close used to free the handles while a Read or Write on another goroutine
+// could still be inside ALSA (a use-after-free in C). It must wait for the
+// in-flight call; holding the direction's lock stands in for one.
+func TestCloseWaitsForInFlightIO(t *testing.T) {
+	for _, dir := range []string{"read", "write"} {
+		d := &Device{channels: 2, framesPerIO: 1024}
+		mu := &d.capMu
+		if dir == "write" {
+			mu = &d.playMu
+		}
+		mu.Lock() // an I/O call in progress
+		closed := make(chan struct{})
+		go func() {
+			d.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+			t.Fatalf("Close returned during an in-flight %s", dir)
+		case <-time.After(50 * time.Millisecond):
+		}
+		mu.Unlock() // the call returns
+		select {
+		case <-closed:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("Close never completed after the %s returned", dir)
+		}
+		if _, err := d.Read(make([]int32, 4)); err == nil {
+			t.Fatal("Read after Close succeeded")
+		}
 	}
 }

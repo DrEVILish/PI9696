@@ -154,9 +154,27 @@ func stopInProcInferno() {
 	}
 	if dev != nil {
 		txWriteLocks.Delete(txFrameWriter(dev))
-		dev.Close()
+		// Close waits for any read or write still inside ALSA (the capture
+		// loop past its timeout, a playback pump, the TX warm-up), which
+		// is what makes it safe. Bound how long the worker waits on that:
+		// past the bound the close completes on its own goroutine when the
+		// call returns, and the next start simply fails until then.
+		closed := make(chan struct{})
+		go func() {
+			dev.Close()
+			close(closed)
+		}()
+		select {
+		case <-closed:
+		case <-time.After(inProcCloseWait):
+			logErrorf("in-process inferno: device close still waiting on in-flight audio I/O after %v", inProcCloseWait)
+		}
 	}
 }
+
+// inProcCloseWait bounds how long stopInProcInferno waits for the paired
+// device to close (a var so tests can shrink it).
+var inProcCloseWait = 3 * time.Second
 
 // infernoRxLoop copies captured frames from the paired device into the FIFO
 // ffmpeg records and monitors from, in the exact interleaved little-endian
