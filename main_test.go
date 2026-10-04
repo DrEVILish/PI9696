@@ -5849,6 +5849,11 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		"RECORDING STOPPED - SEE LOG",
 		"PLAYBACK FAILED - SEE LOG",
 		"INFERNO STOPPED - SEE LOG",
+		"FORMAT FAILED - SEE LOG",
+		"FORMAT FAILED - NO USB",
+		"USB NOT MOUNTED - SEE LOG",
+		"USB FAT32 - 4GB FILE LIMIT",
+		"USB FORMATTED",
 	} {
 		if w := hwManager.GetTextWidth(msg); w > 256 {
 			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
@@ -6977,5 +6982,96 @@ func TestWifiAppliesEndOnNewestSettings(t *testing.T) {
 	defer mu.Unlock()
 	if len(applied) != 5 || applied[len(applied)-1] != "AP4" {
 		t.Fatalf("applies %v: the last one must carry the newest SSID AP4", applied)
+	}
+}
+
+// fakeSudoScript logs each invocation to $FAKE_SUDO_LOG and fails any whose
+// command (first argument) matches $FAKE_SUDO_FAIL.
+const fakeSudoScript = `#!/bin/sh
+echo "$*" >> "$FAKE_SUDO_LOG"
+case "$1" in
+$FAKE_SUDO_FAIL) echo "fake failure" >&2; exit 1 ;;
+esac
+exit 0
+`
+
+// setupFakeFormat describes a mounted fake stick and a scripted sudo, and
+// returns a reader for the sudo log.
+func setupFakeFormat(t *testing.T, failPattern string) (device string, sudoLog func() string) {
+	t.Helper()
+	initTestHardware(t)
+	device, _ = fakeUSBDisk(t)
+	mp := t.TempDir()
+	mounts := filepath.Join(t.TempDir(), "mounts")
+	os.WriteFile(mounts, []byte(device+" "+mp+" exfat rw 0 0\n"), 0644)
+	origMounts, origMP, origSettle := procMountsPath, USBMountPoint, formatSettleDelay
+	procMountsPath, USBMountPoint, formatSettleDelay = mounts, mp, 0
+	logPath := filepath.Join(t.TempDir(), "sudo.log")
+	t.Setenv("FAKE_SUDO_LOG", logPath)
+	t.Setenv("FAKE_SUDO_FAIL", failPattern)
+	fakeExecutable(t, "sudo", fakeSudoScript)
+	mutex.Lock()
+	origUSB, origNotice := usbMounted, sysNotice
+	usbMounted, sysNotice = true, ""
+	mutex.Unlock()
+	t.Cleanup(func() {
+		procMountsPath, USBMountPoint, formatSettleDelay = origMounts, origMP, origSettle
+		mutex.Lock()
+		usbMounted, sysNotice = origUSB, origNotice
+		mutex.Unlock()
+	})
+	return device, func() string { b, _ := os.ReadFile(logPath); return string(b) }
+}
+
+// A failed mkfs used to leave the stick unmounted with only a log line; it
+// must be remounted and the operator told.
+func TestFormatUSBFailedMkfsRemountsAndTells(t *testing.T) {
+	device, sudoLog := setupFakeFormat(t, "mkfs.*")
+	formatUSB()
+	log := sudoLog()
+	if !strings.Contains(log, "mount "+device+" ") {
+		t.Errorf("stick not remounted after a failed mkfs; sudo calls:\n%s", log)
+	}
+	mutex.Lock()
+	notice := sysNotice
+	mutex.Unlock()
+	if notice != "FORMAT FAILED - SEE LOG" {
+		t.Errorf("notice = %q, want FORMAT FAILED - SEE LOG", notice)
+	}
+}
+
+// The busy abort after the umount must also put the stick back, and never
+// reach mkfs.
+func TestFormatUSBBusyAbortRemounts(t *testing.T) {
+	device, sudoLog := setupFakeFormat(t, "none")
+	mutex.Lock()
+	origCopy := isCopying
+	isCopying = true
+	mutex.Unlock()
+	t.Cleanup(func() { mutex.Lock(); isCopying = origCopy; mutex.Unlock() })
+	formatUSB()
+	log := sudoLog()
+	if strings.Contains(log, "mkfs") {
+		t.Fatalf("mkfs ran during a busy abort:\n%s", log)
+	}
+	if !strings.Contains(log, "mount "+device+" ") {
+		t.Errorf("stick not remounted after the busy abort; sudo calls:\n%s", log)
+	}
+}
+
+// Success says so, and a FAT32 fallback warns about the 4 GiB file limit.
+func TestFormatUSBReportsFilesystem(t *testing.T) {
+	for _, tc := range []struct{ fail, want string }{
+		{"none", "USB FORMATTED"},
+		{"mkfs.exfat", "USB FAT32 - 4GB FILE LIMIT"},
+	} {
+		setupFakeFormat(t, tc.fail)
+		formatUSB()
+		mutex.Lock()
+		notice := sysNotice
+		mutex.Unlock()
+		if notice != tc.want {
+			t.Errorf("fail=%s: notice %q, want %q", tc.fail, notice, tc.want)
+		}
 	}
 }

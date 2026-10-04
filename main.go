@@ -34,14 +34,15 @@ const (
 	MaxChannelCount     = 128
 	BitsPerSample       = 32 // internal FIFO/pipeline sample width, shown in status bar
 	OutputBitsPerSample = 24 // actual pcm_s24le WAV written to disk, used for storage math
-	USBMountPoint       = "/media/usb"
 	meterSilence        = -100.0 // dB sentinel shown/reported when no recording is active
 )
 
-// Vars, not consts, so TestMain can point the suite at a temp tree.
+// Vars, not consts, so TestMain can point the suite at a temp tree (and the
+// USB format tests at a fake stick).
 var (
-	RecordPath = "/rec"
-	RawPath    = "/rec/raw"
+	RecordPath    = "/rec"
+	RawPath       = "/rec/raw"
+	USBMountPoint = "/media/usb"
 )
 
 // InfernoBinary is the prebuilt Inferno receiver executable, produced once at
@@ -4460,6 +4461,15 @@ func deleteAllRecordings() (failed int) {
 }
 
 func formatUSB() {
+	// Every outcome reaches the panel: failures used to be log-only, so the
+	// operator saw nothing (and a failure after the umount left the stick
+	// unmounted with no hint why). Runs on systemOpWorker, without the app
+	// mutex, so notices take it.
+	notice := func(msg string) {
+		mutex.Lock()
+		showSysNotice(msg)
+		mutex.Unlock()
+	}
 	// Snapshot under lock: detectUSB mutates usbMounted concurrently, and
 	// a stick pulled between lookup and mkfs must never format the wrong
 	// device (see the re-verify before each destructive step below).
@@ -4468,12 +4478,14 @@ func formatUSB() {
 	mutex.Unlock()
 	if !mounted {
 		logErrorf("Cannot format USB: not mounted")
+		notice("FORMAT FAILED - NO USB")
 		return
 	}
 
 	device, err := usbDevicePath()
 	if err != nil {
 		logErrorf("Cannot format USB: %v", err)
+		notice("FORMAT FAILED - SEE LOG")
 		return
 	}
 	// Pin the stick's identity while it is still mounted: after the umount
@@ -4482,6 +4494,7 @@ func formatUSB() {
 	identity, err := usbDeviceIdentity(device)
 	if err != nil {
 		logErrorf("Cannot format USB: %v", err)
+		notice("FORMAT FAILED - SEE LOG")
 		return
 	}
 
@@ -4494,11 +4507,21 @@ func formatUSB() {
 	// lookup above and now must abort, not mkfs a stale path.
 	if cur, err := usbDevicePath(); err != nil || cur != device {
 		logErrorf("format USB: device changed mid-format (was %s), aborting", device)
+		notice("FORMAT FAILED - SEE LOG")
 		return
 	}
 	if out, err := exec.Command("sudo", "umount", USBMountPoint).CombinedOutput(); err != nil {
 		logErrorf("format USB: umount failed: %v: %s", err, out)
+		notice("FORMAT FAILED - SEE LOG")
 		return
+	}
+	// remount puts the stick back after an abort past the umount: those
+	// paths used to return with it unmounted, so it vanished from the unit
+	// until it was replugged.
+	remount := func(why string) {
+		if out, err := exec.Command("sudo", "mount", device, USBMountPoint).CombinedOutput(); err != nil {
+			logErrorf("format USB: remount after %s failed: %v: %s", why, err, out)
+		}
 	}
 	// Re-verify AFTER umount: a pull/reinsert in that window can hand the
 	// /dev name to a different stick, and mkfs on the stale path would wipe
@@ -4506,8 +4529,11 @@ func formatUSB() {
 	// mountpoint just unmounted - every format aborted here, leaving the
 	// stick unmounted and unformatted. The kernel's diskseq changes for
 	// every newly attached disk, so it tells "same stick" from "same name".
+	// No remount here: whatever now answers to the name is not the stick
+	// the operator confirmed.
 	if !usbStillSameDevice(device, identity) {
 		logErrorf("format USB: device changed during umount (was %s), aborting", device)
+		notice("FORMAT FAILED - SEE LOG")
 		return
 	}
 	// Re-check the transport-busy guard from the confirm screen: a take,
@@ -4517,7 +4543,8 @@ func formatUSB() {
 	// empty mountpoint on the SD card.
 	if formatBusyNow() {
 		logErrorf("format USB: transport busy since confirm, aborting (stop first)")
-		showSysNotice("BUSY - STOP FIRST")
+		remount("busy abort")
+		notice("BUSY - STOP FIRST")
 		return
 	}
 	formatted := "exFAT"
@@ -4525,11 +4552,15 @@ func formatUSB() {
 		logWarnf("format USB: mkfs.exfat failed (%v: %s) - falling back to FAT32", err, out)
 		if out, err := exec.Command("sudo", "mkfs.vfat", "-F", "32", device).CombinedOutput(); err != nil {
 			logErrorf("format USB: mkfs failed: %v: %s", err, out)
+			// The old filesystem usually survives a mkfs that failed to
+			// start; put it back rather than leave the stick unmounted.
+			remount("failed mkfs")
+			notice("FORMAT FAILED - SEE LOG")
 			return
 		}
 		formatted = "FAT32"
 	}
-	time.Sleep(2 * time.Second)
+	time.Sleep(formatSettleDelay)
 
 	// Remount so the stick is usable (and correctly detected as mounted)
 	// again - previously this never remounted, yet detectUSB only checked
@@ -4541,10 +4572,22 @@ func formatUSB() {
 	}
 	if out, err := exec.Command("sudo", "mount", device, USBMountPoint).CombinedOutput(); err != nil {
 		logErrorf("format USB: remount failed: %v: %s", err, out)
+		notice("USB NOT MOUNTED - SEE LOG")
 		return
 	}
 	logInfof("USB drive formatted (%s) and remounted", formatted)
+	if formatted == "FAT32" {
+		// FAT32 caps files at 4 GiB, which a take crosses in minutes at
+		// high channel counts: those copies will fail. Say so now.
+		notice("USB FAT32 - 4GB FILE LIMIT")
+	} else {
+		notice("USB FORMATTED")
+	}
 }
+
+// formatSettleDelay lets the kernel settle the new filesystem before the
+// remount (a var so tests need not wait it out).
+var formatSettleDelay = 2 * time.Second
 
 // formatBusyNow reports whether a take, playback or copy is currently active.
 // formatUSB calls it on the worker just before mkfs (it takes the mutex
@@ -4559,8 +4602,12 @@ func formatBusyNow() bool {
 // formatUSB previously hardcoded /dev/sda1, which would format the wrong
 // disk (or even a boot/root drive) on any system where the USB stick isn't
 // enumerated as the first device.
+// procMountsPath is the mount table usbDevicePath reads; a var so tests can
+// describe a mounted fake stick.
+var procMountsPath = "/proc/mounts"
+
 func usbDevicePath() (string, error) {
-	data, err := os.ReadFile("/proc/mounts")
+	data, err := os.ReadFile(procMountsPath)
 	if err != nil {
 		return "", err
 	}
