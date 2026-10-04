@@ -97,7 +97,7 @@ Playback path:
 
 ### Playback
 
-- Target: plays out through Inferno ALSA (pause writes silence to inferno TX so the playhead holds without gaps or SIGSTOP choreography). The app holds the `inferno` device persistently (`txholder.go`: TX-only, own NAME/PROCESS_ID/ALT_PORT), pumping ffmpeg-decoded s32le through it; local ALSA (`default`) remains the fallback where no inferno device exists (dev/sim). Sample rate/channel mismatches are refused with a log + UI error; a present-but-clockless holder refuses inferno playback with a notice instead of misrouting locally
+- Target: plays out through Inferno ALSA (pause writes silence to inferno TX so the playhead holds without gaps or SIGSTOP choreography). Bit-perfect end to end: a 32-ch take recorded on the unit and played back reaches a second Pi sample-identical (`test/interop/e2e_bitperfect.py`). Takes go out undithered (`INFERNO_TX_SOURCE_BIT_DEPTH=24`), an idle feeder keeps the transmitter fed with silence between playbacks (owner decision 2026-10-04: transmit silence while idle) so playback never starts with an underrun, and the pump never blocks on the app mutex. The app holds the `inferno` device persistently (`txholder.go`: TX-only, own NAME/PROCESS_ID/ALT_PORT), pumping ffmpeg-decoded s32le through it; local ALSA (`default`) remains the fallback where no inferno device exists (dev/sim). Sample rate/channel mismatches are refused with a log + UI error; a present-but-clockless holder refuses inferno playback with a notice instead of misrouting locally
 - TX behaviour (owner decision): **nothing is sent while the unit is not playing**, and **TX goes silent at pause, end and stop**. A fresh holder sends no media. Pause writes silence. End and stop overwrite the plugin's whole ring with silence, because the plugin keeps re-sending its ring when nothing writes. Current limit: after the first playback TX keeps streaming that silence rather than nothing, because stopping the stream goes through the inferno plugin's deadlock-prone stop path (INFERNO-UPSTREAM.md U5); inferno also dithers silence to ±1 LSB (U3)
 - Encoder: click = play/pause, rotate while paused = 5 s scrub, hold = exit
 - Progress bar + elapsed/total with [PAUSED] marker
@@ -196,11 +196,11 @@ Full install record, including the clock service and the kernel limits, is in
 # 1. SPI must be enabled or the app exits at startup (display init opens SPI)
 sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' /boot/firmware/config.txt && sudo reboot
 
-# 2. Inferno (pinned to fork dev b837e3d; note the submodules, and that the binary the app
+# 2. Inferno (pinned to fork dev 382dc90; note the submodules, and that the binary the app
 #    runs is target/release/inferno2pipe, not "inferno")
 sudo apt install -y build-essential pkg-config libasound2-dev libudev-dev
 git clone https://github.com/DrEVILish/inferno inferno
-cd inferno && git checkout b837e3d && git submodule update --init --recursive
+cd inferno && git checkout 382dc90 && git submodule update --init --recursive
 cargo build --release && cd ..
 
 # 3. A clock source must be exporting the usrvclock overlay, or Inferno starts
@@ -295,7 +295,7 @@ test/gotest.sh       # vet + the full suite under -race (the standard check)
 
 Design debt worth flagging here:
 
-1. **Playback via Inferno/AoIP** — done for TX (persistent holder + pump, `txholder.go`), local ALSA kept as fallback. Interim: two inferno devices on the wire (`<name>` RX-only via inferno2pipe, `<name>-TX` TX-only via the holder) until the RX side moves in-process and unifies them. Measured against a second host (REPORT.md): audible and visible in both modes, but the pump stalls on the app mutex while `render()` holds it, so the transmitter restarts many times a minute (F2, open); receivers time out while TX is idle, so the first seconds of a playback can be lost at a subscriber (F3, a consequence of the no-TX-while-idle decision); inferno dithers every 24-bit transmit (F4/U3). Stale-audio replay after a take is fixed.
+1. **Playback via Inferno/AoIP** — done and bit-perfect (two-Pi test, 32 ch, 2026-10-04: every sample of a 21 s take identical at the second Pi). Single-instance mode (`PI9696_INPROC_RX`) is one inferno device with equal RX and TX; the default two-instance layout still shows `<name>` (RX) and `<name>-TX`. Fixed on the way: the pump no longer stalls on the app mutex (F2), the transmitter is fed with silence while idle so receivers stay connected and playback starts without an underrun (F3; replaces the no-TX-while-idle decision), takes are sent undithered (F4/U3), and an underrun that does happen no longer drops the receivers' flows (fork `382dc90`: a forced 400 ms stall now costs a receiver ~1.2 s instead of ~6 s). Local ALSA kept as fallback.
 2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
 3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
 4. **FIFO handoff window** — fixed (`7ca4d12`): the monitor's read used to race the new recorder for the first frames (measured: 50 ms missing 50 ms into a take, REPORT.md F6). The recorder now opens the FIFO only after the monitor (SIGKILLed - a graceful exit takes ~300 ms, longer than the FIFO holds at 128 ch) has exited.
@@ -305,7 +305,7 @@ Design debt worth flagging here:
 8. **Sim config path** — `PI9696_SIM=1` writes to `/tmp/pi9696-config.json`; real Pi writes to `/etc/pi9696/config.json`. Resolved once in `init()`: set `PI9696_CONFIG` before startup to override (tests reassign `ConfigPath` directly).
 9. **FIFO buffer needs `CAP_SYS_RESOURCE`** — the 4 MB raw FIFO needs the capability to grow; a `CapabilityBoundingSet` on the unit silently costs it, and the recorder keeps working at the 64 KB default. See DEPLOYMENT.md.
 10. **Stuck takes are always stoppable** — `stopRecording`/`stopMonitor` escalate from SIGTERM to SIGKILL after 10 s (`ffmpegStopGrace`): an ffmpeg blocked reading an empty FIFO never acts on SIGTERM, which used to wedge the transport. The grace is long enough for ffmpeg to finalize a partial WAV on slow storage.
-11. **Above 16 channels relies on the U13 fix** — stock inferno pages its receive-channel list 32 at a time and pads short pages, so netaudio cannot read or subscribe a receiver beyond 16 channels (INFERNO-UPSTREAM.md U13). The fix is on the fork's `dev` (`dbd9570`, in the pinned `b837e3d`); a build without it shows PI9696 as TX 0 / RX 0 in netaudio, which is what happened between the #49 deploy and 2026-10-04 (the fix had only been a patch file).
+11. **Above 16 channels relies on the U13 fix** — stock inferno pages its receive-channel list 32 at a time and pads short pages, so netaudio cannot read or subscribe a receiver beyond 16 channels (INFERNO-UPSTREAM.md U13). The fix is on the fork's `dev` (`dbd9570`, in the pinned `382dc90`); a build without it shows PI9696 as TX 0 / RX 0 in netaudio, which is what happened between the #49 deploy and 2026-10-04 (the fix had only been a patch file).
 
 ---
 

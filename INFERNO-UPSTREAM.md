@@ -1,7 +1,7 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `b837e3d` on the `DrEVILish/inferno` fork's `dev`)
+AoIP stack, pinned at `382dc90` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
@@ -15,7 +15,7 @@ and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
 |---|---|---|---|---|
 | U1 | inferno ARC | Bulk unsubscribe (`0x3014`) only removes the first channel | netaudio bulk remove leaves channels subscribed | **fixed in the fork** (`96811a3`) |
 | U2 | inferno info server | Sample-rate / encoding probes (`0x0081`/`0x0083`) unanswered | rate not visible in netaudio (Q4 requirement) | **fixed in the fork** (`b512c60`) |
-| U3 | inferno TX | TPDF dither always applied to 16/24-bit output | playback not bit-transparent; "silence" is ±1 LSB noise | change wanted |
+| U3 | inferno TX | TPDF dither always applied to 16/24-bit output | playback not bit-transparent; "silence" is ±1 LSB noise | **resolved**: upstream's `TX_SOURCE_BIT_DEPTH` (in the fork since `ef39a28`); pi9696 sets it to 24 (two-Pi test bit-perfect) |
 | U4 | inferno settings | Encoding hard-coded to 24-bit | no PCM32 (undithered) option | change wanted |
 | U5 | ALSA plugin | `plugin_stop` blocking-sends under its own mutex | `snd_pcm_drop` can hang the app forever | change wanted (worked around) |
 | U6 | ALSA plugin | Ring not cleared on underrun; replayed while nothing writes | stale-audio loop after playback (worked around) | change wanted |
@@ -30,6 +30,7 @@ and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
 | U15 | inferno (all servers) | Malformed control packets and adverts panic server tasks (upstream issue teodly/inferno#49) | one packet from any LAN host stops routing, flows or TX until restart | **fixed in the fork**, branch `fix/issue-49-malformed-packets` |
 | U16 | ALSA plugin | A panic in any plugin callback aborts the host process; one is reachable by querying the PCM before prepare (teodly/inferno#8) | the app hosts the plugin in-process (`PI9696_INPROC_RX`), so a plugin panic kills the recorder | **fixed in the fork** (`20d639a`, `2af5592`) |
 | U17 | inferno RX | Stale audio after an RX channel is disconnected: clicks from the previous ring cycle, and sometimes one channel replaying its last 0.34 s until the stream stops (teodly/inferno#41) | old audio lands in a take after a source is unrouted | **fixed in the fork** (`d6f04ab`, `66d67fa`, `d2c936f`; test `b837e3d`) |
+| U18 | inferno TX | A transmitter restart (the ALSA plugin's underrun recovery) dropped every TX flow | each underrun cut every receiver off for ~5-6 s until it re-requested | **fixed in the fork** (`382dc90`) |
 
 ---
 
@@ -373,4 +374,27 @@ itself unchanged (same length, no gaps). All `inferno_aoip` tests and
 `loopback_trx` pass. Deployed on the test unit: netaudio lists TX 32 / RX 32,
 all 64 channels and 48 kHz, and a 3-channel subscribe / bulk remove is
 verified.
+
+## U18 — A transmitter restart dropped every flow
+
+**Found** by pi9696's two-Pi `test/interop/e2e_bitperfect.py` (record on the
+unit, play back, record the playback on a second Pi, compare bit for bit):
+the second Pi heard 0.6 s of a 21 s playback. The ALSA plugin recovers from
+a playback underrun by stopping and restarting the transmitter
+(`plugin_pointer` -> EPIPE -> prepare -> StopTransmitter + StartTransmitter;
+its own FIXME calls the break unacceptable), and `stop_transmitter` dropped
+the `FlowsTransmitter` with every flow. Receivers then waited out their
+keepalive timeout and re-requested.
+
+**Fixed** by `382dc90`: the shutdown future snapshots the live unicast flows
+(index, cookie, destination, layout) and `transmit()` restores them into the
+new transmitter with the same handles, so receivers keep streaming.
+Measured with the test's `--stall-at` mode (a 400 ms freeze of the app
+forcing an underrun): before, longest gap 6.07 s; after, "transmitter
+restarted with 4 flow(s) kept" and a 1.18 s gap, every received frame exact.
+
+The underruns themselves came from pi9696 (fixed there: idle feeder, TryLock
+pump, gapless hand-over) and the dither from not setting
+`TX_SOURCE_BIT_DEPTH` (U3). With all fixes the test is bit-perfect: every
+one of 32,768,000 samples (32 ch x 21.3 s) identical at the second Pi.
 

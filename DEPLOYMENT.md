@@ -67,18 +67,19 @@ submodules, and they must be initialised too).
 cd /opt/pi9696
 git clone https://github.com/DrEVILish/inferno inferno
 cd inferno
-git checkout b837e3d                     # fork dev: v0.5.4 + 13 dev commits + #49 + U13/U1/U2 + #8 + #41 fixes
+git checkout 382dc90                     # fork dev: v0.5.4 + 13 dev commits + #49 + U13/U1/U2 + #8 + #41 + TX-restart fixes
 git submodule update --init --recursive  # searchfire, alsa-sys-all, usrvclock-rs
 cargo build --release                    # ~7 min on a Pi 4
 ```
 
 ### Why this commit
 
-The fork's `dev` at `b837e3d` is `v0.5.4` (`04c0efe`), the 13 later `dev`
+The fork's `dev` at `382dc90` is `v0.5.4` (`04c0efe`), the 13 later `dev`
 commits (tests, dependency bumps, configurable TX dither with the old 32-bit
 default), the malformed-packet fixes (INFERNO-UPSTREAM.md U15), the
 channel-list paging, bulk unsubscribe and rate-probe fixes (U13, U1, U2), the
-plugin panic guard (U16) and the stale-audio-after-disconnect fixes (U17).
+plugin panic guard (U16), the stale-audio-after-disconnect fixes (U17) and
+TX flows kept across a transmitter restart (U18).
 `inferno2pipe` is unchanged since `v0.5.4`, so it keeps the
 `-c <channels> -o <path>` + `INFERNO_SAMPLE_RATE`/`INFERNO_NAME` contract the
 app depends on. (An earlier note here said `dev`'s `inferno2pipe` took a
@@ -498,12 +499,13 @@ Nothing outstanding for `ftl-themes`.
 - **Playback goes out through Inferno when the holder is ready**, local ALSA
   otherwise (see README). The app holds a TX-only instance (`<name>-TX`,
   `PROCESS_ID=1`, `ALT_PORT=10300`) alongside inferno2pipe's default-port RX
-  instance - the same separation inferno-loopback.sh proves. Measured with a
-  second host (REPORT.md): audible at a subscriber and visible in both
-  modes, but the shipped build underruns and restarts the transmitter many
-  times per minute (F2), sends no media while idle and loses the start of
-  each playback (F3), and dithers 24-bit output (F4). Behaviour past 2ch is
-  still unmeasured.
+  instance - the same separation inferno-loopback.sh proves (single-instance
+  mode, `PI9696_INPROC_RX`, uses one paired device instead). Measured with a
+  second Pi on 2026-10-04 (`test/interop/e2e_bitperfect.py`, 32 ch, shared
+  PTP clock): playback is bit-perfect end to end. The earlier faults are
+  fixed: pump stalls (F2), no media while idle / lost playback start (F3;
+  the app now transmits silence while idle), dithered 24-bit output (F4),
+  and a transmitter restart dropping every receiver's flow (fork U18).
   Port reservations on one host: inferno2pipe defaults, app TX 10300-10303,
   loopback.sh 10100-10102/10200-10202 - never run the loopback while the app
   is up (it also runs `pkill -x inferno2pipe`, which kills the app's
