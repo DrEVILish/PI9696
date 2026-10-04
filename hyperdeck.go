@@ -18,6 +18,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -126,18 +127,25 @@ const hyperdeckMaxSessions = 8
 // hyperdeckSessions is the live session count, guarded by hyperdeckMu.
 var hyperdeckSessions int
 
+// hyperdeckAcceptRetry paces retries after a failed Accept (a var so tests
+// need not wait it out).
+var hyperdeckAcceptRetry = 100 * time.Millisecond
+
 func hyperdeckAcceptLoop(l net.Listener) {
 	for {
 		c, err := l.Accept()
 		if err != nil {
-			// A transient accept failure (fd pressure, brief resource
-			// shortage) must not kill the server permanently; only a
-			// closed listener ends the loop.
-			if ne, ok := err.(net.Error); ok && ne.Timeout() {
-				time.Sleep(100 * time.Millisecond)
-				continue
+			// Only a closed listener ends the loop. Any other failure -
+			// EMFILE/ENFILE under fd pressure, ECONNABORTED - is retried:
+			// those are not Timeout() errors, and returning on them left
+			// the listener registered (so the toggle believed the server
+			// was up and could not restart it) while nobody accepted.
+			if errors.Is(err, net.ErrClosed) {
+				return
 			}
-			return // listener closed
+			logDebugf("hyperdeck: accept: %v", err)
+			time.Sleep(hyperdeckAcceptRetry)
+			continue
 		}
 		hyperdeckMu.Lock()
 		if hyperdeckListener != l {

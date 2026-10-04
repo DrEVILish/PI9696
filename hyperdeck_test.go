@@ -461,3 +461,52 @@ func TestHyperdeckDisableDropsSessions(t *testing.T) {
 		return // EOF/reset: dropped
 	}
 }
+
+// flakyListener fails Accept with a non-timeout error a few times before
+// delegating, like EMFILE under fd pressure.
+type flakyListener struct {
+	net.Listener
+	fails atomic.Int32
+}
+
+func (l *flakyListener) Accept() (net.Conn, error) {
+	if l.fails.Add(-1) >= 0 {
+		return nil, errors.New("accept: too many open files")
+	}
+	return l.Listener.Accept()
+}
+
+// A non-timeout Accept error used to end the loop for good while the
+// listener stayed registered, so nobody served and the toggle could not
+// revive it. It must be retried.
+func TestHyperdeckAcceptSurvivesErrors(t *testing.T) {
+	origRetry := hyperdeckAcceptRetry
+	hyperdeckAcceptRetry = time.Millisecond
+	t.Cleanup(func() { hyperdeckAcceptRetry = origRetry })
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &flakyListener{Listener: inner}
+	l.fails.Store(3)
+	hyperdeckMu.Lock()
+	if hyperdeckListener != nil {
+		hyperdeckMu.Unlock()
+		t.Fatal("a HyperDeck server is already running")
+	}
+	hyperdeckListener = l
+	hyperdeckMu.Unlock()
+	t.Cleanup(stopHyperdeckServer)
+	go hyperdeckAcceptLoop(l)
+
+	c, err := net.DialTimeout("tcp", inner.Addr().String(), 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	line, err := bufio.NewReader(c).ReadString('\n')
+	if err != nil || !strings.HasPrefix(line, "500 connection info") {
+		t.Fatalf("no greeting after transient accept errors: %q, %v", line, err)
+	}
+}
