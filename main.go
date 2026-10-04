@@ -464,9 +464,13 @@ func importConfigFrom(dir string) error {
 		menuTimeoutIdx = c.MenuTimeoutIdx
 	}
 
-	if c.WifiPassword != "" && c.WifiSSID != "" && len(c.WifiPassword) >= 8 && len(c.WifiSSID) <= 32 {
-		wifiSSID, wifiPassword, wifiEnabled = c.WifiSSID, c.WifiPassword, c.WifiEnabled
-		go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
+	if c.WifiPassword != "" {
+		if msg := validateWifiCredentials(c.WifiSSID, c.WifiPassword); msg != "" {
+			logWarnf("config import: Wi-Fi settings skipped: %s", msg)
+		} else {
+			wifiSSID, wifiPassword, wifiEnabled = c.WifiSSID, c.WifiPassword, c.WifiEnabled
+			go applyWifiConfig(wifiSSID, wifiPassword, wifiEnabled)
+		}
 	}
 
 	// Export and the boot-time load both carry these two; import used to
@@ -865,6 +869,32 @@ func terminateFfmpeg(p *os.Process, exited <-chan struct{}, what string) {
 
 // sanitizeHostapd strips characters hostapd (or its parsing) would treat
 // specially; SSIDs are otherwise free-form UTF-8.
+// validateWifiCredentials checks an access-point SSID and WPA2 passphrase,
+// returning the operator-facing reason they are unusable, or "". Shared by
+// the WebUI save and config import: import used to check only the lengths
+// it happened to remember, so a hand-edited profile could carry a 64+
+// character passphrase (hostapd refuses it) or quotes and line breaks that
+// sanitizeHostapd silently strips - broadcasting a different SSID than the
+// stored config and the Wi-Fi QR code advertise.
+func validateWifiCredentials(ssid, pass string) string {
+	switch {
+	case ssid == "":
+		return "SSID required"
+	case len(pass) < 8 || len(pass) > 63:
+		return "Password must be 8-63 characters"
+	case strings.ContainsAny(pass, "\r\n\"\\"):
+		return "Password must not contain quotes, backslashes or line breaks"
+	case len(ssid) > 32:
+		return "SSID must be at most 32 characters"
+	// hostapd strips quotes/backslashes/line-breaks while the QR escapes
+	// them, so such an SSID would broadcast differently than the QR
+	// advertises - reject up front instead of joining nothing.
+	case strings.ContainsAny(ssid, "\r\n\"\\"):
+		return "SSID must not contain quotes, backslashes or line breaks"
+	}
+	return ""
+}
+
 func sanitizeHostapd(s string) string {
 	var b strings.Builder
 	for _, r := range s {

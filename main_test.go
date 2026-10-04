@@ -6885,3 +6885,58 @@ func TestConfigImportRefusedWhileBusy(t *testing.T) {
 		t.Fatalf("refused import still changed channels %d -> %d", origCh, got)
 	}
 }
+
+func TestValidateWifiCredentials(t *testing.T) {
+	long := strings.Repeat("p", 64)
+	for _, tc := range []struct{ ssid, pass, want string }{
+		{"PI9696", "password1", ""},
+		{"", "password1", "SSID required"},
+		{"PI9696", "short", "Password must be 8-63 characters"},
+		{"PI9696", long, "Password must be 8-63 characters"},
+		{"PI9696", "pass\"word1", "Password must not contain quotes, backslashes or line breaks"},
+		{strings.Repeat("s", 33), "password1", "SSID must be at most 32 characters"},
+		{"PI\n9696", "password1", "SSID must not contain quotes, backslashes or line breaks"},
+	} {
+		if got := validateWifiCredentials(tc.ssid, tc.pass); got != tc.want {
+			t.Errorf("(%q, %q) = %q, want %q", tc.ssid, tc.pass, got, tc.want)
+		}
+	}
+}
+
+// Import used to accept a 64+ character passphrase (hostapd refuses it)
+// and SSIDs that sanitizeHostapd silently alters; such Wi-Fi blocks are
+// now skipped, leaving the unit's own settings.
+func TestConfigImportSkipsInvalidWifi(t *testing.T) {
+	initTestHardware(t)
+	dir := t.TempDir()
+	mutex.Lock()
+	defer mutex.Unlock()
+	origSSID, origPass, origOn := wifiSSID, wifiPassword, wifiEnabled
+	defer func() { wifiSSID, wifiPassword, wifiEnabled = origSSID, origPass, origOn }()
+	wifiSSID, wifiPassword, wifiEnabled = "Unit", "unitpass1", false
+	if err := exportConfigTo(dir); err != nil {
+		t.Fatal(err)
+	}
+	// Start each bad profile from the unit's own export so every other
+	// setting imports unchanged and nothing leaks into later tests.
+	own, err := os.ReadFile(filepath.Join(dir, configExportName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []struct{ ssid, pass string }{
+		{"Imported", strings.Repeat("p", 64)},
+		{"Imp\"orted", "goodpass1"},
+	} {
+		var bad PersistedConfig
+		json.Unmarshal(own, &bad)
+		bad.WifiSSID, bad.WifiPassword, bad.WifiEnabled = w.ssid, w.pass, true
+		data, _ := json.Marshal(&bad)
+		os.WriteFile(filepath.Join(dir, configExportName), data, 0644)
+		if err := importConfigFrom(dir); err != nil {
+			t.Fatal(err)
+		}
+		if wifiSSID != "Unit" || wifiPassword != "unitpass1" || wifiEnabled {
+			t.Fatalf("invalid Wi-Fi block %+v was adopted: %q/%q/%v", bad, wifiSSID, wifiPassword, wifiEnabled)
+		}
+	}
+}

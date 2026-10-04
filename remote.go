@@ -1855,42 +1855,11 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 	if enabled {
 		// Only a save that turns the AP on needs credentials; switching it
 		// off must work even when the form fields were cleared.
-		if ssid == "" {
+		if msg := validateWifiCredentials(ssid, pass); msg != "" {
 			mutex.Unlock()
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, `<span class="err">SSID required</span>`)
-			return
-		}
-		if len(pass) < 8 || len(pass) > 63 {
-			mutex.Unlock()
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, `<span class="err">Password must be 8-63 characters</span>`)
-			return
-		}
-		if strings.ContainsAny(pass, "\r\n\"\\") {
-			mutex.Unlock()
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, `<span class="err">Password must not contain quotes, backslashes or line breaks</span>`)
-			return
-		}
-		if len(ssid) > 32 {
-			mutex.Unlock()
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, `<span class="err">SSID must be at most 32 characters</span>`)
-			return
-		}
-		// hostapd strips quotes/backslashes/line-breaks while the QR
-		// escapes them, so such an SSID would broadcast differently than
-		// the QR advertises - reject up front instead of joining nothing.
-		if strings.ContainsAny(ssid, "\r\n\"\\") {
-			mutex.Unlock()
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusBadRequest)
-			fmt.Fprint(w, `<span class="err">SSID must not contain quotes, backslashes or line breaks</span>`)
+			fmt.Fprintf(w, `<span class="err">%s</span>`, html.EscapeString(msg))
 			return
 		}
 		wifiSSID = ssid
