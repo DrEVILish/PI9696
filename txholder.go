@@ -27,6 +27,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"pi9696/alsapcm"
 )
@@ -229,17 +230,15 @@ func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done 
 			time.Sleep(2 * time.Millisecond)
 			continue
 		}
-		total := n * channels * 4
-		for i := 0; i < n*channels; i++ {
-			binary.LittleEndian.PutUint32(buf[i*4:], uint32(frames[i]))
-		}
+		out := framesAsS32LE(frames[:n*channels], buf)
+		total := len(out)
 		for off := 0; off < total; {
 			select {
 			case <-quit:
 				return
 			default:
 			}
-			w, werr := syscall.Write(fd, buf[off:total])
+			w, werr := syscall.Write(fd, out[off:total])
 			if werr != nil {
 				if werr == syscall.EAGAIN {
 					time.Sleep(2 * time.Millisecond)
@@ -256,6 +255,28 @@ func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done 
 			off += w
 		}
 	}
+}
+
+// hostLittleEndian is true on every target the unit runs (arm64, amd64).
+var hostLittleEndian = binary.NativeEndian.Uint16([]byte{1, 0}) == 1
+
+// framesAsS32LE returns frames as interleaved s32le bytes, the FIFO format.
+// On a little-endian host that is the frames' own memory, so no per-sample
+// conversion runs: at 128ch/48kHz the old PutUint32 loop touched 6M samples
+// a second on the Pi for nothing. Elsewhere it converts into scratch, which
+// must hold len(frames)*4 bytes. The result aliases frames or scratch and is
+// valid until either is reused.
+func framesAsS32LE(frames []int32, scratch []byte) []byte {
+	if len(frames) == 0 {
+		return nil
+	}
+	if hostLittleEndian {
+		return unsafe.Slice((*byte)(unsafe.Pointer(&frames[0])), len(frames)*4)
+	}
+	for i, v := range frames {
+		binary.LittleEndian.PutUint32(scratch[i*4:], uint32(v))
+	}
+	return scratch[:len(frames)*4]
 }
 
 // captureXrunReport returns a log line when the device's overrun count has

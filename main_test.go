@@ -7652,3 +7652,26 @@ func TestUSBSizeUnits(t *testing.T) {
 		}
 	}
 }
+
+// framesAsS32LE must produce exactly the bytes the per-sample conversion
+// did (interleaved little-endian s32), on whichever path the host takes.
+func TestFramesAsS32LE(t *testing.T) {
+	frames := []int32{0, 1, -1, 0x12345678, -0x7fffffff - 1, 0x7fffffff}
+	want := make([]byte, len(frames)*4)
+	for i, v := range frames {
+		binary.LittleEndian.PutUint32(want[i*4:], uint32(v))
+	}
+	scratch := make([]byte, len(frames)*4)
+	if got := framesAsS32LE(frames, scratch); !bytes.Equal(got, want) {
+		t.Fatalf("native path: % x, want % x", got, want)
+	}
+	orig := hostLittleEndian
+	hostLittleEndian = false
+	defer func() { hostLittleEndian = orig }()
+	if got := framesAsS32LE(frames, scratch); !bytes.Equal(got, want) {
+		t.Fatalf("converting path: % x, want % x", got, want)
+	}
+	if framesAsS32LE(nil, scratch) != nil {
+		t.Fatal("empty input must give no bytes")
+	}
+}
