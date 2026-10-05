@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -165,4 +167,39 @@ func TestInfernoFifoNotInheritedByChildren(t *testing.T) {
 	if strings.Contains(string(out), filepath.Base(path)) {
 		t.Fatalf("a child inherited the FIFO:\n%s", out)
 	}
+}
+
+// The meters lagged the audio by seconds: ffmpeg buffered the metadata
+// lines, and the reader published only every 32 values. The filter must
+// print unbuffered, and each window must reach the meters as soon as the
+// next one starts - before the stream ends.
+func TestMeterWindowsPublishImmediately(t *testing.T) {
+	if !strings.Contains(meterFilterChain(48000), "ametadata=print:file=-:direct=1") {
+		t.Fatalf("meter filter prints buffered: %s", meterFilterChain(48000))
+	}
+	mutex.Lock()
+	gen := meterGen
+	origPeak, origCh := meterPeakDB, meterChannelPeak
+	meterChannelPeak = []float64{-100, -100}
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		meterPeakDB, meterChannelPeak = origPeak, origCh
+		mutex.Unlock()
+	})
+	pr, pw := io.Pipe()
+	done := make(chan struct{})
+	go func() { meterReader(pr, gen); close(done) }()
+	fmt.Fprint(pw, "frame:0    pts:0       pts_time:0\n"+
+		"lavfi.astats.1.Peak_level=-12.5\n"+
+		"lavfi.astats.2.Peak_level=-14.0\n"+
+		"lavfi.astats.Overall.Peak_level=-12.5\n"+
+		"frame:1    pts:4800    pts_time:0.1\n")
+	waitFor(t, time.Second, "the first window on the meters", func() bool {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return meterPeakDB == -12.5 && meterChannelPeak[1] == -14.0
+	})
+	pw.Close()
+	<-done
 }

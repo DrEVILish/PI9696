@@ -3286,7 +3286,10 @@ func startRecording() {
 func meterFilterChain(sampleRate int) string {
 	return fmt.Sprintf("asetnsamples=n=%d:pad=0,"+
 		"astats=metadata=1:reset=1:measure_perchannel=Peak_level+RMS_level:measure_overall=Peak_level+RMS_level,"+
-		"ametadata=print:file=-", sampleRate/10)
+		// direct=1: unbuffered. Buffered, ffmpeg held ~32KB of these lines
+		// before writing any - seconds of audio at low channel counts, so
+		// the meters lagged the input and looked frozen.
+		"ametadata=print:file=-:direct=1", sampleRate/10)
 }
 
 var meterChannelLineRe = regexp.MustCompile(`^lavfi\.astats\.(\d+)\.(Peak|RMS)_level=(.+)$`)
@@ -3359,6 +3362,10 @@ func meterReader(stdout io.Reader, gen uint64) {
 	for scanner.Scan() {
 		line := scanner.Text()
 		switch {
+		case strings.HasPrefix(line, "frame:"):
+			// A new window starts: publish the previous one now rather
+			// than when the batch fills (5 windows at 2 channels).
+			flush()
 		case strings.HasPrefix(line, "lavfi.astats.Overall.Peak_level="):
 			if v, err := strconv.ParseFloat(strings.TrimPrefix(line, "lavfi.astats.Overall.Peak_level="), 64); err == nil {
 				pending[n] = update{v: sanitizeMeterDB(v)}
