@@ -3001,10 +3001,14 @@ function applyMeter(m) {
   ensureChannels(channels.length);
   channels.forEach(function(c, idx) {
     var i = idx + 1;
-    var fill = chMeters.querySelector('.vu-fill[data-i="' + i + '"]');
-    var peak = chMeters.querySelector('.vu-peak[data-i="' + i + '"]');
-    if (fill) fill.style.setProperty('--meter-level', vuPct(c.rmsDB) + '%');
-    if (peak) peak.style.setProperty('--meter-peak', vuPct(c.peakDB) + '%');
+    // ftl-themes' .meter contract: level and peak are custom properties
+    // on the .meter itself, read by its .meter-fill and .meter-peak.
+    var fill = chMeters.querySelector('.meter-fill[data-i="' + i + '"]');
+    var track = fill && fill.parentNode;
+    if (track) {
+      track.style.setProperty('--meter-level', vuPct(c.rmsDB) + '%');
+      track.style.setProperty('--meter-peak', vuPct(c.peakDB) + '%');
+    }
   });
 
   // Meter footer badge: stereo/dual-mono indicator

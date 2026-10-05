@@ -690,3 +690,32 @@ func TestDashboardDisablesHtmxSettle(t *testing.T) {
 		t.Fatal("htmx-config meta must come before htmax.min.js, which reads it at load")
 	}
 }
+
+// The WebUI level meters were dead after the ftl-themes v4 migration: the
+// channel strips were built with .meter-fill/.meter-peak but the update
+// code still queried .vu-fill/.vu-peak, found nothing and never moved a
+// bar. Every class the update code looks up must be one the strips carry,
+// and the level must be set where ftl-themes' .meter contract reads it.
+func TestDashboardMeterUpdateMatchesStripMarkup(t *testing.T) {
+	mux := newRemoteMux()
+	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
+	start := strings.Index(body, "function ensureChannels(")
+	end := strings.Index(body, "if (meterBadge)") // html/template strips JS comments
+	if start < 0 || end < start {
+		t.Fatal("meter JS not found in the dashboard")
+	}
+	js := body[start:end]
+	for _, m := range regexp.MustCompile(`chMeters\.querySelector\('\.([a-z-]+)\[`).FindAllStringSubmatch(js, -1) {
+		// Once in the query, at least once more in the strip markup
+		// (which html/template JS-escapes, so match the bare class name).
+		if strings.Count(js, m[1]) < 2 {
+			t.Errorf("update code queries .%s, which the channel strips never carry", m[1])
+		}
+	}
+	if strings.Contains(js, "vu-fill") || strings.Contains(js, "vu-peak") {
+		t.Error("meter JS still uses the pre-v4 .vu-fill/.vu-peak classes")
+	}
+	if !strings.Contains(js, "track.style.setProperty('--meter-level'") {
+		t.Error("level not set on the .meter element, where ftl-themes reads --meter-level")
+	}
+}
