@@ -1694,8 +1694,8 @@ func TestPlaybackSeekAndPauseToggle(t *testing.T) {
 	}
 	mutex.Unlock()
 
-	// Encoder click pauses.
-	onEncoderClick()
+	// The Play key pauses.
+	onButtonPress(hardware.PlayButton)
 	mutex.Lock()
 	if currentState != StatePaused {
 		t.Fatalf("expected StatePaused after click, got %v", currentState)
@@ -1732,8 +1732,8 @@ func TestPlaybackSeekAndPauseToggle(t *testing.T) {
 		t.Fatalf("expected position clamped to total (60s), got %v", clamped)
 	}
 
-	// Encoder click resumes.
-	onEncoderClick()
+	// The Play key resumes.
+	onButtonPress(hardware.PlayButton)
 	mutex.Lock()
 	if currentState != StatePlaying {
 		t.Fatalf("expected StatePlaying after resume click, got %v", currentState)
@@ -1769,7 +1769,7 @@ func TestStopWhilePausedAwakensStoppedFFmpeg(t *testing.T) {
 	mutex.Unlock()
 
 	onButtonPress(hardware.PlayButton)
-	onEncoderClick() // pause -> SIGSTOP
+	onButtonPress(hardware.PlayButton) // pause -> SIGSTOP
 
 	mutex.Lock()
 	pid := playbackCmd.Process.Pid
@@ -1806,7 +1806,7 @@ func TestSeekWhilePausedReapsOldFFmpeg(t *testing.T) {
 	mutex.Unlock()
 
 	onButtonPress(hardware.PlayButton)
-	onEncoderClick() // pause -> SIGSTOP
+	onButtonPress(hardware.PlayButton) // pause -> SIGSTOP
 
 	mutex.Lock()
 	oldPid := playbackCmd.Process.Pid
@@ -3299,7 +3299,7 @@ func TestSeekWithUnstartableFFmpegGoesIdle(t *testing.T) {
 	mutex.Unlock()
 
 	onButtonPress(hardware.PlayButton)
-	onEncoderClick() // pause
+	onButtonPress(hardware.PlayButton) // pause
 
 	// Hide every ffmpeg from PATH so the replacement Start fails.
 	t.Setenv("PATH", t.TempDir())

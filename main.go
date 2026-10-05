@@ -1562,11 +1562,11 @@ func onEncoderClick() {
 	case StateLogging:
 		handleLoggingClick()
 
-	case StatePlaying:
-		pausePlayback()
-
-	case StatePaused:
-		resumePlayback()
+	case StatePlaying, StatePaused:
+		// Owner decision: only the Play key (panel or WebUI) pauses and
+		// resumes. The encoder scrubs while paused, and a push used to
+		// toggle pause as well, so a press meant for the knob restarted
+		// or froze the take.
 
 	case StateConfirm:
 		handleConfirmClick()
