@@ -86,6 +86,9 @@ func applyUnifiedInfernoEnv(name string, rate, channels int) {
 	// Controllers show this as the device's Product Version (needs the
 	// fork's PRODUCT_VERSION, 2bf6974).
 	os.Setenv("INFERNO_PRODUCT_VERSION", appVersion)
+	// A controller's rename request is handed to the app here (see
+	// devicename.go; needs the fork's NAME_REQUEST_PATH, a67a337).
+	os.Setenv("INFERNO_NAME_REQUEST_PATH", infernoNameRequestPath)
 	// The plugin's logger defaults to debug, which floods the journal (it
 	// once rotated the WebUI access code away). It reads RUST_LOG once, at
 	// the first open; an explicit setting in the service env still wins.

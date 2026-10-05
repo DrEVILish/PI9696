@@ -1209,6 +1209,8 @@ func main() {
 	go peakHoldLoop()
 	go cpuUsageLoop()
 	go telemetryHistLoop()
+	prepareNameRequestPath()
+	go nameRequestLoop()
 	go telemetryWSLoop()
 	go mdnsLoop(shutdownCh)
 
