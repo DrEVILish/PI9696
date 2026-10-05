@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -186,8 +188,11 @@ func renameRecordingChannels(wav string, names map[int]string) error {
 
 // migrateInfernoState moves inferno's saved state into infernoStateDir the
 // first time the app pins it there: until then the plugin kept it under
-// the per-user state dir in a subdirectory named after its IP-derived
-// device id. The most recently written such directory wins.
+// the per-user state dir in a subdirectory named after its device id,
+// "0000" + the IPv4 address in hex + the process id ("0000"). The unit's
+// own directory is the one for one of this host's addresses; other ids
+// (a loopback test instance, an old address) are only a fallback, most
+// recently written first, and loopback ones never.
 func migrateInfernoState() {
 	if entries, err := os.ReadDir(infernoStateDir); err == nil && len(entries) > 0 {
 		return
@@ -200,22 +205,15 @@ func migrateInfernoState() {
 		}
 		base = filepath.Join(home, ".local", "state")
 	}
-	dirs, _ := filepath.Glob(filepath.Join(base, "inferno_aoip", "*"))
-	var newest string
-	var newestMod int64
-	for _, d := range dirs {
-		if fi, err := os.Stat(filepath.Join(d, "rx_subscriptions.toml")); err == nil && fi.ModTime().UnixNano() > newestMod {
-			newest, newestMod = d, fi.ModTime().UnixNano()
-		}
-	}
 	if err := os.MkdirAll(infernoStateDir, 0o755); err != nil {
 		logWarnf("inferno state: cannot create %s: %v", infernoStateDir, err)
 		return
 	}
-	if newest == "" {
+	src := pickInfernoStateDir(filepath.Join(base, "inferno_aoip"), hostIPv4s())
+	if src == "" {
 		return
 	}
-	files, _ := filepath.Glob(filepath.Join(newest, "*.toml"))
+	files, _ := filepath.Glob(filepath.Join(src, "*.toml"))
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err == nil {
@@ -225,9 +223,53 @@ func migrateInfernoState() {
 			logWarnf("inferno state: migrating %s: %v", f, err)
 		}
 	}
-	logInfof("inferno state migrated from %s to %s", newest, infernoStateDir)
+	logInfof("inferno state migrated from %s to %s", src, infernoStateDir)
 }
 
+// pickInfernoStateDir chooses which old per-device-id directory under root
+// holds the unit's state (see migrateInfernoState).
+func pickInfernoStateDir(root string, ips []net.IP) string {
+	for _, ip := range ips {
+		if v4 := ip.To4(); v4 != nil && !v4.IsLoopback() {
+			dir := filepath.Join(root, "0000"+hex.EncodeToString(v4)+"0000")
+			if fi, err := os.Stat(dir); err == nil && fi.IsDir() {
+				if files, _ := filepath.Glob(filepath.Join(dir, "*.toml")); len(files) > 0 {
+					return dir
+				}
+			}
+		}
+	}
+	dirs, _ := filepath.Glob(filepath.Join(root, "*"))
+	var newest string
+	var newestMod int64
+	for _, d := range dirs {
+		if strings.HasPrefix(filepath.Base(d), "00007f") { // 127.x: a test instance
+			continue
+		}
+		files, _ := filepath.Glob(filepath.Join(d, "*.toml"))
+		for _, f := range files {
+			if fi, err := os.Stat(f); err == nil && fi.ModTime().UnixNano() > newestMod {
+				newest, newestMod = d, fi.ModTime().UnixNano()
+			}
+		}
+	}
+	return newest
+}
+
+// hostIPv4s lists this host's IPv4 addresses.
+func hostIPv4s() []net.IP {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []net.IP
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok && n.IP.To4() != nil {
+			out = append(out, n.IP)
+		}
+	}
+	return out
+}
 // channelSummary is the recordings table's one-line view of a take's
 // channel names.
 func channelSummary(chans []recChannel) string {

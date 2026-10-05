@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -205,5 +206,33 @@ func TestMigrateInfernoState(t *testing.T) {
 	migrateInfernoState()
 	if got, _ := os.ReadFile(filepath.Join(infernoStateDir, "rx_channels.toml")); string(got) != testRxChannelsTOML {
 		t.Fatal("migration ran again over existing state")
+	}
+}
+
+// The unit's own state directory wins over a more recently written one
+// from a loopback test instance or an old address.
+func TestPickInfernoStateDirPrefersTheUnitsOwn(t *testing.T) {
+	root := t.TempDir()
+	mk := func(id string) string {
+		d := filepath.Join(root, id)
+		os.MkdirAll(d, 0o755)
+		os.WriteFile(filepath.Join(d, "rx_subscriptions.toml"), []byte(testRxSubsTOML), 0o644)
+		return d
+	}
+	own := mk("0000c00002450000") // 192.0.2.69
+	mk("00007f0000010002")        // loopback test instance, written later
+	old := mk("0000c000020a0000") // an old address
+	ip := net.ParseIP("192.0.2.69")
+	if got := pickInfernoStateDir(root, []net.IP{net.ParseIP("127.0.0.1"), ip}); got != own {
+		t.Fatalf("picked %s, want the unit's own %s", got, own)
+	}
+	// Without a match: the newest non-loopback directory.
+	if got := pickInfernoStateDir(root, []net.IP{net.ParseIP("10.0.0.5")}); got != old && got != own {
+		t.Fatalf("fallback picked %s (loopback must never win)", got)
+	}
+	os.RemoveAll(own)
+	os.RemoveAll(old)
+	if got := pickInfernoStateDir(root, nil); got != "" {
+		t.Fatalf("only a loopback directory left, picked %s", got)
 	}
 }
