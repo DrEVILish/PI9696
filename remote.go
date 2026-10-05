@@ -17,6 +17,7 @@ import (
 	"io"
 	"log"
 	"math"
+	"mime"
 	"net"
 	"net/http"
 	"net/netip"
@@ -4143,7 +4144,7 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <td>{{.StartStr}}</td>
 <td>{{.EndStr}}</td>
 <td>{{.DurationStr}}</td>
-<td class="recs-dl"><a class="btn btn-sm btn-secondary" href="/download/{{.RelPath}}"><svg class="icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-download"/></svg> download</a></td>
+<td class="recs-dl"><a class="btn btn-sm btn-secondary" href="/download/{{.RelPath}}" download><svg class="icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-download"/></svg> download</a></td>
 </tr>{{end}}
 {{end}}
 </tbody>
@@ -4376,6 +4377,9 @@ func handleDownload(w http.ResponseWriter, r *http.Request) {
 				http.NotFound(w, r)
 				return
 			}
+			// attachment: browsers otherwise open a WAV in their own
+			// player instead of saving it.
+			w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filepath.Base(f)}))
 			http.ServeFile(w, r, f)
 			return
 		}

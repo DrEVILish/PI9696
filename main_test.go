@@ -1411,6 +1411,10 @@ func TestRemoteDownloadWhitelistsAgainstRealFiles(t *testing.T) {
 	if rec.Body.String() != "fake wav data" {
 		t.Fatalf("unexpected download body: %q", rec.Body.String())
 	}
+	// Saved, not played inline: browsers open a bare WAV in their player.
+	if got := rec.Header().Get("Content-Disposition"); got != `attachment; filename=recording_20260101_000002_ch2_48kHz.wav` {
+		t.Fatalf("Content-Disposition = %q, want an attachment named after the take", got)
+	}
 
 	// A recording in a per-day subfolder is downloadable by its relative path
 	// (the RelPath key), and that path is unique even though the basename is
