@@ -3111,6 +3111,10 @@ func startRecording() {
 		// chain stalls, and an overrun on a recording input is a gap in
 		// the take. 512 packets of headroom costs ~2MB worst case.
 		"-thread_queue_size", "512",
+		// No stream analysis: the input format is fully given, yet ffmpeg
+		// read ~3.8 s of the FIFO before processing anything, so the
+		// meters ran that far behind the audio (fifoProbeSize).
+		"-probesize", fifoProbeSize, "-analyzeduration", "0",
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRate),
 		"-ac", fmt.Sprintf("%d", channelCount),
 		"-i", audioFifoPath(),
@@ -3274,6 +3278,14 @@ func startRecording() {
 // asetnsamples re-chunks to 100 ms frames (pad=0 so the take is not padded;
 // verified bit-identical), and astats measures just those two. Result: 3.1x
 // realtime at 64 ch, 1.6x at 128, scaling linearly.
+// fifoProbeSize is ffmpeg's -probesize for the raw FIFO input (the
+// minimum it accepts). With the format, rate and channel count all given
+// there is nothing to probe; the default analysis read ~3.8 s of audio
+// first, which held the meters that far behind the input for the whole
+// session (monitor and take alike). -fflags nobuffer is not the fix: it
+// produced empty takes (see startRecording).
+const fifoProbeSize = "32"
+
 func meterFilterChain(sampleRate int) string {
 	return fmt.Sprintf("asetnsamples=n=%d:pad=0,"+
 		"astats=metadata=1:reset=1:measure_perchannel=Peak_level+RMS_level:measure_overall=Peak_level+RMS_level,"+
@@ -3415,6 +3427,7 @@ func startMonitor() {
 
 	cmd := exec.Command("ffmpeg", "-nostdin",
 		"-thread_queue_size", "512",
+		"-probesize", fifoProbeSize, "-analyzeduration", "0", // see startRecording
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRates[sampleRateIdx]),
 		"-ac", fmt.Sprintf("%d", channelCount),
 		"-i", audioFifoPath(),

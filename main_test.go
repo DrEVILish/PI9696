@@ -6087,6 +6087,24 @@ func TestRecordingUsesRF64Auto(t *testing.T) {
 	t.Fatalf("take started without -rf64 auto: %q", args)
 }
 
+// The take reads the FIFO without stream analysis: with it, ffmpeg read
+// ~3.8 s of audio before processing anything, and the meters ran that far
+// behind the input for the whole take.
+func TestRecordingSkipsInputAnalysis(t *testing.T) {
+	args := startFakeTake(t)
+	in := -1
+	for i, a := range args {
+		if a == "-i" {
+			in = i
+			break
+		}
+	}
+	joined := " " + strings.Join(args[:max(in, 0)], " ") + " "
+	if in < 0 || !strings.Contains(joined, " -probesize "+fifoProbeSize+" ") || !strings.Contains(joined, " -analyzeduration 0 ") {
+		t.Fatalf("take input lacks -probesize %s -analyzeduration 0 before -i: %q", fifoProbeSize, args)
+	}
+}
+
 // An RF64 take carries the 0xFFFFFFFF placeholder in its data chunk and the
 // real 64-bit size in ds64; duration must come from ds64, and a plain RIFF
 // header must keep working.
