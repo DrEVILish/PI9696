@@ -4940,7 +4940,7 @@ func saveTxGlobals(t *testing.T) {
 	oCmd := playbackCmd
 	oEnv := make(map[string]string)
 	oEnvSet := make(map[string]bool)
-	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT", "INFERNO_TX_SOURCE_BIT_DEPTH"} {
+	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT", "INFERNO_TX_SOURCE_BIT_DEPTH", "INFERNO_PRODUCT_VERSION"} {
 		oEnv[k], oEnvSet[k] = os.LookupEnv(k)
 	}
 	t.Cleanup(func() {
@@ -5972,6 +5972,9 @@ func TestUnifiedInfernoEnv(t *testing.T) {
 	}
 	if os.Getenv("INFERNO_SAMPLE_RATE") != "48000" {
 		t.Errorf("INFERNO_SAMPLE_RATE = %q, want 48000", os.Getenv("INFERNO_SAMPLE_RATE"))
+	}
+	if got := os.Getenv("INFERNO_PRODUCT_VERSION"); got != appVersion {
+		t.Errorf("INFERNO_PRODUCT_VERSION = %q, want the app version %q", got, appVersion)
 	}
 	if got := os.Getenv("INFERNO_TX_SOURCE_BIT_DEPTH"); got != "24" {
 		t.Errorf("INFERNO_TX_SOURCE_BIT_DEPTH = %q, want 24 (takes are 24-bit; anything higher makes inferno dither them)", got)

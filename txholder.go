@@ -83,6 +83,9 @@ func applyUnifiedInfernoEnv(name string, rate, channels int) {
 	os.Setenv("INFERNO_TX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_RX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_TX_SOURCE_BIT_DEPTH", txSourceBitDepth)
+	// Controllers show this as the device's Product Version (needs the
+	// fork's PRODUCT_VERSION, 2bf6974).
+	os.Setenv("INFERNO_PRODUCT_VERSION", appVersion)
 	// The plugin's logger defaults to debug, which floods the journal (it
 	// once rotated the WebUI access code away). It reads RUST_LOG once, at
 	// the first open; an explicit setting in the service env still wins.
