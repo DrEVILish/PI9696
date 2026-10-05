@@ -1,10 +1,10 @@
 package hardware
 
 import (
+	"encoding/binary"
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"image/png"
 	"io"
 	"os"
@@ -64,6 +64,14 @@ type TTFDisplay struct {
 	buffer  []byte
 	font    font.Face
 	canvas  *image.Gray // renderScale times the panel's logical 256x64 resolution
+
+	// drawHash folds every canvas-drawing call since the last Clear (see
+	// noteDraw). The canvas is a pure function of that call sequence, so it
+	// stands in for hashing the whole 1MB canvas on every render tick.
+	drawHash uint64
+
+	glyphs     map[glyphKey]cachedGlyph // rasterized glyphs (see drawString)
+	glyphFaces map[int]font.Face        // faces the glyphs keys refer to
 
 	// brightnessPct is the last SetBrightness target (0-100). It tracks only
 	// what was asked for, so auto-dim can restore the user's level.
@@ -289,13 +297,50 @@ func (d *TTFDisplay) writeData(data []byte) error {
 }
 
 func (d *TTFDisplay) Clear() {
-	// Clear canvas
-	for i := range d.canvas.Pix {
-		d.canvas.Pix[i] = 0
+	clear(d.canvas.Pix)
+	clear(d.buffer)
+	d.drawHash = fnvOffset
+}
+
+// noteDraw folds one drawing call (an op tag, its integer arguments and any
+// text) into drawHash. Two frames drawn by the same calls have identical
+// canvases; different calls that happen to draw the same pixels only cost a
+// redundant mirror reload.
+func (d *TTFDisplay) noteDraw(op byte, text string, args ...int) {
+	h := d.drawHash
+	h = (h ^ uint64(op)) * fnvPrime
+	for _, a := range args {
+		h = (h ^ uint64(a)) * fnvPrime
 	}
-	// Clear buffer
-	for i := range d.buffer {
-		d.buffer[i] = 0x00
+	for i := 0; i < len(text); i++ {
+		h = (h ^ uint64(text[i])) * fnvPrime
+	}
+	d.drawHash = h
+}
+
+// fillCanvas sets the scaled canvas rect r (clipped) to v, writing Pix
+// directly: draw.Draw with an image.Uniform source goes through the generic
+// per-pixel color path, which dominated idle CPU.
+func (d *TTFDisplay) fillCanvas(r image.Rectangle, v byte) {
+	r = r.Intersect(d.canvas.Rect)
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		off := d.canvas.PixOffset(r.Min.X, y)
+		row := d.canvas.Pix[off : off+r.Dx()]
+		for i := range row {
+			row[i] = v
+		}
+	}
+}
+
+// setNibble stores a 0-15 level for logical pixel (x, y) in the packed
+// SSD1322 buffer (4 bits per pixel, 2 pixels per byte, even x in the upper
+// nibble).
+func (d *TTFDisplay) setNibble(x, y int, brightness byte) {
+	i := (y*DisplayWidth + x) / 2
+	if x%2 == 0 {
+		d.buffer[i] = (d.buffer[i] & 0x0F) | ((brightness & 0x0F) << 4)
+	} else {
+		d.buffer[i] = (d.buffer[i] & 0xF0) | (brightness & 0x0F)
 	}
 }
 
@@ -310,19 +355,9 @@ func (d *TTFDisplay) SetPixel(x, y int, brightness byte) {
 	// that overlaps both - solid fills have no antialiasing to gain from
 	// supersampling, but this keeps the canvas from having stale/blank data
 	// under whatever SetPixel just drew.
-	gray := color.Gray{Y: brightness * 17} // Scale 0-15 to 0-255
-	draw.Draw(d.canvas, image.Rect(x*renderScale, y*renderScale, (x+1)*renderScale, (y+1)*renderScale), &image.Uniform{gray}, image.Point{}, draw.Src)
-
-	// SSD1322 uses 4 bits per pixel, 2 pixels per byte
-	bufferIndex := (y*DisplayWidth + x) / 2
-
-	if x%2 == 0 {
-		// Even pixel (upper nibble)
-		d.buffer[bufferIndex] = (d.buffer[bufferIndex] & 0x0F) | ((brightness & 0x0F) << 4)
-	} else {
-		// Odd pixel (lower nibble)
-		d.buffer[bufferIndex] = (d.buffer[bufferIndex] & 0xF0) | (brightness & 0x0F)
-	}
+	d.noteDraw('p', "", x, y, int(brightness))
+	d.fillCanvas(image.Rect(x*renderScale, y*renderScale, (x+1)*renderScale, (y+1)*renderScale), brightness*17) // 0-15 to 0-255
+	d.setNibble(x, y, brightness)
 }
 
 func (d *TTFDisplay) DrawText(x, y int, text string) {
@@ -340,19 +375,12 @@ func (d *TTFDisplay) DrawText(x, y int, text string) {
 	const descenderPad = 4
 	logicalRect := image.Rect(x, y-bounds.Max.Y, x+bounds.Max.X, y+descenderPad)
 	scaledRect := image.Rect(logicalRect.Min.X*renderScale, logicalRect.Min.Y*renderScale, logicalRect.Max.X*renderScale, logicalRect.Max.Y*renderScale)
-	draw.Draw(d.canvas, scaledRect, &image.Uniform{color.Gray{0}}, image.Point{}, draw.Src)
+	d.fillCanvas(scaledRect, 0)
+	d.noteDraw('t', text, x, y, faceID(d.font))
 
-	// Create a drawer for rendering text, at scaled coordinates using the
-	// (already renderScale-sized) active face.
-	drawer := &font.Drawer{
-		Dst:  d.canvas,
-		Src:  &image.Uniform{color.Gray{255}}, // White text
-		Face: d.font,
-		Dot:  fixed.Point26_6{X: fixed.I(x * renderScale), Y: fixed.I(y * renderScale)},
-	}
-
-	// Draw the text
-	drawer.DrawString(text)
+	// Draw white text at scaled coordinates using the (already
+	// renderScale-sized) active face.
+	d.drawString(fixed.Point26_6{X: fixed.I(x * renderScale), Y: fixed.I(y * renderScale)}, text)
 
 	// Downsample a slightly wider region than what was cleared/drawn -
 	// getTextBounds discards BoundString's Min.X (a glyph with negative
@@ -430,71 +458,61 @@ func (d *TTFDisplay) canvasToBufferRect(rect image.Rectangle) {
 	for y := rect.Min.Y; y < rect.Max.Y; y++ {
 		for x := rect.Min.X; x < rect.Max.X; x++ {
 			var sum int
+			off := d.canvas.PixOffset(x*renderScale, y*renderScale)
 			for sy := 0; sy < renderScale; sy++ {
-				for sx := 0; sx < renderScale; sx++ {
-					sum += int(d.canvas.GrayAt(x*renderScale+sx, y*renderScale+sy).Y)
-				}
+				sum += sum8(d.canvas.Pix[off:])
+				off += d.canvas.Stride
 			}
 			avg := sum / (renderScale * renderScale)
-			brightness := byte(avg / 17) // Convert 0-255 to 0-15
-			if brightness > 15 {
-				brightness = 15
-			}
-
-			bufferIndex := (y*DisplayWidth + x) / 2
-
-			if x%2 == 0 {
-				// Even pixel (upper nibble)
-				d.buffer[bufferIndex] = (d.buffer[bufferIndex] & 0x0F) | ((brightness & 0x0F) << 4)
-			} else {
-				// Odd pixel (lower nibble)
-				d.buffer[bufferIndex] = (d.buffer[bufferIndex] & 0xF0) | (brightness & 0x0F)
-			}
+			d.setNibble(x, y, byte(min(avg/17, 15))) // 0-255 to 0-15
 		}
 	}
 }
 
+// sum8 adds the first 8 bytes of b (one renderScale-wide block row) with
+// one 64-bit load: pairwise into 16-bit lanes, then the lanes via a
+// multiply. Max 8*255 = 2040, which fits the top lane.
+func sum8(b []byte) int {
+	v := binary.LittleEndian.Uint64(b)
+	v = (v & 0x00FF00FF00FF00FF) + ((v >> 8) & 0x00FF00FF00FF00FF)
+	return int((v * 0x0001000100010001) >> 48)
+}
+
+// sum8 covers exactly one block row only while renderScale is 8; this
+// fails to compile otherwise.
+var _ [renderScale - 8]struct{}
+var _ [8 - renderScale]struct{}
+
 func (d *TTFDisplay) DrawProgressBar(x, y, width, height int, progress float64) {
-	// Draw progress bar background
-	for py := y; py < y+height; py++ {
-		for px := x; px < x+width; px++ {
-			d.SetPixel(px, py, 2) // Dim background
-		}
-	}
-
-	// Draw progress bar fill
-	fillWidth := int(float64(width) * progress)
-	for py := y; py < y+height; py++ {
-		for px := x; px < x+fillWidth; px++ {
-			d.SetPixel(px, py, 15) // Bright fill
-		}
-	}
-
-	// Draw progress bar border
-	for px := x; px < x+width; px++ {
-		d.SetPixel(px, y, 8)          // Top border
-		d.SetPixel(px, y+height-1, 8) // Bottom border
-	}
-	for py := y; py < y+height; py++ {
-		d.SetPixel(x, py, 8)         // Left border
-		d.SetPixel(x+width-1, py, 8) // Right border
-	}
+	d.FillBox(x, y, width, height, 2)                         // Dim background
+	d.FillBox(x, y, int(float64(width)*progress), height, 15) // Bright fill
+	// Border
+	d.FillBox(x, y, width, 1, 8)
+	d.FillBox(x, y+height-1, width, 1, 8)
+	d.FillBox(x, y, 1, height, 8)
+	d.FillBox(x+width-1, y, 1, height, 8)
 }
 
 func (d *TTFDisplay) DrawBox(x, y, width, height int, brightness byte) {
-	for py := y; py < y+height; py++ {
-		for px := x; px < x+width; px++ {
-			if px == x || px == x+width-1 || py == y || py == y+height-1 {
-				d.SetPixel(px, py, brightness) // Border
-			}
-		}
+	if width <= 0 || height <= 0 {
+		return
 	}
+	d.FillBox(x, y, width, 1, brightness)
+	d.FillBox(x, y+height-1, width, 1, brightness)
+	d.FillBox(x, y, 1, height, brightness)
+	d.FillBox(x+width-1, y, 1, height, brightness)
 }
 
 func (d *TTFDisplay) FillBox(x, y, width, height int, brightness byte) {
-	for py := y; py < y+height; py++ {
-		for px := x; px < x+width; px++ {
-			d.SetPixel(px, py, brightness)
+	r := image.Rect(x, y, x+width, y+height).Intersect(image.Rect(0, 0, DisplayWidth, DisplayHeight))
+	if r.Empty() {
+		return
+	}
+	d.noteDraw('f', "", r.Min.X, r.Min.Y, r.Max.X, r.Max.Y, int(brightness))
+	d.fillCanvas(image.Rect(r.Min.X*renderScale, r.Min.Y*renderScale, r.Max.X*renderScale, r.Max.Y*renderScale), brightness*17)
+	for py := r.Min.Y; py < r.Max.Y; py++ {
+		for px := r.Min.X; px < r.Max.X; px++ {
+			d.setNibble(px, py, brightness)
 		}
 	}
 }
@@ -527,23 +545,26 @@ func (d *TTFDisplay) FrameHash() uint64 {
 	return fnvBytes(d.buffer)
 }
 
-// CanvasHash checksums the supersampled canvas EncodePNG derives the mirror
-// from. Canvas-only changes (sub-nibble antialiasing shifts that quantize
-// away in the packed buffer) leave FrameHash untouched, so the mirror needs
-// this second signal or it can disagree with the served PNG indefinitely.
+// CanvasHash identifies the supersampled canvas EncodePNG derives the mirror
+// from, as the hash of the drawing calls since the last Clear (see
+// noteDraw). Canvas-only changes (sub-nibble antialiasing shifts that
+// quantize away in the packed buffer) leave FrameHash untouched, so the
+// mirror needs this second signal or it can disagree with the served PNG
+// indefinitely.
 func (d *TTFDisplay) CanvasHash() uint64 {
 	if d.canvas == nil {
 		return 0
 	}
-	return fnvBytes(d.canvas.Pix)
+	return d.drawHash
 }
 
+const fnvOffset, fnvPrime = 14695981039346656037, 1099511628211
+
 func fnvBytes(b []byte) uint64 {
-	const offset, prime = 14695981039346656037, 1099511628211
-	h := uint64(offset)
+	h := uint64(fnvOffset)
 	for _, c := range b {
 		h ^= uint64(c)
-		h *= prime
+		h *= fnvPrime
 	}
 	return h
 }
