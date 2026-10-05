@@ -1487,12 +1487,17 @@ func waitProcessStopped(t *testing.T, pid int) {
 
 // procState returns "gone" when the pid no longer exists, otherwise the ps
 // state letter (e.g. "T" stopped, "S" sleeping) - or "" if unparseable.
+// Only the first letter: ps appends flags (N niced, s session leader, +
+// foreground), so a paused child of a niced test run reads "TN".
 func procState(pid int) string {
 	out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).CombinedOutput()
 	if err != nil {
 		return "gone"
 	}
-	return strings.TrimSpace(string(out))
+	if s := strings.TrimSpace(string(out)); s != "" {
+		return s[:1]
+	}
+	return ""
 }
 
 func TestPlaybackLifecycle(t *testing.T) {
