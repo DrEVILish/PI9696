@@ -2115,19 +2115,21 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
    ftl-themes sprite: stroke inherits each key's color via currentColor. */
 .transport-row{--icon-size:clamp(14px,2.2vw,30px);display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
 .transport-row button{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;display:flex;align-items:center;justify-content:center}
-.transport-row .record{border-color:var(--danger);color:var(--danger)}
+/* The keys mirror the front panel's lamps: unlit at rest, REC lit red only
+   while a take is recording, PLAY lit green only while playing and
+   flashing while paused (the panel lamp's ~2 Hz). The row carries the
+   state (is-rec / is-play / is-pause, set by renderTransportRow). */
+.transport-row .record,.transport-row .play{border-color:var(--border);color:var(--muted)}
 .transport-row .stop{color:var(--accent)}
-.transport-row .play{border-color:var(--success);color:var(--success)}
-/* The PLAY transport doubles as PAUSE while a track is running (see
-   renderTransportRow) - the pause glyph in the accent color instead. */
-.transport-row .play.pause{border-color:var(--warning);color:var(--warning)}
+.transport-row.is-rec .record{border-color:var(--danger);color:var(--danger);background:color-mix(in srgb,var(--danger) 18%,transparent);box-shadow:0 0 0.8em color-mix(in srgb,var(--danger) 60%,transparent)}
+.transport-row.is-play .play,.transport-row.is-pause .play{border-color:var(--success);color:var(--success);background:color-mix(in srgb,var(--success) 16%,transparent);box-shadow:0 0 0.8em color-mix(in srgb,var(--success) 55%,transparent)}
+.transport-row.is-pause .play{animation:pi-lamp-flash 0.5s steps(1,end) infinite alternate}
+@keyframes pi-lamp-flash{to{background:transparent;box-shadow:none;color:var(--muted);border-color:var(--border)}}
+@media (prefers-reduced-motion:reduce){.transport-row.is-pause .play{animation:none;border-style:dashed}}
 /* Text mode: the same transport keys but labelled instead of icon glyphs.
    Buttons stretch to fit and the label takes the accent colour the icon had. */
 .transport-row.text button{width:auto;min-width:clamp(2em,3.2vw,3.4em);font-size:clamp(0.55em,0.95vw,0.85em);letter-spacing:0.08em;padding:0 0.3em}
-.transport-row.text .record{color:var(--danger)}
 .transport-row.text .stop{color:var(--accent)}
-.transport-row.text .play{color:var(--success)}
-.transport-row.text .play.pause{color:var(--warning)}
 .header-actions{position:absolute;top:0.8em;right:clamp(0.5em,2vw,1.5em);display:flex;gap:0.5em}
 /* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
    - the base button{} rule above only targets <button>, so colors/border
@@ -2690,7 +2692,7 @@ catch (e) { selectSettingsTab('pane-device', false); }
 // triangle and a pause glyph while a track runs. ICON_MODE is seeded from the
 // server (persisted setting); transportState is kept in sync by applyMeter.
 var ICON_MODE = {{.TransportIcon}};
-var transportState = { playing: false, paused: false };
+var transportState = { playing: false, paused: false, rec: false };
 // SPRITE is the active theme's icon sprite (server-rendered, rewritten by
 // the theme-swap OOB script); icons inherit currentColor, so the transport
 // row's per-key colors apply to the stroke with no fill overrides.
@@ -2701,7 +2703,9 @@ function transportBtn(cls, post, title, label) {
 }
 function renderTransportRow() {
   var row = document.getElementById('transportRow');
-  var pause = transportState.playing || transportState.paused;
+  // The key shows its next action: pause while playing, play otherwise
+  // (paused: resume). Its lamp shows the state (see .transport-row CSS).
+  var pause = transportState.playing && !transportState.paused;
   var title = transportState.paused ? 'Resume' : (transportState.playing ? 'Pause' : 'Play');
   var html = '';
   if (ICON_MODE) {
@@ -2713,7 +2717,8 @@ function renderTransportRow() {
     html += '<button class="btn stop" data-stop title="Stop">STOP</button>';
     html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? 'II' : '>');
   }
-  row.className = 'transport-row transport' + (ICON_MODE ? '' : ' text') + (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : ''));
+  row.className = 'transport-row transport' + (ICON_MODE ? '' : ' text') + (transportState.rec ? ' is-rec' : '') +
+    (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : ''));
   row.innerHTML = html;
   // These controls are recreated after htmx's initial DOM scan whenever the
   // play/pause state or button style changes, so explicitly process the new
@@ -2992,8 +2997,8 @@ function applyMeter(m) {
 
   // Rebuild the transport row only when the play/pause state actually flips,
   // so the play triangle toggles to a pause glyph exactly when the state does.
-  var next = { playing: !!m.playing, paused: paused };
-  if (next.playing !== transportState.playing || next.paused !== transportState.paused) {
+  var next = { playing: !!m.playing, paused: paused, rec: !!m.recording };
+  if (next.playing !== transportState.playing || next.paused !== transportState.paused || next.rec !== transportState.rec) {
     transportState = next;
     renderTransportRow();
   }

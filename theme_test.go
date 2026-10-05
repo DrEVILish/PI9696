@@ -719,3 +719,29 @@ func TestDashboardMeterUpdateMatchesStripMarkup(t *testing.T) {
 		t.Error("level not set on the .meter element, where ftl-themes reads --meter-level")
 	}
 }
+
+// The WebUI transport keys mirror the panel lamps: unlit at rest, REC lit
+// only while recording, PLAY lit only while playing and flashing while
+// paused (steady under reduced motion).
+func TestDashboardTransportLampsFollowState(t *testing.T) {
+	mux := newRemoteMux()
+	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
+	for _, want := range []string{
+		`.transport-row .record,.transport-row .play{border-color:var(--border);color:var(--muted)}`,
+		`.transport-row.is-rec .record{`,
+		`.transport-row.is-play .play,.transport-row.is-pause .play{`,
+		`.transport-row.is-pause .play{animation:pi-lamp-flash`,
+		`@media (prefers-reduced-motion:reduce){.transport-row.is-pause .play{animation:none`,
+		`rec: !!m.recording`,
+		`(transportState.rec ? ' is-rec' : '')`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard lacks %q", want)
+		}
+	}
+	for _, stale := range []string{`.transport-row .record{border-color:var(--danger)`, `.transport-row .play{border-color:var(--success)`} {
+		if strings.Contains(body, stale) {
+			t.Errorf("dashboard still lights a key at rest: %q", stale)
+		}
+	}
+}
