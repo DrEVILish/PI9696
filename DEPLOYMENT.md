@@ -67,20 +67,22 @@ submodules, and they must be initialised too).
 cd /opt/pi9696
 git clone https://github.com/DrEVILish/inferno inferno
 cd inferno
-git checkout 3881fff                     # fork dev: v0.5.4 + 13 dev commits + #49 + U13/U1/U2 + #8 + #41 + TX-restart + wakeup-rate fixes
+git checkout 0501a56                     # fork dev: v0.5.4 + 13 dev commits + #49 + U13/U1/U2 + #8 + #41 + TX-restart + wakeup-rate + controller interop (U20-U24)
 git submodule update --init --recursive  # searchfire, alsa-sys-all, usrvclock-rs
 cargo build --release                    # ~7 min on a Pi 4
 ```
 
 ### Why this commit
 
-The fork's `dev` at `3881fff` is `v0.5.4` (`04c0efe`), the 13 later `dev`
+The fork's `dev` at `0501a56` is `v0.5.4` (`04c0efe`), the 13 later `dev`
 commits (tests, dependency bumps, configurable TX dither with the old 32-bit
 default), the malformed-packet fixes (INFERNO-UPSTREAM.md U15), the
 channel-list paging, bulk unsubscribe and rate-probe fixes (U13, U1, U2), the
 plugin panic guard (U16), the stale-audio-after-disconnect fixes (U17) and
 TX flows kept across a transmitter restart (U18), and the realtime loops
-waking the application at most four times per ALSA period (U19).
+waking the application at most four times per ALSA period (U19), and the
+controller interop fixes U20-U24 (product version, clock role, device
+settings, 0x2204, controller renames) plus the STATE_DIR setting.
 Pin a commit, not the branch, so a rebuild is reproducible; move the pin
 deliberately.
 

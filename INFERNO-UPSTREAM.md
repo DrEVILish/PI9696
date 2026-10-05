@@ -1,7 +1,7 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `3881fff` on the `DrEVILish/inferno` fork's `dev`)
+AoIP stack, pinned at `0501a56` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
@@ -32,6 +32,12 @@ and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
 | U17 | inferno RX | Stale audio after an RX channel is disconnected: clicks from the previous ring cycle, and sometimes one channel replaying its last 0.34 s until the stream stops (teodly/inferno#41) | old audio lands in a take after a source is unrouted | **fixed in the fork** (`d6f04ab`, `66d67fa`, `d2c936f`; test `b837e3d`) |
 | U18 | inferno TX | A transmitter restart (the ALSA plugin's underrun recovery) dropped every TX flow | each underrun cut every receiver off for ~5-6 s until it re-requested | **fixed in the fork** (`382dc90`) |
 | U19 | inferno RX/TX | The realtime loops woke the ALSA application on every packet | thousands of needless wakeups a second; the largest CPU cost of an idle recorder with live flows | **fixed in the fork** (`3881fff`) |
+| U20 | inferno info | No Product Version announced (the field at product info 0x12C was commented out) | controllers show a blank Product Version | **fixed in the fork** (`2bf6974`; pi9696 announces its own version) |
+| U21 | inferno info | Clock status sent in a header-only layout with no per-port records | controllers show no clock role; netaudio "Clock Port State: Unknown (0x0000)" | **fixed in the fork** (`2d5eb4d`) |
+| U22 | inferno ARC | Device settings (0x1100) and property directory (0x1102) answered with zero bytes | controllers show no sample rate and no latency | **fixed in the fork** (`ee9eece`) |
+| U23 | inferno ARC | TX flow labels query (0x2204) unanswered | "received unknown opcode1 0x2204" on every controller poll | **fixed in the fork** (`1491622`) |
+| U24 | inferno ARC | No handler for set device name (0x1001) | renaming the device from a controller did nothing | **fixed in the fork** (`a67a337`; the host applies it, see pi9696 devicename.go) |
+| U25 | searchfire (mDNS) | Channel services (`TX1@<name>`) advertise their own host name (`tx1@<name>.local`) instead of the device's | netaudio 0.2.x groups by host and reports "Failed to get a service by type" / device name / channel counts for phantom per-channel devices | **open**: needs a host-name setter in searchfire, a GitLab submodule outside DrEVILish (decision pending) |
 
 ---
 
@@ -414,3 +420,32 @@ still always notifies. Result: the eventfd syscalls drop out of the profile
 and the process falls from 31% to 24% of one core. The remainder is real
 packet I/O for the live flows (and the OLED render, fixed in pi9696).
 
+
+## U20-U24 - Controller interop (device view)
+
+**Found** comparing pi9696 with the LAN's hardware interface in netaudio
+and on the wire (conmon packets on 224.0.0.231:8702, ARC on 4440), and
+checking crafted packets against netaudio's own parser. What a controller
+showed blank or unknown for pi9696, and the fix in the fork:
+
+- Product Version (U20, `2bf6974`): the interface carries 01 01 00 03
+  (1.1.3) at product info 0x12C. New setting PRODUCT_VERSION; pi9696 sets
+  it to its app version.
+- Clock role / port state (U21, `2d5eb4d`): clock status now uses the
+  hardware layout with a record per PTP port; inferno reports itself as a
+  follower (PTP state 9) of statime's leader.
+- Sample rate and latency (U22, `ee9eece`): real 0x1100 property values
+  (0x8020 rate; 0x8204/0x8205/0x8301/0x8302/0x8306 latency) and the 0x1102
+  property directory, instead of zero bytes.
+- 0x2204 TX flow labels (U23, `1491622`): an empty page instead of no
+  reply.
+- Renames (U24, `a67a337`): 0x1001 set/reset name is handed to the host
+  through NAME_REQUEST_PATH; pi9696 adopts the name and restarts the
+  device under it.
+
+Verified on the test unit with netaudio: Product Version 1.20.0, Sample
+Rate 48 kHz, Active/Configured/Default Latency 10 ms, Latency Range
+1-40 ms, Clock Role Follower, Primary v1 Multicast Follower; `netaudio
+device name` renames the unit end to end. Also in the fork: STATE_DIR
+(`0501a56`) pins the saved-state directory, which was keyed by an
+IP-derived device id.
