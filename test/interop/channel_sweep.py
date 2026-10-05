@@ -66,8 +66,6 @@ def pids():
         pid = int(d.split("/")[-1])
         if "pi9696" in cmd and ("PI9696_SIM" in cmd or cmd.split(" ")[0].endswith(("/pi9696", "pi9696-sweep"))):
             out.setdefault("app", pid)
-        elif cmd.startswith("inferno/target/release/inferno2pipe"):
-            out["inferno2pipe"] = pid
         elif cmd.startswith("ffmpeg") and "pcm_s24le" in cmd:
             out["ffmpeg_rec"] = pid
     return out
@@ -152,9 +150,10 @@ def summarise(rows):
 
 
 def loss_total():
+    # inferno runs inside the app; its capture loop reports overruns (gaps).
     tot = 0
     try:
-        for m in re.finditer(r"inferno2pipe: \d+ sample-loss events \((\d+) samples total", open(f"{W}/app-sim.err", errors="replace").read()):
+        for m in re.finditer(r"capture overrun\(s\) since the last report \((\d+) total\)", open(f"{W}/app-sim.err", errors="replace").read()):
             tot = int(m.group(1))
     except OSError:
         pass
@@ -226,7 +225,7 @@ for n in [int(x) for x in a.channels.split(",")]:
         if a.control_bin:
             ssh("systemctl stop itest-ctl")
         r["throttled"] = throttled()
-        r["inferno_lost_samples_during_take"] = loss_total() - loss0
+        r["inferno_capture_overruns_during_take"] = loss_total() - loss0
         r["metrics"] = summarise(samp.rows)
         json.dump(samp.rows, open(f"{W}/sweep_metrics_{n}ch.json", "w"))
         wav = max(glob.glob(f"/rec/*/recording_*_ch{n}_48kHz.wav"), key=os.path.getmtime)

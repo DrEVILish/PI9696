@@ -1,0 +1,137 @@
+package main
+
+import (
+	"errors"
+	"sync"
+	"testing"
+	"time"
+)
+
+// fakePairedDevice stands in for the inferno plugin's paired device: Read
+// delivers silence at real-time pace (like a running instance), Write
+// records like fakeTxHolder, and Close ends both. failReadAfter makes Read
+// fail once that long has passed since the open, the in-process
+// equivalent of a server that dies on its own.
+type fakePairedDevice struct {
+	fakeTxHolder
+	channels, rate int
+	opened         time.Time
+	failReadAfter  time.Duration
+	closeDelay     time.Duration
+	noData         bool
+	reads          int
+	done           chan struct{}
+	closeOnce      sync.Once
+}
+
+func newFakePairedDevice(rate, channels int) *fakePairedDevice {
+	return &fakePairedDevice{rate: rate, channels: channels, opened: time.Now(), done: make(chan struct{})}
+}
+
+func (f *fakePairedDevice) Read(buf []int32) (int, error) {
+	// 10ms of audio per read, at most what fits.
+	frames := min(len(buf)/max(f.channels, 1), max(f.rate/100, 1))
+	select {
+	case <-f.done:
+		return 0, errors.New("fake paired device closed")
+	case <-time.After(10 * time.Millisecond):
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reads++
+	if f.failReadAfter > 0 && time.Since(f.opened) >= f.failReadAfter {
+		return 0, errors.New("fake paired device: capture failed")
+	}
+	if f.noData {
+		return 0, nil
+	}
+	clear(buf[:frames*f.channels])
+	return frames, nil
+}
+
+func (f *fakePairedDevice) Close() error {
+	f.closeOnce.Do(func() {
+		close(f.done)
+		time.Sleep(f.closeDelay)
+	})
+	return f.fakeTxHolder.Close()
+}
+
+func (f *fakePairedDevice) Xruns() int64 { return 0 }
+
+func (f *fakePairedDevice) readCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads
+}
+
+// fakeInferno is the installed openPairedDevice seam: it records every
+// device it opened, and openErr makes opens fail (no plugin).
+type fakeInferno struct {
+	mu            sync.Mutex
+	devices       []*fakePairedDevice
+	openErr       error
+	writeErr      error         // every device's Writes fail (no clock overlay)
+	closeDelay    time.Duration // every device's Close takes this long
+	noData        bool          // Reads deliver no frames (no media yet)
+	failReadAfter time.Duration
+}
+
+func (fi *fakeInferno) open(rate, channels int) (pairedDevice, error) {
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	if fi.openErr != nil {
+		return nil, fi.openErr
+	}
+	d := newFakePairedDevice(rate, channels)
+	d.failReadAfter = fi.failReadAfter
+	d.writeErr = fi.writeErr
+	d.closeDelay = fi.closeDelay
+	d.noData = fi.noData
+	fi.devices = append(fi.devices, d)
+	return d, nil
+}
+
+func (fi *fakeInferno) opens() int {
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	return len(fi.devices)
+}
+
+func (fi *fakeInferno) last() *fakePairedDevice {
+	fi.mu.Lock()
+	defer fi.mu.Unlock()
+	if len(fi.devices) == 0 {
+		return nil
+	}
+	return fi.devices[len(fi.devices)-1]
+}
+
+// useFakeInferno installs a fake inferno plugin for the test: starts open
+// a fakePairedDevice instead of failing like the suite default. The seam
+// is swapped through the inferno worker's queue so no start in flight
+// sees it change halfway.
+func useFakeInferno(t *testing.T) *fakeInferno {
+	t.Helper()
+	fi := &fakeInferno{}
+	quiesceInfernoWorker(t)
+	orig := openPairedDevice
+	openPairedDevice = fi.open
+	t.Cleanup(func() {
+		quiesceInfernoWorker(t)
+		openPairedDevice = orig
+	})
+	return fi
+}
+
+// waitFor polls cond until it holds or within passes.
+func waitFor(t *testing.T, within time.Duration, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(within)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out after %v waiting for %s", within, what)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}

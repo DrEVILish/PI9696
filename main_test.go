@@ -52,20 +52,20 @@ func TestMain(m *testing.M) {
 	}
 	RecordPath = recDir
 	clockSyncRequired = false
-	// infernoWorker (started below) reconciles the TX holder after every
-	// Inferno (re)start. With the production opener, any host with the inferno
-	// ALSA plugin installed (the Pi, a provisioned dev box) gets a real,
-	// ready holder, every later playback test silently takes the inferno path
-	// instead of local ALSA, and the failures cascade through leaked transport
-	// state (REPORT F12). Tests that want a holder install their own fake.
-	openTxDevice = func(string, int, int) (txFrameWriter, error) {
+	// Every Inferno start opens the plugin's paired device. With the
+	// production opener, any host with the inferno ALSA plugin installed (the
+	// Pi, a provisioned dev box) would start a real instance on the network
+	// and get a real, ready TX holder: every later playback test would
+	// silently take the inferno path instead of local ALSA, and the failures
+	// cascade through leaked transport state (REPORT F12). Tests that want a
+	// running server install a fake (useFakeInferno).
+	openPairedDevice = func(int, int) (pairedDevice, error) {
 		return nil, errors.New("test suite: no inferno ALSA device")
 	}
+	// ...and, like a dev box, no plugin installed: failed starts book no
+	// retries unless a test says otherwise.
+	infernoPluginInstalled = func() bool { return false }
 	RawPath = filepath.Join(recDir, "raw")
-	// TX port verification reads the host's UDP table; a dev box running
-	// inferno (or not) must not decide TX tests. "Unknown" skips the checks;
-	// tests that exercise them script their own table.
-	txPortsInUse = func() int { return -1 }
 	// The TX idle feeder would mix silence into the write sequences the TX
 	// tests assert on; its own tests turn it back on.
 	txIdleFeedEnabled = false
@@ -75,10 +75,10 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-func TestSuiteNeverOpensRealTxDevice(t *testing.T) {
-	if h, err := openTxDevice("inferno", 48000, 2); err == nil {
+func TestSuiteNeverOpensRealInfernoDevice(t *testing.T) {
+	if h, err := openPairedDevice(48000, 2); err == nil {
 		h.Close()
-		t.Fatal("the suite's default TX opener reached a real device - TestMain must fake it")
+		t.Fatal("the suite's default inferno opener reached a real device - TestMain must fake it")
 	}
 }
 
@@ -267,47 +267,6 @@ func testSessionCookie(t *testing.T) *http.Cookie {
 	return nil
 }
 
-// withFakeInfernoProject points InfernoBinary at a stub that behaves like
-// inferno2pipe, built in a temp dir.
-//
-// It must never write inside the project's own inferno/ checkout: the real
-// tree is the installed AoIP server, and this helper used to create a stub
-// there and then os.RemoveAll("inferno") on cleanup - so running the suite on
-// a deployed unit silently deleted the built binary and the next start failed
-// with InfernoFailed. Temp dir, temp module, cleanup restores the variable.
-func withFakeInfernoProject(t *testing.T) {
-	t.Helper()
-	dir := t.TempDir()
-	stub := `package main
-import ("flag"; "fmt"; "os"; "time")
-func main() {
-	channels := flag.Int("c", 2, "channels")
-	output := flag.String("o", "", "output FIFO")
-	flag.Parse()
-	if *output == "" { fmt.Fprintln(os.Stderr, "Usage: inferno2pipe -c <channels> -o <output_fifo>"); os.Exit(1) }
-	f, _ := os.OpenFile(*output, os.O_WRONLY, 0)
-	defer f.Close()
-	buf := make([]byte, *channels*4*1024)
-	for { f.Write(buf); time.Sleep(10*time.Millisecond) }
-}`
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(stub), 0644); err != nil {
-		t.Fatalf("write inferno stub: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module inferno2pipe\n\ngo 1.21\n"), 0644); err != nil {
-		t.Fatalf("write inferno go.mod: %v", err)
-	}
-	bin := filepath.Join(dir, "inferno2pipe")
-	cmd := exec.Command("go", "build", "-o", bin, "main.go")
-	cmd.Dir = dir
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build inferno stub: %v: %s", err, out)
-	}
-
-	orig := InfernoBinary
-	InfernoBinary = bin
-	t.Cleanup(func() { InfernoBinary = orig })
-}
-
 // Guards the destructive mistake directly: the suite must not remove the
 // installed inferno/ checkout. Cheap, and it fails loudly if someone reverts
 // the helper to writing inside the project tree.
@@ -338,7 +297,7 @@ wait $!
 
 func TestInfernoWorkerConcurrency(t *testing.T) {
 	initTestHardware(t)
-	withFakeInfernoProject(t)
+	useFakeInferno(t)
 	fakeExecutable(t, "cargo", fakeChildScript)
 
 	// Fire a burst of concurrent start/restart requests - the scenario that
@@ -372,7 +331,7 @@ func TestInfernoWorkerConcurrency(t *testing.T) {
 
 func TestInfernoWorkerDoesNotKillActiveRecording(t *testing.T) {
 	initTestHardware(t)
-	withFakeInfernoProject(t)
+	useFakeInferno(t)
 	fakeExecutable(t, "cargo", fakeChildScript)
 
 	done := make(chan struct{})
@@ -456,7 +415,7 @@ wait $!
 
 func TestStopRecordingDoesNotBlockMutex(t *testing.T) {
 	initTestHardware(t)
-	withFakeInfernoProject(t)
+	useFakeInferno(t)
 	fakeExecutable(t, "cargo", fakeChildScript)
 	fakeExecutable(t, "ffmpeg", fakeFfmpegDelayedExitScript)
 
@@ -3894,16 +3853,19 @@ func TestPersistRoundTripsAllFields(t *testing.T) {
 	}
 }
 
-// A missing Inferno binary must fail the start loudly (InfernoFailed) and
-// release the FIFO keeper it just opened - otherwise the fd leaks and a stale
-// reference to an unlinked pipe survives for the next start to orphan.
-func TestMissingInfernoBinaryFailsStart(t *testing.T) {
+// A start whose plugin open fails (no inferno ALSA plugin, ports busy) must
+// fail loudly (InfernoFailed) and release the FIFO keeper it just opened -
+// otherwise the fd leaks and a stale reference to an unlinked pipe survives
+// for the next start to orphan.
+func TestInfernoOpenFailureFailsStart(t *testing.T) {
 	initTestHardware(t)
-	origBin, origState, origDemo := InfernoBinary, infernoState, demoMode
+	fi := useFakeInferno(t)
+	fi.openErr = errors.New("no inferno plugin")
+	origState, origDemo := infernoState, demoMode
 	origKeeper, origPath := fifoKeeper, fifoPath
 	t.Cleanup(func() {
 		mutex.Lock()
-		InfernoBinary, infernoState, demoMode = origBin, origState, origDemo
+		infernoState, demoMode = origState, origDemo
 		fifoKeeper, fifoPath = origKeeper, origPath
 		mutex.Unlock()
 	})
@@ -3912,7 +3874,6 @@ func TestMissingInfernoBinaryFailsStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	mutex.Lock()
-	InfernoBinary = filepath.Join(t.TempDir(), "no-such-binary")
 	infernoState, demoMode = InfernoStopped, false
 	fifoKeeper, fifoPath = nil, ""
 	mutex.Unlock()
@@ -3922,10 +3883,13 @@ func TestMissingInfernoBinaryFailsStart(t *testing.T) {
 	mutex.Lock()
 	defer mutex.Unlock()
 	if infernoState != InfernoFailed {
-		t.Errorf("state = %d after start with missing binary, want InfernoFailed", infernoState)
+		t.Errorf("state = %d after a failed plugin open, want InfernoFailed", infernoState)
 	}
 	if fifoKeeper != nil {
 		t.Error("failed start left the FIFO keeper open")
+	}
+	if fifoPath != "" {
+		t.Error("failed start published a FIFO path")
 	}
 }
 
@@ -3939,14 +3903,14 @@ func TestStopInfernoNilKeeperSafe(t *testing.T) {
 	if err := os.WriteFile(dead, []byte("x"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	origCmd, origPath, origKeeper, origState := infernoCmd, fifoPath, fifoKeeper, infernoState
+	origPath, origKeeper, origState := fifoPath, fifoKeeper, infernoState
 	t.Cleanup(func() {
 		mutex.Lock()
-		infernoCmd, fifoPath, fifoKeeper, infernoState = origCmd, origPath, origKeeper, origState
+		fifoPath, fifoKeeper, infernoState = origPath, origKeeper, origState
 		mutex.Unlock()
 	})
 	mutex.Lock()
-	infernoCmd, fifoKeeper = nil, nil
+	fifoKeeper = nil
 	fifoPath = dead
 	infernoState = InfernoStopped
 	mutex.Unlock()
@@ -4940,26 +4904,12 @@ func (f *fakeTxHolder) flattened() []int32 {
 	return out
 }
 
-// setTxSeams swaps the TX holder test seams under txReconcileMu, which every
-// ensureTxHolder holds while it uses them: reconciles launched by earlier
-// tests (go ensureTxHolder) may still be running, and a bare assignment
-// races their reads.
-func setTxSeams(f func()) {
-	txReconcileMu.Lock()
-	defer txReconcileMu.Unlock()
-	f()
-}
-
 func saveTxGlobals(t *testing.T) {
 	t.Helper()
 	oDemo, oState := demoMode, currentState
 	oRate, oCh, oName := sampleRateIdx, channelCount, deviceName
-	oHolder, oDev, oReady, oPending := txHolder, txHolderDevice, txHolderReady, txReopenPending
-	oVia, oFailed := playbackViaDante, txHolderFailed
-	var oOpener func(string, int, int) (txFrameWriter, error)
-	var oPorts func() int
-	var oWait time.Duration
-	setTxSeams(func() { oOpener, oPorts, oWait = openTxDevice, txPortsInUse, txPortWait })
+	oHolder, oDev, oReady := txHolder, txHolderDevice, txHolderReady
+	oVia := playbackViaDante
 	oCmd := playbackCmd
 	oEnv := make(map[string]string)
 	oEnvSet := make(map[string]bool)
@@ -4967,15 +4917,10 @@ func saveTxGlobals(t *testing.T) {
 		oEnv[k], oEnvSet[k] = os.LookupEnv(k)
 	}
 	t.Cleanup(func() {
-		// Seams first, outside the app mutex: ensureTxHolder takes
-		// txReconcileMu and then the app mutex, so taking them in the other
-		// order here could deadlock against a reconcile still running.
-		setTxSeams(func() { openTxDevice, txPortsInUse, txPortWait = oOpener, oPorts, oWait })
 		mutex.Lock()
 		demoMode, currentState = oDemo, oState
 		sampleRateIdx, channelCount, deviceName = oRate, oCh, oName
-		txHolder, txHolderDevice, txHolderReady, txReopenPending = oHolder, oDev, oReady, oPending
-		txHolderFailed = oFailed
+		txHolder, txHolderDevice, txHolderReady = oHolder, oDev, oReady
 		playbackViaDante = oVia
 		playbackCmd = oCmd
 		mutex.Unlock()
@@ -5001,52 +4946,6 @@ func TestSanitizeDanteName(t *testing.T) {
 		if got := sanitizeDanteName(tc.in); got != tc.want {
 			t.Errorf("sanitizeDanteName(%q) = %q, want %q", tc.in, got, tc.want)
 		}
-	}
-}
-
-func TestTxInfernoEnv(t *testing.T) {
-	env := txInfernoEnv("PI9696", 48000, 2)
-	want := map[string]string{
-		"INFERNO_NAME": "PI9696-TX", "INFERNO_SAMPLE_RATE": "48000",
-		"INFERNO_TX_CHANNELS": "2", "INFERNO_RX_CHANNELS": "0",
-		"INFERNO_PROCESS_ID": "1", "INFERNO_ALT_PORT": "10300",
-	}
-	for k, w := range want {
-		if env[k] != w {
-			t.Errorf("env[%s] = %q, want %q", k, env[k], w)
-		}
-	}
-	// TX and RX stay equal: TX_CHANNELS pins to the single channelCount,
-	// never a second knob; the spaced name is sanitized like the device.
-	env = txInfernoEnv("PI 9696", 96000, 8)
-	if env["INFERNO_TX_CHANNELS"] != "8" || env["INFERNO_NAME"] != "PI-9696-TX" {
-		t.Errorf("env(8ch, spaced name) = %v, want TX_CHANNELS=8 NAME=PI-9696-TX", env)
-	}
-}
-
-// The pipe child must never inherit the holder's instance keys, or it
-// would move off the default ports and vanish from discovery.
-func TestScrubbedInfernoEnv(t *testing.T) {
-	for _, k := range []string{"INFERNO_ALT_PORT", "INFERNO_PROCESS_ID", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS"} {
-		t.Setenv(k, "should-be-scrubbed")
-	}
-	t.Setenv("INFERNO_SAMPLE_RATE", "48000")
-	got := scrubbedInfernoEnv()
-	for _, kv := range got {
-		key := kv[:strings.IndexByte(kv, '=')]
-		switch key {
-		case "INFERNO_ALT_PORT", "INFERNO_PROCESS_ID", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS":
-			t.Errorf("scrubbed env still carries %q", kv)
-		}
-	}
-	found := false
-	for _, kv := range got {
-		if kv == "INFERNO_SAMPLE_RATE=48000" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("scrubbed env dropped an unrelated key")
 	}
 }
 
@@ -5250,133 +5149,91 @@ func TestPumpPlaybackStaleGenerationExits(t *testing.T) {
 	}
 }
 
-func TestEnsureTxHolderLifecycle(t *testing.T) {
+// Starting Inferno opens the one paired device at the configured rate and
+// channels and publishes it as the TX holder, ready once its warm-up write
+// lands; a restart at new settings closes it and opens a fresh one.
+func TestInProcStartPublishesTxHolder(t *testing.T) {
 	initTestHardware(t)
 	saveTxGlobals(t)
-	type openCall struct {
-		device string
-		rate   int
-		ch     int
-	}
-	var calls []openCall
-	fake := &fakeTxHolder{}
-	setTxSeams(func() {
-		openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
-			calls = append(calls, openCall{device, rate, channels})
-			return fake, nil
-		}
-	})
+	fi := useFakeInferno(t)
 	mutex.Lock()
 	demoMode = false
 	sampleRateIdx, channelCount, deviceName = 1, 2, "PI9696"
 	currentState = StateIdle
-	txHolder, txHolderDevice, txHolderReady = nil, "", false
 	mutex.Unlock()
+	t.Cleanup(doStopInferno)
 
-	ensureTxHolder()
-	mutex.Lock()
-	if txHolder == nil || !txHolderReady {
-		mutex.Unlock()
-		t.Fatal("ensure did not open and warm up the holder")
+	doStartInferno()
+	dev := fi.last()
+	if fi.opens() != 1 || dev.rate != 48000 || dev.channels != 2 {
+		t.Fatalf("opens = %d, last = %+v; want one open at 48000/2", fi.opens(), dev)
 	}
-	mutex.Unlock()
-	if len(calls) != 1 {
-		t.Fatalf("opener called %d times, want 1", len(calls))
-	}
-	want := "inferno"
-	if calls[0].device != want || calls[0].rate != 48000 || calls[0].ch != 2 {
-		t.Errorf("open(%+v), want device %q rate 48000 ch 2", calls[0], want)
-	}
+	waitFor(t, 2*time.Second, "holder ready", func() bool {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return txHolder == txFrameWriter(dev) && txHolderReady
+	})
 
-	// Steady state: no reopen.
-	ensureTxHolder()
-	if len(calls) != 1 {
-		t.Errorf("steady ensure reopened the holder (%d opens)", len(calls))
-	}
-
-	// Audio settings move: reopen with the new string, close the old.
+	doStopInferno()
 	mutex.Lock()
 	channelCount = 8
 	mutex.Unlock()
-	ensureTxHolder()
-	if len(calls) != 2 || calls[1].ch != 8 {
-		t.Fatalf("after channel change: opens = %+v, want a second open at 8ch", calls)
+	doStartInferno()
+	if fi.opens() != 2 || fi.last().channels != 8 {
+		t.Fatalf("after a channel change: opens = %d, last channels %d; want a second open at 8", fi.opens(), fi.last().channels)
 	}
-	if !fake.closed {
-		t.Error("reopen did not close the stale holder")
-	}
-	// Reset the closed flag the reopen set: later subtests reuse the fake.
-	fake.mu.Lock()
-	fake.closed = false
-	fake.mu.Unlock()
-
-	// While playing the holder is frozen and the reopen defers.
-	mutex.Lock()
-	currentState = StatePlaying
-	channelCount = 2
-	mutex.Unlock()
-	ensureTxHolder()
-	if len(calls) != 2 {
-		t.Errorf("ensure while playing reopened (%d opens)", len(calls))
-	}
-	mutex.Lock()
-	pending := txReopenPending
-	mutex.Unlock()
-	if !pending {
-		t.Error("ensure while playing did not defer the reopen")
+	select {
+	case <-dev.done:
+	default:
+		t.Error("the stop did not close the previous paired device")
 	}
 }
 
-// No clock overlay: the holder opens but never warms up, staying present
-// but unready so playback refuses instead of misrouting to local ALSA.
-func TestEnsureTxHolderUnreadyOnNoClock(t *testing.T) {
+// No clock overlay: the device opens but the warm-up write fails, so the
+// holder stays present but unready and playback refuses instead of
+// misrouting to local ALSA.
+func TestInProcTxHolderUnreadyOnNoClock(t *testing.T) {
 	initTestHardware(t)
 	saveTxGlobals(t)
-	dead := &fakeTxHolder{writeErr: errors.New("no clock available (timeout waiting for overlay update)")}
-	setTxSeams(func() {
-		openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
-			return dead, nil
-		}
-	})
+	fi := useFakeInferno(t)
+	fi.writeErr = errors.New("no clock available (timeout waiting for overlay update)")
 	mutex.Lock()
 	demoMode = false
-	sampleRateIdx, channelCount, deviceName = 1, 2, "PI9696"
 	currentState = StateIdle
-	txHolder, txHolderDevice, txHolderReady = nil, "", false
 	mutex.Unlock()
+	t.Cleanup(doStopInferno)
 
-	ensureTxHolder()
+	doStartInferno()
+	time.Sleep(100 * time.Millisecond) // the warm-up runs on its own goroutine
 	mutex.Lock()
 	defer mutex.Unlock()
 	if txHolder == nil {
-		t.Fatal("ensure dropped the holder on warmup failure; want it held but unready")
+		t.Fatal("start dropped the holder on warm-up failure; want it held but unready")
 	}
 	if txHolderReady {
 		t.Error("holder warmed up without a clock")
 	}
 }
 
-// No inferno ALSA device at all (dev/sim): the holder stays absent and
+// No inferno ALSA plugin at all (dev/sim): the holder stays absent and
 // takes fall back to local ALSA via buildPlaybackCmd.
-func TestEnsureTxHolderAbsentWithoutDevice(t *testing.T) {
+func TestInProcTxHolderAbsentWithoutPlugin(t *testing.T) {
 	initTestHardware(t)
 	saveTxGlobals(t)
-	setTxSeams(func() {
-		openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
-			return nil, errors.New("no such ALSA device")
-		}
-	})
+	fi := useFakeInferno(t)
+	fi.openErr = errors.New("no such ALSA device")
 	mutex.Lock()
 	demoMode = false
 	currentState = StateIdle
 	txHolder, txHolderDevice, txHolderReady = nil, "", false
 	mutex.Unlock()
+	t.Cleanup(doStopInferno)
 
-	ensureTxHolder()
+	doStartInferno()
 	mutex.Lock()
 	defer mutex.Unlock()
 	if txHolder != nil {
-		t.Error("ensure kept a holder the opener refused")
+		t.Error("a failed open left a TX holder")
 	}
 }
 
@@ -5394,7 +5251,7 @@ func TestTxStatusText(t *testing.T) {
 		wantShort string
 		wantLong  string
 	}{
-		{"ready", &fakeTxHolder{}, true, false, "ready", "Inferno TX ready (PI9696-TX)"},
+		{"ready", &fakeTxHolder{}, true, false, "ready", "Inferno TX ready (PI9696)"},
 		{"no clock", &fakeTxHolder{}, false, false, "no clock", "Inferno TX: waiting for clock"},
 		{"demo", nil, false, true, "off", "Inferno TX off (demo mode)"},
 		{"absent", nil, false, false, "off", "Inferno TX unavailable (no device)"},
@@ -5472,7 +5329,7 @@ func TestMeterResponseCarriesTxStatus(t *testing.T) {
 	txHolder, txHolderReady = &fakeTxHolder{}, true
 	deviceName = "PI9696"
 	mutex.Unlock()
-	if got := currentMeterResponse().TXStatus; got != "Inferno TX ready (PI9696-TX)" {
+	if got := currentMeterResponse().TXStatus; got != "Inferno TX ready (PI9696)" {
 		t.Errorf("meter TXStatus = %q, want ready line", got)
 	}
 }
@@ -5902,181 +5759,6 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 	}
 }
 
-// procTxPortsInUse parses the kernel UDP table: count the TX ports (10300-
-// 10303) any socket holds, by local port, regardless of address or state.
-func TestProcTxPortsInUseParsesUDPTable(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "udp")
-	table := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops\n" +
-		"   1: 00000000:283C 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0 0\n" + // 10300
-		"   2: 450200C0:283D 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0 0\n" + // 10301
-		"   3: 00000000:283D 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0 0\n" + // 10301 again
-		"   4: 450200C0:1158 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1 2 0 0\n" // 4440, not TX
-	if err := os.WriteFile(path, []byte(table), 0644); err != nil {
-		t.Fatal(err)
-	}
-	orig := procNetUDPPath
-	procNetUDPPath = path
-	t.Cleanup(func() { procNetUDPPath = orig })
-	if n := procTxPortsInUse(); n != 2 {
-		t.Fatalf("procTxPortsInUse = %d, want 2 (10300, 10301)", n)
-	}
-	procNetUDPPath = filepath.Join(t.TempDir(), "missing")
-	if n := procTxPortsInUse(); n != -1 {
-		t.Fatalf("unreadable table = %d, want -1 (unknown)", n)
-	}
-}
-
-// txPortSim scripts the host UDP table for TX holder tests: the ports a
-// fake inferno instance holds, settable as it "starts" and "stops".
-type txPortSim struct {
-	mu   sync.Mutex
-	held int
-}
-
-func (p *txPortSim) count() int { p.mu.Lock(); defer p.mu.Unlock(); return p.held }
-func (p *txPortSim) set(n int)  { p.mu.Lock(); p.held = n; p.mu.Unlock() }
-
-func txHolderTestSetup(t *testing.T) *txPortSim {
-	t.Helper()
-	initTestHardware(t)
-	saveTxGlobals(t)
-	sim := &txPortSim{}
-	setTxSeams(func() { txPortsInUse = sim.count })
-	setTxSeams(func() { txPortWait = 200 * time.Millisecond })
-	mutex.Lock()
-	demoMode = false
-	sampleRateIdx, channelCount, deviceName = 1, 2, "PI9696"
-	currentState = StateIdle
-	txHolder, txHolderDevice, txHolderReady, txHolderFailed = nil, "", false, false
-	mutex.Unlock()
-	return sim
-}
-
-// The reported fault: after a settings change the new TX instance lost the
-// race for its ports ("address already in use" inside the plugin) and died,
-// but the ALSA handle still accepted writes, so the dashboard said "TX
-// ready". An instance that never binds must be retried, not trusted.
-func TestTxHolderRetriesInstanceThatFailedToBind(t *testing.T) {
-	ports := txHolderTestSetup(t)
-	var opened []*fakeTxHolder
-	setTxSeams(func() {
-		openTxDevice = func(string, int, int) (txFrameWriter, error) {
-			h := &fakeTxHolder{}
-			opened = append(opened, h)
-			if len(opened) >= 2 {
-				ports.set(len(txPorts)) // second instance comes up properly
-			}
-			return h, nil
-		}
-	})
-	ensureTxHolder()
-	mutex.Lock()
-	holder, ready, failed := txHolder, txHolderReady, txHolderFailed
-	mutex.Unlock()
-	if len(opened) != 2 {
-		t.Fatalf("opens = %d, want 2 (dead instance retried once)", len(opened))
-	}
-	if !opened[0].closed {
-		t.Error("the instance that failed to bind was not closed")
-	}
-	if holder != opened[1] || !ready || failed {
-		t.Errorf("holder=%p want second instance %p, ready=%v failed=%v", holder, opened[1], ready, failed)
-	}
-}
-
-// An instance that never binds after every attempt must leave TX visibly
-// failed - never "ready".
-func TestTxHolderReportsFailureWhenInstanceNeverBinds(t *testing.T) {
-	txHolderTestSetup(t)
-	opens := 0
-	setTxSeams(func() {
-		openTxDevice = func(string, int, int) (txFrameWriter, error) {
-			opens++
-			return &fakeTxHolder{}, nil
-		}
-	})
-	ensureTxHolder()
-	mutex.Lock()
-	defer mutex.Unlock()
-	if opens != txOpenAttempts {
-		t.Fatalf("opens = %d, want %d attempts", opens, txOpenAttempts)
-	}
-	short, long := txStatusLocked()
-	if txHolder != nil || txHolderReady || short != "failed" {
-		t.Fatalf("after %d failed binds: holder=%v ready=%v status=%q/%q; want no holder and \"failed\"", opens, txHolder != nil, txHolderReady, short, long)
-	}
-	if !strings.Contains(webNotice, "Inferno TX failed") {
-		t.Errorf("no dashboard notice for the TX failure (notice %q)", webNotice)
-	}
-}
-
-// A reopen must wait for the previous instance to release its ports before
-// starting the next one: the plugin's close only asks it to shut down.
-func TestTxHolderReopenWaitsForOldPorts(t *testing.T) {
-	ports := txHolderTestSetup(t)
-	setTxSeams(func() { txPortWait = 2 * time.Second })
-	ports.set(len(txPorts))
-	mutex.Lock()
-	txHolder, txHolderDevice, txHolderReady = &fakeTxHolder{}, "stale", true
-	mutex.Unlock()
-	var freedAt, openedAt time.Time
-	go func() {
-		time.Sleep(150 * time.Millisecond) // old instance lingers
-		freedAt = time.Now()
-		ports.set(0)
-	}()
-	setTxSeams(func() {
-		openTxDevice = func(string, int, int) (txFrameWriter, error) {
-			openedAt = time.Now()
-			if ports.count() != 0 {
-				t.Error("opened a new instance while the old one still held the ports")
-			}
-			ports.set(len(txPorts))
-			return &fakeTxHolder{}, nil
-		}
-	})
-	ensureTxHolder()
-	if openedAt.IsZero() || openedAt.Before(freedAt) {
-		t.Fatalf("open at %v, ports freed at %v: reopen did not wait", openedAt, freedAt)
-	}
-}
-
-// Concurrent triggers (Inferno restart, rename, take end) must not open two
-// instances at once: the loser died on "address already in use".
-func TestEnsureTxHolderSerialized(t *testing.T) {
-	txHolderTestSetup(t)
-	var inflight, maxInflight atomic.Int32
-	setTxSeams(func() {
-		openTxDevice = func(string, int, int) (txFrameWriter, error) {
-			n := inflight.Add(1)
-			for {
-				m := maxInflight.Load()
-				if n <= m || maxInflight.CompareAndSwap(m, n) {
-					break
-				}
-			}
-			time.Sleep(50 * time.Millisecond)
-			inflight.Add(-1)
-			return &fakeTxHolder{}, nil
-		}
-	})
-	var wg sync.WaitGroup
-	for i := 0; i < 4; i++ {
-		wg.Add(1)
-		go func(i int) {
-			defer wg.Done()
-			mutex.Lock()
-			channelCount = 2 + i%2 // alternate so each call wants a reopen
-			mutex.Unlock()
-			ensureTxHolder()
-		}(i)
-	}
-	wg.Wait()
-	if m := maxInflight.Load(); m > 1 {
-		t.Fatalf("%d TX instances were opened concurrently", m)
-	}
-}
-
 // Saving the channel count it already has must not restart Inferno or write
 // the config: Enter in the number box used to send the save twice.
 func TestChannelsSaveUnchangedIsNoOp(t *testing.T) {
@@ -6226,30 +5908,6 @@ func TestSettingsPanesEndpointRendersLiveValues(t *testing.T) {
 	}
 }
 
-// Ports the previous instance never releases mean any new open fails - and
-// its sockets would satisfy the "bound" check, passing a dead instance as
-// ready. A reopen must not open at all, and must report TX failed.
-func TestTxHolderRefusesWhenOldPortsNeverRelease(t *testing.T) {
-	ports := txHolderTestSetup(t)
-	ports.set(len(txPorts)) // stuck previous instance
-	opens := 0
-	setTxSeams(func() {
-		openTxDevice = func(string, int, int) (txFrameWriter, error) {
-			opens++
-			return &fakeTxHolder{}, nil
-		}
-	})
-	ensureTxHolder()
-	mutex.Lock()
-	defer mutex.Unlock()
-	if opens != 0 {
-		t.Fatalf("opened %d instance(s) while the old one still held the ports", opens)
-	}
-	if short, _ := txStatusLocked(); txHolder != nil || txHolderReady || short != "failed" {
-		t.Fatalf("stuck ports: holder=%v ready=%v status=%q, want no holder and \"failed\"", txHolder != nil, txHolderReady, short)
-	}
-}
-
 // Leaving demo mode must bring the real input chain up: the network loop
 // only starts Inferno on a link-up edge (and skips demo), so a unit booted
 // in demo and switched live had no RX or TX until a flap or restart.
@@ -6275,9 +5933,9 @@ func TestDemoExitStartsInfernoWhenLinkUp(t *testing.T) {
 	}
 }
 
-// Single-instance mode advertises one device: the unit's own name (no "-TX"),
-// equal RX and TX channels, and the primary ports (the TX-only separation
-// keys cleared). applyUnifiedInfernoEnv builds that plugin config.
+// The unit advertises one device: its own name, equal RX and TX channels,
+// and the primary ports (no port block or process id inherited from the
+// environment). applyUnifiedInfernoEnv builds that plugin config.
 func TestUnifiedInfernoEnv(t *testing.T) {
 	saveTxGlobals(t) // restores INFERNO_* env in cleanup
 	os.Setenv("INFERNO_ALT_PORT", "10300")
@@ -6299,29 +5957,6 @@ func TestUnifiedInfernoEnv(t *testing.T) {
 		if v, ok := os.LookupEnv(k); ok {
 			t.Errorf("%s still set (%q); the single instance must take the primary ports", k, v)
 		}
-	}
-}
-
-// ensureTxHolder is a no-op in single-instance mode: the paired device is
-// owned by the Inferno start/stop lifecycle, so reconciling a separate TX
-// holder would open a second instance.
-func TestEnsureTxHolderNoopInProcRX(t *testing.T) {
-	saveTxGlobals(t)
-	t.Setenv("PI9696_INPROC_RX", "1")
-	opened := false
-	setTxSeams(func() {
-		openTxDevice = func(string, int, int) (txFrameWriter, error) {
-			opened = true
-			return &fakeTxHolder{}, nil
-		}
-	})
-	mutex.Lock()
-	txHolder, txHolderDevice, txHolderReady = nil, "", false
-	demoMode, currentState = false, StateIdle
-	mutex.Unlock()
-	ensureTxHolder()
-	if opened {
-		t.Error("ensureTxHolder opened a TX device in single-instance mode (would be a second instance)")
 	}
 }
 
@@ -6503,15 +6138,6 @@ func TestRecordRefusedWhileInfernoRestartPending(t *testing.T) {
 	<-done
 }
 
-// fakeSlowTermScript stands in for an Inferno server that takes a moment to
-// exit on SIGTERM, holding the worker inside doStopInferno long enough for a
-// test to act mid-restart.
-const fakeSlowTermScript = `#!/bin/sh
-trap 'kill $! 2>/dev/null; sleep 0.5; exit 0' TERM
-sleep 300 >/dev/null 2>&1 &
-wait $!
-`
-
 // The worker used to read isRecording, release the mutex, and only then
 // stop the server: a Record press in between saw Inferno "running", started
 // a take, and lost its FIFO a moment later. The restart is now claimed in
@@ -6519,13 +6145,10 @@ wait $!
 func TestRecordRefusedDuringInfernoRestart(t *testing.T) {
 	initTestHardware(t)
 	resetTransportCleanup(t)
-	bin := filepath.Join(t.TempDir(), "inferno2pipe")
-	if err := os.WriteFile(bin, []byte(fakeSlowTermScript), 0755); err != nil {
-		t.Fatal(err)
-	}
-	orig := InfernoBinary
-	InfernoBinary = bin
-	t.Cleanup(func() { InfernoBinary = orig })
+	// A device that takes a moment to close holds the worker inside
+	// doStopInferno long enough to act mid-restart.
+	fi := useFakeInferno(t)
+	fi.closeDelay = 500 * time.Millisecond
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
 
 	startDone := make(chan struct{})
@@ -6763,26 +6386,18 @@ func captureLogs(t *testing.T, buf *syncBuffer) {
 	t.Cleanup(func() { slog.SetDefault(orig) })
 }
 
-// useFakeInfernoBinary points InfernoBinary at a shell script for the test.
-func useFakeInfernoBinary(t *testing.T, script string) {
-	t.Helper()
-	bin := filepath.Join(t.TempDir(), "inferno2pipe")
-	if err := os.WriteFile(bin, []byte(script), 0755); err != nil {
-		t.Fatal(err)
-	}
-	orig := InfernoBinary
-	InfernoBinary = bin
-	t.Cleanup(func() { InfernoBinary = orig })
-}
-
-// Nothing used to wait on the server until a stop: a crash left a zombie,
-// infernoState stayed "running" and a take in progress hung on the empty
-// FIFO. The reaper must mark the server failed, tell the operator, and
-// finalise the take.
+// A capture loop that dies on its own (plugin fault, device gone) must not
+// leave infernoState "running" over a FIFO nothing feeds, with a take in
+// progress hung on it: the server is marked failed, the operator told, and
+// the take finalised.
 func TestInfernoCrashIsDetected(t *testing.T) {
 	initTestHardware(t)
 	resetTransportCleanup(t)
-	useFakeInfernoBinary(t, "#!/bin/sh\nsleep 1\nexit 3\n")
+	fi := useFakeInferno(t)
+	fi.failReadAfter = time.Second
+	// The fake take's ffmpeg never reads the FIFO; with no data the loop
+	// keeps reading the device instead of waiting on a full pipe.
+	fi.noData = true
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
 
 	startDone := make(chan struct{})
@@ -6808,12 +6423,9 @@ func TestInfernoCrashIsDetected(t *testing.T) {
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		mutex.Lock()
-		state, cmd, rec, notice := infernoState, infernoCmd, isRecording, sysNotice
+		state, rec, notice := infernoState, isRecording, sysNotice
 		mutex.Unlock()
 		if state == InfernoFailed && !rec {
-			if cmd != nil {
-				t.Error("infernoCmd still set after the server exited")
-			}
 			if !strings.Contains(notice, "INFERNO STOPPED") {
 				t.Errorf("no operator notice for the crash (notice %q)", notice)
 			}
@@ -6826,11 +6438,11 @@ func TestInfernoCrashIsDetected(t *testing.T) {
 	}
 }
 
-// A requested stop disowns the server first, so the reaper stays quiet.
+// A requested stop ends the capture loop without reporting a failure.
 func TestRequestedInfernoStopIsQuiet(t *testing.T) {
 	initTestHardware(t)
 	resetTransportCleanup(t)
-	useFakeInfernoBinary(t, fakeChildScript)
+	useFakeInferno(t)
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
 	startDone := make(chan struct{})
 	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: startDone}
@@ -7438,12 +7050,11 @@ func TestRemoteServerDropsSlowHeaders(t *testing.T) {
 	}
 }
 
-// In single-instance mode the paired device is also the playback sink: a
-// restart mid-playback killed the output and closed the handle under the
-// pump. The worker must defer it and remember that it did.
+// The paired device is also the playback sink: a restart mid-playback
+// killed the output and closed the handle under the pump. The worker must
+// defer it and remember that it did.
 func TestInProcRestartDeferredDuringPlayback(t *testing.T) {
 	initTestHardware(t)
-	t.Setenv("PI9696_INPROC_RX", "1")
 	mutex.Lock()
 	origState, origPlay, origDeferred := infernoState, playbackCmd, infernoRestartDeferred
 	infernoState, playbackCmd, infernoRestartDeferred = InfernoRunning, &exec.Cmd{}, false
@@ -7472,7 +7083,7 @@ func TestInProcRestartDeferredDuringPlayback(t *testing.T) {
 // re-queued only on a rate/channel mismatch.
 func TestDeferredRestartResumesWhenIdle(t *testing.T) {
 	initTestHardware(t)
-	useFakeInfernoBinary(t, fakeChildScript)
+	useFakeInferno(t)
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
 	mutex.Lock()
 	origRec, origPlay, origDeferred, origDemo := isRecording, playbackCmd, infernoRestartDeferred, demoMode
@@ -7520,8 +7131,8 @@ func TestCaptureXrunReport(t *testing.T) {
 	}
 }
 
-// Single-instance mode advertises one device under the unit's own name; the
-// TX status must not send the operator looking for a "-TX" device.
+// The unit advertises one device under its own name; the TX status must not
+// send the operator looking for a "-TX" device.
 func TestTxStatusNamesSingleInstanceDevice(t *testing.T) {
 	saveTxGlobals(t)
 	mutex.Lock()
@@ -7530,13 +7141,8 @@ func TestTxStatusNamesSingleInstanceDevice(t *testing.T) {
 	defer func() { deviceName = origName }()
 	deviceName = "PI9696"
 	txHolder, txHolderReady = &fakeTxHolder{}, true
-	t.Setenv("PI9696_INPROC_RX", "")
-	if _, long := txStatusLocked(); !strings.Contains(long, "(PI9696-TX)") {
-		t.Errorf("two-instance status %q, want the -TX device", long)
-	}
-	t.Setenv("PI9696_INPROC_RX", "1")
-	if _, long := txStatusLocked(); !strings.Contains(long, "(PI9696)") {
-		t.Errorf("single-instance status %q, want the unit's own name", long)
+	if _, long := txStatusLocked(); !strings.Contains(long, "(PI9696)") || strings.Contains(long, "-TX") {
+		t.Errorf("TX status %q, want the unit's own name", long)
 	}
 }
 
@@ -7624,7 +7230,7 @@ func TestWriteRecordingZipReportsCloseError(t *testing.T) {
 func TestInfernoFifoIsPrivate(t *testing.T) {
 	initTestHardware(t)
 	resetTransportCleanup(t)
-	useFakeInfernoBinary(t, fakeChildScript)
+	useFakeInferno(t)
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
 	done := make(chan struct{})
 	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: done}
@@ -7788,71 +7394,40 @@ func TestLoadAndImportClampAlike(t *testing.T) {
 	}
 }
 
-// A crashing server's last stderr lines (the panic saying why) must reach
-// the log: cmd.Wait closes the stderr pipe, so reaping before the consumer
-// has drained it threw them away.
-func TestInfernoCrashPanicReachesLog(t *testing.T) {
+// A missing inferno plugin is not transient: the backoff retry would log it
+// once a minute forever on a dev box. It must not book retries - but any
+// other open failure (ports busy) must.
+func TestMissingInfernoPluginIsNotRetried(t *testing.T) {
 	initTestHardware(t)
 	resetTransportCleanup(t)
-	var logBuf syncBuffer
-	captureLogs(t, &logBuf)
-	// ~120 KB of debug chatter first: at exit a pipe-buffer's worth is
-	// still unread, which is what a premature Wait discards.
-	useFakeInfernoBinary(t, "#!/bin/sh\nsleep 0.3\n"+
-		"i=0; while [ $i -lt 1200 ]; do echo \"[2026-10-04T00:00:00Z DEBUG inferno_aoip::flows_rx] chatter line $i padding padding padding padding\" >&2; i=$((i+1)); done\n"+
-		"echo \"thread 'main' panicked at src/flows_rx.rs:42:5: boom\" >&2\nexit 101\n")
-	fakeExecutable(t, "ffmpeg", fakeChildScript)
-	done := make(chan struct{})
-	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: done}
-	<-done
+	fi := useFakeInferno(t)
+	fi.openErr = errors.New("cannot open inferno")
+	origInstalled := infernoPluginInstalled
 	t.Cleanup(func() {
-		stopInfernoAndWait()
-		mutex.Lock()
-		infernoState, sysNotice = InfernoStopped, ""
-		mutex.Unlock()
-	})
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		mutex.Lock()
-		failed := infernoState == InfernoFailed
-		mutex.Unlock()
-		if failed {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("crash not detected")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if out := logBuf.String(); !strings.Contains(out, "panicked at src/flows_rx.rs") {
-		t.Fatalf("the crash's panic line never reached the log:\n%s", out)
-	}
-}
-
-// A missing server binary is not transient: the backoff retry would log it
-// once a minute forever on a dev box. It must not book retries.
-func TestMissingInfernoBinaryIsNotRetried(t *testing.T) {
-	initTestHardware(t)
-	resetTransportCleanup(t)
-	orig := InfernoBinary
-	InfernoBinary = filepath.Join(t.TempDir(), "no-such-inferno2pipe")
-	t.Cleanup(func() {
-		InfernoBinary = orig
+		infernoPluginInstalled = origInstalled
 		mutex.Lock()
 		infernoState, infernoNoRetry = InfernoStopped, false
 		mutex.Unlock()
 	})
-	done := make(chan struct{})
-	infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: done}
-	<-done
-	mutex.Lock()
-	defer mutex.Unlock()
-	if infernoState != InfernoFailed {
-		t.Fatalf("state %v, want failed", infernoState)
-	}
-	infernoRetryAt = time.Time{}
-	if infernoRetryDueLocked(time.Now()) {
-		t.Fatal("a missing binary booked an automatic retry")
+	for _, installed := range []bool{false, true} {
+		infernoPluginInstalled = func() bool { return installed }
+		mutex.Lock()
+		infernoState, infernoNoRetry = InfernoStopped, false
+		mutex.Unlock()
+		done := make(chan struct{})
+		infernoReqCh <- infernoRequest{cmd: infernoCmdStart, done: done}
+		<-done
+		mutex.Lock()
+		state := infernoState
+		infernoRetryAt = time.Time{}
+		retry := infernoRetryDueLocked(time.Now())
+		mutex.Unlock()
+		if state != InfernoFailed {
+			t.Fatalf("installed=%v: state %v, want failed", installed, state)
+		}
+		if retry != installed {
+			t.Errorf("installed=%v: retry booked = %v, want %v", installed, retry, installed)
+		}
 	}
 }
 
@@ -7862,16 +7437,6 @@ func TestStderrTailSplitsCarriageReturns(t *testing.T) {
 	fmt.Fprint(&tail, "size=1kB time=00:00:01\rsize=2kB time=00:00:02\rav_interleaved_write_frame(): No space left on device\n")
 	if got := tail.String(); got != "size=1kB time=00:00:01 | size=2kB time=00:00:02 | av_interleaved_write_frame(): No space left on device" {
 		t.Fatalf("tail = %q", got)
-	}
-}
-
-// The two-instance TX holder transmits 24-bit takes too: without
-// TX_SOURCE_BIT_DEPTH=24 inferno dithers them and playback is not
-// bit-transparent.
-func TestTxHolderEnvSendsUndithered24Bit(t *testing.T) {
-	env := txInfernoEnv("PI9696", 48000, 8)
-	if env["INFERNO_TX_SOURCE_BIT_DEPTH"] != "24" {
-		t.Fatalf("TX holder env %v lacks INFERNO_TX_SOURCE_BIT_DEPTH=24", env)
 	}
 }
 
@@ -7906,15 +7471,13 @@ func waitWrites(t *testing.T, f *fakeTxHolder, atLeast int, within time.Duration
 func TestTxIdleFeederWritesSilenceAndYieldsToPump(t *testing.T) {
 	saveTxGlobals(t)
 	enableTxIdleFeed(t)
-	// Earlier tests leave reconciles behind: an inferno worker request or
-	// a `go ensureTxHolder()` that lands mid-test and swaps txHolder out,
-	// which stops the feeder after one write. Drain the worker, and give
-	// the holder the identity a reconcile would want so a late one keeps it.
+	// Earlier tests leave inferno worker requests behind; one landing
+	// mid-test would swap txHolder out and stop the feeder after one
+	// write. Drain the worker first.
 	quiesceInfernoWorker(t)
 	holder := &fakeTxHolder{}
 	mutex.Lock()
 	txHolder, txHolderReady = holder, true
-	txHolderDevice = fmt.Sprintf("inferno:%s:%d:%d", sanitizeDanteName(deviceName), sampleRates[sampleRateIdx], channelCount)
 	startTxIdleFeeder(holder, 2, 48000)
 	mutex.Unlock()
 	t.Cleanup(func() {

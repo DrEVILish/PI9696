@@ -81,22 +81,21 @@ channel-list paging, bulk unsubscribe and rate-probe fixes (U13, U1, U2), the
 plugin panic guard (U16), the stale-audio-after-disconnect fixes (U17) and
 TX flows kept across a transmitter restart (U18), and the realtime loops
 waking the application at most four times per ALSA period (U19).
-`inferno2pipe` is unchanged since `v0.5.4`, so it keeps the
-`-c <channels> -o <path>` + `INFERNO_SAMPLE_RATE`/`INFERNO_NAME` contract the
-app depends on. (An earlier note here said `dev`'s `inferno2pipe` took a
-different CLI; that is not true of the fork's `dev`.) Pin a commit, not the
-branch, so a rebuild is reproducible; move the pin deliberately.
+Pin a commit, not the branch, so a rebuild is reproducible; move the pin
+deliberately.
 
 ### What gets built
 
 | Artifact | Use |
 |---|---|
-| `target/release/inferno2pipe` | the receiver the app runs — **not** named `inferno` |
-| `target/release/libasound_module_pcm_inferno.so` | ALSA virtual soundcard, for transmit |
+| `target/release/libasound_module_pcm_inferno.so` | the inferno ALSA plugin: the app's one inferno instance (RX and TX) |
 
-There is no binary called `inferno`; the app looks for
-`inferno/target/release/inferno2pipe` (override with `PI9696_INFERNO_BIN` if
-you install it somewhere else).
+The app runs inferno in-process: it opens the plugin's `inferno` device as a
+paired capture+playback handle (`txholder.go`), so the unit is one device on
+the network with equal RX and TX channels. It no longer runs `inferno2pipe`
+(still part of the inferno tree, just not used here) or a separate
+`<name>-TX` device. Only the plugin has to be installed; without it the app
+reports Inferno failed and plays takes through local ALSA.
 
 **Never run `go test ./...` on a unit - run it on the dev server.** Older test
 helpers emptied `inferno/`; the current ones build their stub in a temp dir,
@@ -108,16 +107,16 @@ unit (REPORT.md). It now runs against a temp recordings tree, guarded by
 inferno clients that do not belong on a live recorder.
 
 ```bash
-# ALSA virtual soundcard (needed to transmit, and for any inferno output path)
+# the inferno ALSA plugin: required, it is the app's inferno instance
 cp target/release/libasound_module_pcm_inferno.so \
    /usr/lib/aarch64-linux-gnu/alsa-lib/       # find with: find /usr/lib* -type d -name alsa-lib
 ```
 
 ### asoundrc
 
-The app opens the **bare** `inferno` device and passes every per-instance
-setting (NAME, SAMPLE_RATE, TX/RX_CHANNELS, PROCESS_ID, ALT_PORT) through
-`INFERNO_*` environment variables (`txholder.go`, since `275c3c5`). The unit's
+The app opens the **bare** `inferno` device and passes every setting (NAME,
+SAMPLE_RATE, TX/RX_CHANNELS, TX_SOURCE_BIT_DEPTH) through `INFERNO_*`
+environment variables (`applyUnifiedInfernoEnv` in `txholder.go`). The unit's
 `/etc/asound.conf` therefore defines the device with no keys at all:
 
 ```
@@ -500,19 +499,16 @@ Nothing outstanding for `ftl-themes`.
 ## Known limitations on this unit
 
 - **Playback goes out through Inferno when the holder is ready**, local ALSA
-  otherwise (see README). The app holds a TX-only instance (`<name>-TX`,
-  `PROCESS_ID=1`, `ALT_PORT=10300`) alongside inferno2pipe's default-port RX
-  instance - the same separation inferno-loopback.sh proves (single-instance
-  mode, `PI9696_INPROC_RX`, uses one paired device instead). Measured with a
+  otherwise (see README). The TX holder is the playback side of the app's
+  one in-process inferno instance (default ports). Measured with a
   second Pi on 2026-10-04 (`test/interop/e2e_bitperfect.py`, 32 ch, shared
   PTP clock): playback is bit-perfect end to end. The earlier faults are
   fixed: pump stalls (F2), no media while idle / lost playback start (F3;
   the app now transmits silence while idle), dithered 24-bit output (F4),
   and a transmitter restart dropping every receiver's flow (fork U18).
-  Port reservations on one host: inferno2pipe defaults, app TX 10300-10303,
-  loopback.sh 10100-10102/10200-10202 - never run the loopback while the app
-  is up (it also runs `pkill -x inferno2pipe`, which kills the app's
-  receiver). `/etc/asound.conf` must stay bare (see asoundrc above): a key
+  Port reservations on one host: the app's instance takes the inferno
+  defaults, loopback.sh 10100-10102/10200-10202 - never run the loopback
+  while the app is up. `/etc/asound.conf` must stay bare (see asoundrc above): a key
   set there wins over the `INFERNO_*` env the app passes per open, and would
   pin e.g. TX to 2ch.
 - **No OLED or buttons attached.** The panel SPI path is fixed and exercised
@@ -529,12 +525,12 @@ Nothing outstanding for `ftl-themes`.
   until statime is enabled with a leader present (or the two-host PTPv2 recipe
   is used). `/var/log/pi9696/` created and `pi9696.service` reinstalled from the
   template (2026-10-01).
-- **`inferno2pipe` receive faults** (reorder-buffer losses, media timeouts) are
-  counted by the app and logged as summaries (`inferno2pipe: N sample-loss
-  events ...`, Error level) since `b08d6da`; the raw output is still not kept.
+- **Gaps in the input** show as capture overruns, logged by the app's capture
+  loop at most every 10 s (`in-process inferno: N capture overrun(s)`, Error
+  level). The plugin logs to the app's stderr (the journal) directly.
 - **The sample rate is not shown by netaudio** for any inferno device: inferno
   does not answer netaudio's sample-rate probe (INFERNO-UPSTREAM.md U2, patch
-  verified), and netaudio will not probe 192.0.2.69 at all while `PI9696` and
-  `PI9696-TX` share it (U8). The TX channels carry the rate in their mDNS
+  verified), and netaudio would not probe 192.0.2.69 at all while `PI9696` and
+  `PI9696-TX` shared it (U8; the app now runs one instance). The TX channels carry the rate in their mDNS
   records (`rate=`); the RX-only `PI9696` device publishes none.
 - **Pi 4 has no PTP hardware clock**, so AES67 clock quality is software-only.

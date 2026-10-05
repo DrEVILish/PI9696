@@ -45,29 +45,6 @@ var (
 	USBMountPoint = "/media/usb"
 )
 
-// InfernoBinary is the prebuilt Inferno receiver executable, produced once at
-// install time (`cargo build --release`) rather than compiled at runtime. The
-// default is relative to the app's working directory (the systemd unit runs the
-// app from its project dir).
-//
-// The binary is inferno's `inferno2pipe` tool, which satisfies the CLI contract
-// this app depends on: `-c <channels> -o <output_fifo>` plus the
-// INFERNO_SAMPLE_RATE/INFERNO_NAME env vars. The workspace ships no binary
-// literally named `inferno`, so the name must match the tool.
-//
-// Override with PI9696_INFERNO_BIN to run an installed copy from anywhere (a
-// var, not a const, so tests can point it at a stub without touching the real
-// inferno/ checkout - which is what they used to do, and deleting a built
-// Inferno tree is a spectacular way to fail a deploy).
-var InfernoBinary = infernoBinary()
-
-func infernoBinary() string {
-	if p := os.Getenv("PI9696_INFERNO_BIN"); p != "" {
-		return p
-	}
-	return "inferno/target/release/inferno2pipe"
-}
-
 // ConfigPath is where the app persists non-destructive settings (unit name,
 // format/channel/tag choices, meter preferences, WiFi config) across
 // restarts. In sim/dev mode it defaults to a per-user file so nothing needs
@@ -1106,7 +1083,6 @@ var (
 	allFiles               []string
 	copyProgress           = 0
 	copyStarted            time.Time
-	infernoCmd             *exec.Cmd
 	ffmpegCmd              *exec.Cmd
 	fifoPath               string
 	fifoKeeper             *os.File // held open so the enlarged pipe buffer survives; see enlargeFifo
@@ -1408,10 +1384,9 @@ func gracefulShutdown() {
 	stopDemoGeneratorLocked()
 	mutex.Unlock()
 
+	// Pumps are all dead here (playback reaped above), so the paired device
+	// can close without stranding a writer.
 	stopInfernoAndWait()
-	// Pumps are all dead here (playback reaped above), so the TX device can
-	// go without stranding a writer.
-	closeTxHolder()
 	if err := hwManager.Close(); err != nil {
 		logWarnf("hardware close: %v", err)
 	}
@@ -2129,7 +2104,7 @@ func handleConfirmClick() {
 
 // Network monitoring loop to start/restart Inferno server when eth0 comes up
 // Inferno lifecycle is fully owned by infernoWorker, the only goroutine that
-// ever mutates infernoCmd/fifoPath/infernoState mid-operation. Everything
+// ever mutates the in-process device/fifoPath/infernoState mid-operation. Everything
 // else only ever enqueues a request and returns immediately.
 //
 // Actually stopping or starting the subprocess means signaling it and
@@ -2304,10 +2279,6 @@ func infernoWorker() {
 				time.Sleep(1 * time.Second)
 				doStartInferno()
 			}
-			// The TX holder is independent of the pipe server (own inferno
-			// instance on its own ports) but follows the same audio
-			// settings: reconcile after every (re)start, including boot.
-			go ensureTxHolder()
 		}
 
 		mutex.Lock()
@@ -2321,12 +2292,12 @@ func infernoWorker() {
 }
 
 // infernoBusyLocked reports whether a restart must wait: a take is reading
-// the FIFO, or - in single-instance mode, where the paired device is also
-// the TX sink the playback pump writes - a track is playing. Tearing the
+// the FIFO, or a track is playing (the paired device is also the TX sink
+// the playback pump writes). Tearing the
 // device down mid-playback killed the output (and closed the handle under
 // the pump). Caller holds the app mutex.
 func infernoBusyLocked() bool {
-	return isRecording || (inProcRX() && playbackCmd != nil)
+	return isRecording || playbackCmd != nil
 }
 
 // infernoRestartDeferred records that the worker postponed a restart because
@@ -2433,7 +2404,7 @@ func checkInfernoRestart() {
 // synthesized PCM source feeds a FIFO on the same path the Inferno server
 // would, so monitoring, recording, VU pages and the deck behave exactly as
 // with a live stream - and playback runs against a timer instead of ALSA.
-// It deliberately never touches infernoCmd/fifoPath/infernoState (those stay
+// It deliberately never touches the inferno device/fifoPath/infernoState (those stay
 // infernoWorker-owned); everything downstream keys off infernoUp() and
 // audioFifoPath() instead, which is why enabling demo needs no Inferno
 // binary, no network and no audio hardware.
@@ -2811,119 +2782,27 @@ func doStartInferno() {
 	}
 	fifoKeeper = enlargeFifo(path)
 
-	// Single-instance path (PI9696_INPROC_RX): open the paired capture+
-	// playback ALSA device and feed the FIFO in-process, instead of the
-	// inferno2pipe subprocess. One inferno instance advertises equal RX and
-	// TX; the FIFO contract is unchanged, so record/monitor downstream are
-	// untouched. infernoCmd stays nil - doStopInferno tears this down.
-	if inProcRX() {
-		if !startInProcInferno(name, sampleRate, channels, path) {
-			mutex.Lock()
-			infernoState = InfernoFailed
-			closeFifoKeeperLocked()
-			mutex.Unlock()
-			os.Remove(path)
-			return
-		}
-		mutex.Lock()
-		fifoPath = path
-		infernoState = InfernoRunning
-		infernoRetryBackoff = 0
-		lastSampleRate = sampleRate
-		lastChannelCount = channels
-		if !isRecording {
-			startMonitor()
-			if monitoring {
-				autoMonitor = true
-			}
-		}
-		mutex.Unlock()
-		logInfof("Inferno (in-process RX+TX) started: %dkHz, %d channels", sampleRate/1000, channels)
-		return
-	}
-
-	// The Inferno server is built once during installation
-	// (`cargo build --release`), so at runtime we start the prebuilt binary
-	// directly instead of invoking cargo - starting cargo at runtime made
-	// every restart spend the compile/link time again and, worse, blocked on
-	// cargo run while the (absent during build) FIFO was unavailable, which
-	// is what the recording-start guard in infernoWorker is about. See the
-	// inferno template README (written at install time) for the CLI contract this
-	// binary has to satisfy: -c <channels> -o <output_fifo> and
-	// INFERNO_SAMPLE_RATE/INFERNO_NAME env vars.
-	//
-	// Running the actual binary (not a shell) means the PID is the inferno
-	// process itself. Setpgid still puts it in its own process group so a
-	// reaping signal reaches any grandchild it daemonizes.
-	//
-	// Config (sample rate, device name) is passed via cmd.Env, never the
-	// argument vector - deviceName is user-settable from the web dashboard,
-	// and env vars set this way are never shell-parsed, so it can't be used
-	// for command injection even with shell metacharacters in the name.
-	binary := InfernoBinary
-	if _, err := os.Stat(binary); err != nil {
-		logErrorf("Cannot start Inferno server: built binary %s not found (%v) - build the Inferno binary first", binary, err)
+	// One inferno instance, in-process: open the paired capture+playback
+	// ALSA device (the inferno plugin) and feed the FIFO from it. It
+	// advertises equal RX and TX; record/monitor read the FIFO as before.
+	if !startInProcInferno(name, sampleRate, channels, path) {
 		mutex.Lock()
 		infernoState = InfernoFailed
-		// Not transient: the backoff retry would log this once a minute
-		// forever on a dev box or simulator. A link flap or an explicit
-		// restart still tries again.
-		infernoNoRetry = true
 		closeFifoKeeperLocked()
 		mutex.Unlock()
 		os.Remove(path)
 		return
 	}
-
-	cmd := exec.Command(binary, "-c", fmt.Sprintf("%d", channels), "-o", path)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	// stderrDone closes when the consumer has read stderr to EOF; the
-	// reaper waits for it before releasing the pipe (see reapInferno).
-	stderrDone := make(chan struct{})
-	stderr, err := cmd.StderrPipe()
-	if err == nil {
-		go func() {
-			consumeInfernoStderr(stderr)
-			close(stderrDone)
-		}()
-	} else {
-		stderr = nil
-		close(stderrDone)
-	}
-	// Scrubbed base environment (see scrubbedInfernoEnv): the TX holder's
-	// INFERNO_* instance keys live in this process's env and must not leak
-	// into the pipe server. RATE/NAME are appended explicitly below, and -c
-	// pins the RX channels, so the child is fully specified regardless.
-	cmd.Env = append(scrubbedInfernoEnv(),
-		fmt.Sprintf("INFERNO_SAMPLE_RATE=%d", sampleRate),
-		"INFERNO_NAME="+name,
-	)
-
-	if err := cmd.Start(); err != nil {
-		logErrorf("Failed to start Inferno server: %v", err)
-		os.Remove(path)
-		mutex.Lock()
-		infernoState = InfernoFailed
-		closeFifoKeeperLocked()
-		mutex.Unlock()
-		return
-	}
-
-	exited := make(chan struct{})
 	mutex.Lock()
-	infernoCmd = cmd
-	infernoExited = exited
 	fifoPath = path
 	infernoState = InfernoRunning
 	infernoRetryBackoff = 0
 	infernoNoRetry = false
 	lastSampleRate = sampleRate
 	lastChannelCount = channels
-	// Input monitoring should be on from the moment the unit boots, not only
-	// once the user turns the knob into the idle-browse view - so as soon as
-	// the Inferno server is up, start the lightweight FIFO reader that feeds
-	// the live VU meters. startMonitor is expected to run under the app
-	// mutex (same as every other caller) and guards itself against
+	// Input monitoring is on from the moment the server is up, not only
+	// once the user turns the knob into the idle-browse view: the FIFO
+	// reader feeds the live VU meters. startMonitor guards itself against
 	// recording/duplicate sessions, so this never steps on a take.
 	if !isRecording {
 		startMonitor()
@@ -2932,53 +2811,7 @@ func doStartInferno() {
 		}
 	}
 	mutex.Unlock()
-	go reapInferno(cmd, exited, stderr, stderrDone)
-	logInfof("Inferno server started with %dkHz, %d channels", sampleRate/1000, channels)
-}
-
-// infernoStderrDrainWait bounds how long reapInferno lets the stderr
-// consumer finish after the server exits.
-var infernoStderrDrainWait = 2 * time.Second
-
-// infernoExited is closed by reapInferno when the running server's process
-// has exited; doStopInferno waits on it instead of calling Wait itself.
-// Guarded by the app mutex, like infernoCmd.
-var infernoExited chan struct{}
-
-// reapInferno is the sole owner of the server process's Wait. Before it
-// existed nothing waited on the child until a stop: a server that crashed
-// stayed a zombie while infernoState kept saying "running", the status bar
-// lied, and new takes recorded an empty FIFO. A requested stop disowns the
-// child first (doStopInferno clears infernoCmd), so an exit while it is
-// still infernoCmd is a fault.
-//
-// It reaps with Process.Wait rather than cmd.Wait: cmd.Wait closes the
-// stderr pipe as soon as the child exits, discarding whatever the consumer
-// has not read yet - which for a crash is the panic saying why. The
-// consumer gets until EOF (bounded, in case an orphaned grandchild holds the
-// pipe open) before the pipe is closed here.
-func reapInferno(cmd *exec.Cmd, exited chan struct{}, stderr io.Closer, stderrDone <-chan struct{}) {
-	state, err := cmd.Process.Wait()
-	select {
-	case <-stderrDone:
-	case <-time.After(infernoStderrDrainWait):
-	}
-	if stderr != nil {
-		stderr.Close()
-	}
-	if err == nil && state != nil && !state.Success() {
-		err = errors.New(state.String())
-	}
-	close(exited)
-	mutex.Lock()
-	defer mutex.Unlock()
-	if infernoCmd != cmd {
-		return
-	}
-	infernoCmd = nil
-	infernoExited = nil
-	logErrorf("Inferno server exited unexpectedly: %v", err)
-	infernoFailedLocked()
+	logInfof("Inferno (in-process RX+TX) started: %dkHz, %d channels", sampleRate/1000, channels)
 }
 
 // infernoFailedLocked records a running server's unexpected loss. A take in
@@ -3002,8 +2835,8 @@ func infernoFailedLocked() {
 var infernoRetryBackoff time.Duration
 var infernoRetryAt time.Time
 
-// infernoNoRetry marks a failure retrying cannot fix (the server binary is
-// missing). Cleared by a successful start. Guarded by the app mutex.
+// infernoNoRetry marks a failure retrying cannot fix. Cleared by a
+// successful start. Guarded by the app mutex.
 var infernoNoRetry bool
 
 const (
@@ -3013,8 +2846,8 @@ const (
 
 // infernoRetryDueLocked reports whether the network loop should restart a
 // failed server now, and if so books the next attempt with a doubling
-// backoff (reset once a start succeeds). A failed start (missing binary,
-// FIFO error), a crash and a restart that found the network down all leave
+// backoff (reset once a start succeeds). A failed start (no inferno
+// plugin, FIFO error), a capture loop that died and a restart that found the network down all leave
 // InfernoFailed; before this nothing retried them until the link flapped.
 // Never while recording (the restart would defer anyway), during a restart,
 // or in demo mode. Caller holds the app mutex.
@@ -3034,11 +2867,6 @@ func infernoRetryDueLocked(now time.Time) bool {
 	return true
 }
 
-// doStopInferno stops the Inferno server. Must only be called from
-// infernoWorker (see doStartInferno). Captures what it needs under lock,
-// then releases it before signaling and waiting on the subprocess, which
-// can take an unbounded amount of time if it doesn't respond to SIGTERM
-// promptly.
 // infernoStopGrace/infernoKillGrace bound doStopInferno: SIGTERM, wait, then
 // SIGKILL, then give up and let systemd reap the cgroup rather than wedging
 // infernoWorker forever. Vars (like ffmpegStopGrace) so tests can shrink them.
@@ -3064,17 +2892,6 @@ func stopProcessGroup(cmd *exec.Cmd, what string) {
 		cmd.Wait()
 		close(waitCh)
 	}()
-	stopProcessGroupReaped(cmd, waitCh, what)
-}
-
-// stopProcessGroupReaped is stopProcessGroup for a child whose Wait is
-// already owned elsewhere (the Inferno server's reaper): it signals and
-// waits on exited, the channel that reaper closes, instead of calling Wait
-// a second time.
-func stopProcessGroupReaped(cmd *exec.Cmd, waitCh <-chan struct{}, what string) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
 	pid := cmd.Process.Pid
 	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
 		logWarnf("%s: SIGTERM failed: %v", what, err)
@@ -3095,33 +2912,20 @@ func stopProcessGroupReaped(cmd *exec.Cmd, waitCh <-chan struct{}, what string) 
 	}
 }
 
+// doStopInferno stops the Inferno server. Must only be called from
+// infernoWorker (see doStartInferno). Captures what it needs under lock and
+// does the bounded device close (stopInProcInferno) without it.
 func doStopInferno() {
-	// Single-instance mode: stop the capture loop and close the paired
-	// device first, so no writer remains before the FIFO is removed below.
-	if inProcRX() {
-		stopInProcInferno()
-	}
+	// Stop the capture loop and close the paired device first, so no
+	// writer remains before the FIFO is removed below.
+	stopInProcInferno()
 	mutex.Lock()
-	cmd := infernoCmd
-	exited := infernoExited
 	path := fifoPath
 	keeper := fifoKeeper
-	// Disowning before signalling is what tells reapInferno this exit was
-	// requested.
-	infernoCmd = nil
-	infernoExited = nil
 	fifoPath = ""
 	fifoKeeper = nil
 	infernoState = InfernoStopped
 	mutex.Unlock()
-
-	if cmd != nil && cmd.Process != nil {
-		if exited != nil {
-			stopProcessGroupReaped(cmd, exited, "Inferno server")
-		} else {
-			stopProcessGroup(cmd, "Inferno server")
-		}
-	}
 
 	if path != "" {
 		if keeper != nil {
@@ -3869,14 +3673,14 @@ func startPlayback() {
 	// A present-but-unready TX holder means the inferno device exists but
 	// its clock overlay never arrived: inferno transmit is impossible, and
 	// falling back to local ALSA would play out of the wrong output
-	// silently. Refuse with a notice and retry the holder in the
+	// silently. Refuse with a notice and warm the holder up again in the
 	// background; an absent holder (dev/sim/no plugin) keeps the local
 	// fallback via buildPlaybackCmd below.
 	if !demoMode && txHolder != nil && !txHolderReady {
 		logErrorf("startPlayback refused: TX clock not ready")
 		showSysNotice("TX no clock")
 		showWebNotice("Inferno TX clock not ready - playback refused, retrying clock")
-		go ensureTxHolder()
+		go warmupTxHolder(txHolder, channelCount)
 		return
 	}
 
@@ -3933,11 +3737,6 @@ func startPlayback() {
 			playbackPausedElapsed = 0
 			if currentState == StatePlaying || currentState == StatePaused {
 				currentState = StateIdle
-			}
-			// Audio settings may have moved mid-take (the TX holder
-			// reopen defers while playing): reconcile now we're idle.
-			if txReopenPending {
-				go ensureTxHolder()
 			}
 			resumeDeferredInfernoRestartLocked()
 		}
@@ -4299,11 +4098,6 @@ func restartPlaybackAt(pos time.Duration) {
 			playbackPausedElapsed = 0
 			if currentState == StatePlaying || currentState == StatePaused {
 				currentState = StateIdle
-			}
-			// Audio settings may have moved mid-take (the TX holder
-			// reopen defers while playing): reconcile now we're idle.
-			if txReopenPending {
-				go ensureTxHolder()
 			}
 			resumeDeferredInfernoRestartLocked()
 			// Only the current generation resumes the monitor: a stale
@@ -6533,7 +6327,6 @@ type telemetryData struct {
 	AppVersion  string
 	CPUPerCore  []float64
 	RAMApp      float64
-	RAMInferno  float64
 	RAMSysUsed  float64
 	RAMSysTotal float64
 	CPUTemp     float64
@@ -6548,10 +6341,6 @@ func snapshotTelemetry() telemetryData {
 	// render()/buttons/HTTP on slow storage.
 	mutex.Lock()
 	cores := append([]float64(nil), cpuPct...)
-	infernoPid := 0
-	if infernoCmd != nil && infernoCmd.Process != nil {
-		infernoPid = infernoCmd.Process.Pid
-	}
 	bps := float64(sampleRates[sampleRateIdx] * channelCount * OutputBitsPerSample / 8)
 	mutex.Unlock()
 
@@ -6561,9 +6350,6 @@ func snapshotTelemetry() telemetryData {
 		CPUPerCore: cores,
 		RAMApp:     ramMB(os.Getpid(), "VmRSS"),
 		CPUTemp:    -1,
-	}
-	if infernoPid != 0 {
-		v.RAMInferno = ramMB(infernoPid, "VmRSS")
 	}
 	var stat syscall.Statfs_t
 	if err := syscall.Statfs(RecordPath, &stat); err == nil {
@@ -6579,9 +6365,6 @@ func snapshotTelemetry() telemetryData {
 	v.RAMSysUsed, v.RAMSysTotal = ramSysUsed, ramSysTotal
 	if t, ok := readCPUTemp(); ok {
 		v.CPUTemp = t
-	}
-	if v.RAMInferno == 0 {
-		v.RAMInferno = -1
 	}
 	return v
 }

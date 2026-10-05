@@ -136,8 +136,8 @@ Playback path:
 - Settings modal (all persisted settings)
 - Per-channel VU meters over 100 ms WebSocket push
 - INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
-- Status panel shows the clock state (`Synced (PTP slave, 8µs)` / `Locking` / `Not synced (…)`) and the TX state in inferno terms (`Inferno TX ready (PI9696-TX)`)
-- Sample rate must be visible to an inferno controller (netaudio) for both TX and RX (owner requirement). inferno now answers the rate probe (INFERNO-UPSTREAM.md U2, in the pinned fork commit: `netaudio device show` reports it); RX+TX as one instance (U8) is the `PI9696_INPROC_RX` single-instance mode
+- Status panel shows the clock state (`Synced (PTP slave, 8µs)` / `Locking` / `Not synced (…)`) and the TX state in inferno terms (`Inferno TX ready (PI9696)`)
+- Sample rate must be visible to an inferno controller (netaudio) for both TX and RX (owner requirement). inferno now answers the rate probe (INFERNO-UPSTREAM.md U2, in the pinned fork commit: `netaudio device show` reports it); RX+TX as one instance (U8): the app always runs exactly one inferno instance, in-process, with equal RX and TX
 - Theming: ftl-themes bundles (34 themes, `third_party/ftl-themes` submodule @ `b417e94`, v4.1.0 + unreleased — always track latest upstream; `html[data-theme]` slugs unchanged) —
   one linked stylesheet + `html[data-theme]`; the `third_party/ftl-themes/CONTRACT.md`
   is the integration spec. Markup uses the library's own components (`.btn`, `.table`, `.modal`, `.meter`, `.scroll` — v4 dropped the `ftl-` prefix everywhere),
@@ -196,8 +196,8 @@ Full install record, including the clock service and the kernel limits, is in
 # 1. SPI must be enabled or the app exits at startup (display init opens SPI)
 sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' /boot/firmware/config.txt && sudo reboot
 
-# 2. Inferno (pinned to fork dev 3881fff; note the submodules, and that the binary the app
-#    runs is target/release/inferno2pipe, not "inferno")
+# 2. Inferno (pinned to fork dev 3881fff; note the submodules). The app runs inferno
+#    in-process through its ALSA plugin, so the plugin is what gets installed
 sudo apt install -y build-essential pkg-config libasound2-dev libudev-dev
 git clone https://github.com/DrEVILish/inferno inferno
 cd inferno && git checkout 3881fff && git submodule update --init --recursive
@@ -230,7 +230,7 @@ Sim facts:
 - Every frame dumped to `/tmp/pi9696_sim_frame.png` (override: `PI9696_SIM_OUT`)
 - Token printed to stderr: `remote access code: XXXX XXXX`
 - Config path: `/tmp/pi9696-config.json` (vs `/etc/pi9696/config.json` on real Pi)
-- Recording requires `inferno/target/release/inferno2pipe` (build with `cargo build --release` in `inferno/`) and a running clock source — see DEPLOYMENT.md
+- Recording requires the inferno ALSA plugin (`libasound_module_pcm_inferno.so`, built in `inferno/` and installed per DEPLOYMENT.md) and a running clock source
 
 ### Rebuilding
 
@@ -284,7 +284,7 @@ test/gotest.sh       # vet + the full suite under -race (the standard check)
 | Display blank | SPI enabled? Wiring per WIRING.md? Running as root? |
 | `[INF]` never lights | Ethernet up? `ip addr show eth0`? Inferno binary built? |
 | Recording fails | `NO CLOCK SYNC`? statime running and locked (`systemctl status statime`, Status panel Clock row)? Low disk (<30 min)? Already recording? OLED flashes the reason |
-| Gaps in a take | `journalctl -u pi9696 \| grep inferno2pipe` - receive-side losses are logged as `sample-loss events` |
+| Gaps in a take | `journalctl -u pi9696 \| grep 'capture overrun'` - the in-process capture loop logs overruns (gaps in the input) |
 | WebUI unreachable | Any interface with IP? `ss -tlnp \| grep ${PI9696_REMOTE_PORT:-8080}` |
 | USB not detected | `mount -t tmpfs none /media/usb` for testing; real USB: `lsblk` |
 | Logs | `sudo journalctl -u pi9696 -f` + `/var/log/pi9696/app.log` |
@@ -295,7 +295,7 @@ test/gotest.sh       # vet + the full suite under -race (the standard check)
 
 Design debt worth flagging here:
 
-1. **Playback via Inferno/AoIP** — done and bit-perfect (two-Pi test, 32 ch, 2026-10-04: every sample of a 21 s take identical at the second Pi). Single-instance mode (`PI9696_INPROC_RX`) is one inferno device with equal RX and TX; the default two-instance layout still shows `<name>` (RX) and `<name>-TX`. Fixed on the way: the pump no longer stalls on the app mutex (F2), the transmitter is fed with silence while idle so receivers stay connected and playback starts without an underrun (F3; replaces the no-TX-while-idle decision), takes are sent undithered (F4/U3), and an underrun that does happen no longer drops the receivers' flows (fork `382dc90`: a forced 400 ms stall now costs a receiver ~1.2 s instead of ~6 s). Local ALSA kept as fallback.
+1. **Playback via Inferno/AoIP** — done and bit-perfect (two-Pi test, 32 ch, 2026-10-04: every sample of a 21 s take identical at the second Pi). The unit is one inferno device with equal RX and TX: inferno runs in-process through its ALSA plugin (inferno2pipe and the separate `<name>-TX` device are gone). Fixed on the way: the pump no longer stalls on the app mutex (F2), the transmitter is fed with silence while idle so receivers stay connected and playback starts without an underrun (F3; replaces the no-TX-while-idle decision), takes are sent undithered (F4/U3), and an underrun that does happen no longer drops the receivers' flows (fork `382dc90`: a forced 400 ms stall now costs a receiver ~1.2 s instead of ~6 s). Local ALSA kept as fallback.
 2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
 3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
 4. **FIFO handoff window** — fixed (`7ca4d12`): the monitor's read used to race the new recorder for the first frames (measured: 50 ms missing 50 ms into a take, REPORT.md F6). The recorder now opens the FIFO only after the monitor (SIGKILLed - a graceful exit takes ~300 ms, longer than the FIFO holds at 128 ch) has exited.
@@ -315,9 +315,8 @@ Design debt worth flagging here:
 main.go            app: state machine, menus, recording/playback, Inferno lifecycle
 remote.go          web server: auth, dashboard, settings, downloads, meter push
 hyperdeck.go       Blackmagic HyperDeck control server (TCP 9993)
-txholder.go        persistent inferno TX holder + playback pump
+txholder.go        the in-process inferno instance (capture -> FIFO, TX holder) + playback pump
 clocksync.go       statime observation poller; the recording clock gate
-inferno_log.go     counts inferno2pipe receive faults into the app log
 logging.go         log/slog (stderr + app.log, default Error-only)
 hardware/          SSD1322 display, encoder, buttons, lamps, network detection
 alsapcm/           cgo ALSA wrapper so the app can be the single Inferno client (RX + TX)

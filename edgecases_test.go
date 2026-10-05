@@ -190,14 +190,6 @@ func TestIsValidDeviceNameBounds(t *testing.T) {
 
 // Deployment overrides read from the environment.
 func TestEnvOverrides(t *testing.T) {
-	t.Setenv("PI9696_INFERNO_BIN", "")
-	if got := infernoBinary(); got != "inferno/target/release/inferno2pipe" {
-		t.Errorf("default inferno binary = %q", got)
-	}
-	t.Setenv("PI9696_INFERNO_BIN", "/opt/custom/inferno2pipe")
-	if got := infernoBinary(); got != "/opt/custom/inferno2pipe" {
-		t.Errorf("PI9696_INFERNO_BIN ignored: %q", got)
-	}
 	t.Setenv("PI9696_STATIME_OBS", "")
 	if got := statimeObservationPathFromEnv(); got != "/run/statime/observation.sock" {
 		t.Errorf("default statime socket = %q", got)

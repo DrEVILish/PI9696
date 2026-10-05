@@ -3451,14 +3451,9 @@ func handleAPIDeviceName(w http.ResponseWriter, r *http.Request) {
 	persistConfig()
 	mutex.Unlock()
 	logInfof("Device name changed to %q via remote", name)
-	// Reconcile the advertised name. Single-instance mode carries the name on
-	// the one paired device, so restart Inferno; the two-instance path just
-	// reopens the TX holder (deferred while a take plays).
-	if inProcRX() {
-		restartInfernoServer()
-	} else {
-		go ensureTxHolder()
-	}
+	// The advertised name lives on the paired device, so restart Inferno
+	// (deferred while a take records or plays).
+	restartInfernoServer()
 
 	mutex.Lock()
 	current := deviceName
@@ -3657,7 +3652,6 @@ type statusView struct {
 	AppVersion  string
 	CPUPerCore  []float64
 	RAMApp      float64
-	RAMInferno  float64
 	RAMSysUsed  float64
 	RAMSysTotal float64
 	CPUTemp     float64
@@ -3695,7 +3689,7 @@ func currentStatusView() statusView {
 
 	t := snapshotTelemetry()
 	v.Uptime, v.AppVersion, v.CPUPerCore = t.Uptime, t.AppVersion, t.CPUPerCore
-	v.RAMApp, v.RAMInferno, v.RAMSysUsed, v.RAMSysTotal = t.RAMApp, t.RAMInferno, t.RAMSysUsed, t.RAMSysTotal
+	v.RAMApp, v.RAMSysUsed, v.RAMSysTotal = t.RAMApp, t.RAMSysUsed, t.RAMSysTotal
 	v.CPUTemp, v.DiskTotal, v.DiskFree, v.RecordTime = t.CPUTemp, t.DiskTotal, t.DiskFree, t.RecordTime
 	return v
 }

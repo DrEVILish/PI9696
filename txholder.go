@@ -1,19 +1,14 @@
-// TX holder and inferno playback-out.
+// The in-process inferno instance and inferno playback-out.
 //
-// The always-running inferno2pipe process is receive-only (it advertises zero
-// TX channels), so the unit's inferno TX side lives here: the app persistently
-// holds inferno's ALSA virtual device open for playback, which keeps the TX
-// channels advertised on the network in both RECORDING and PLAYBACK modes.
-// Playback-out pumps ffmpeg-decoded s32le through that holder instead of
-// ffmpeg's own `-f alsa` open, because inferno keeps its device instance in a
-// process-global map - a second opener (a per-playback ffmpeg) would be a
-// second instance fighting inferno2pipe for the inferno UDP ports. This mirrors
-// the proven inferno-loopback.sh pi9696tx pattern (own NAME, PROCESS_ID and
-// ALT_PORT), productized into the app.
-//
-// Until the RX side moves in-process too this means two inferno devices on the
-// wire: <name> (RX, inferno2pipe) and <name>-TX (TX, this holder). TX and RX
-// channel counts stay equal because both sides take the single channelCount.
+// The unit runs exactly one inferno instance, inside this process: the
+// inferno ALSA plugin opened as a paired capture+playback device
+// (alsapcm.Open). Its capture side feeds the FIFO that record and monitor
+// ffmpeg read (infernoRxLoop); its playback side is the TX holder that
+// playback pumps ffmpeg-decoded s32le through. Playback never lets ffmpeg
+// open the device itself: inferno keeps its instance in a process-global
+// map, so a second opener would be a second instance fighting this one for
+// the inferno UDP ports. RX and TX channel counts are always equal, because
+// both take the single channelCount.
 package main
 
 import (
@@ -21,8 +16,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -33,20 +28,12 @@ import (
 	"pi9696/alsapcm"
 )
 
-const (
-	// inferno instance separation for the TX holder. inferno2pipe holds the
-	// default UDP ports; only one instance can, so the holder takes its own
-	// block. inferno-loopback.sh uses 10100/10200, hence 10300 here - never
-	// run the loopback script while the app holds TX or the two collide.
-	txAltPort   = 10300
-	txProcessID = 1
-	// Pump chunk size in frames; matches alsapcm's per-IO sizing so one pump
-	// iteration is one device write.
-	txPumpFrames = 1024
-)
+// Pump chunk size in frames; matches alsapcm's per-IO sizing so one pump
+// iteration is one device write.
+const txPumpFrames = 1024
 
-// txFrameWriter is the playback sink: *alsapcm.Device in production, a fake
-// in tests (the dev box has no inferno ALSA device).
+// txFrameWriter is the playback sink: the paired device in production, a
+// fake in tests (the dev box has no inferno ALSA device).
 type txFrameWriter interface {
 	Write([]int32) (int, error)
 	Close() error
@@ -56,62 +43,67 @@ var (
 	txHolder         txFrameWriter
 	txHolderDevice   string // settings identity the holder was opened with; empty when closed
 	txHolderReady    bool   // warmed up against the clock overlay; open-but-unready refuses inferno playback
-	txReopenPending  bool   // audio settings moved while playing; reconcile once idle
 	playbackViaDante bool   // current/last take plays through the holder, not local ALSA
-	// Swappable for tests.
-	openTxDevice = func(device string, rate, channels int) (txFrameWriter, error) {
-		return alsapcm.OpenPlayback(device, rate, channels)
-	}
 )
 
-// --- Single-instance (in-process RX + TX) path --------------------------
-//
-// The owner's invariant is one inferno instance per unit, with equal RX and
-// TX channel counts both visible on the network. The historical layout ran
-// two instances (inferno2pipe RX-only + this holder TX-only), which showed
-// up as two devices on one IP and advertised 0 RX. alsapcm.Open opens a
-// paired capture+playback handle on a single ALSA device, so one instance
-// can do both. When PI9696_INPROC_RX is set, doStartInferno opens that paired
-// device and an in-process reader copies captured frames into the same FIFO
-// inferno2pipe used to write, leaving every downstream consumer unchanged.
-//
-// Gated by the env toggle while the path is validated against the bit-exact
-// channel sweep; the default remains the proven inferno2pipe subprocess.
+// pairedDevice is the in-process inferno instance: capture (Read) and
+// playback (Write) on one ALSA device.
+type pairedDevice interface {
+	txFrameWriter
+	Read([]int32) (int, error)
+	Xruns() int64
+}
 
-// inProcRX reports whether the single-instance in-process RX+TX path is on.
-func inProcRX() bool { return os.Getenv("PI9696_INPROC_RX") != "" }
+// openPairedDevice opens the inferno plugin's paired device. A seam: the
+// test suite replaces it so it never opens the host's real plugin.
+var openPairedDevice = func(rate, channels int) (pairedDevice, error) {
+	return alsapcm.Open("inferno", rate, channels)
+}
+
+// --- The in-process instance ---------------------------------------------
 
 var (
-	inProcRxDevice *alsapcm.Device // the paired capture+playback device, nil when stopped
-	inProcRxQuit   chan struct{}   // closed to stop the capture loop
-	inProcRxDone   chan struct{}   // closed by the capture loop when it has exited
-	inProcRxGen    uint64          // generation tag, bumped per (re)start
+	inProcRxDevice pairedDevice  // the paired capture+playback device, nil when stopped
+	inProcRxQuit   chan struct{} // closed to stop the capture loop
+	inProcRxDone   chan struct{} // closed by the capture loop when it has exited
+	inProcRxGen    uint64        // generation tag, bumped per (re)start
 )
 
-// unifiedTxInfernoEnv is the plugin config for the single paired instance:
-// equal RX and TX channels, the unit's own name (no "-TX" suffix), and the
-// primary UDP ports (no ALT_PORT/PROCESS_ID override, which existed only to
-// keep the TX-only holder off inferno2pipe's ports).
+// applyUnifiedInfernoEnv sets the plugin config for the paired instance:
+// equal RX and TX channels, the unit's own name and the default UDP ports.
+// The deployed /etc/asound.conf is deliberately minimal (no @args: ALSA
+// device-string arguments are rejected with "Unknown parameters"), so every
+// setting travels via the environment, which the plugin reads at open.
 func applyUnifiedInfernoEnv(name string, rate, channels int) {
 	os.Setenv("INFERNO_NAME", sanitizeDanteName(name))
 	os.Setenv("INFERNO_SAMPLE_RATE", fmt.Sprintf("%d", rate))
 	os.Setenv("INFERNO_TX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_RX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_TX_SOURCE_BIT_DEPTH", txSourceBitDepth)
-	// Clear the TX-only holder's separation keys so the single instance binds
-	// the default ports and the default process id.
+	// Never inherit a port block or process id from the service environment:
+	// the unit's one instance owns the default ports.
 	os.Unsetenv("INFERNO_ALT_PORT")
 	os.Unsetenv("INFERNO_PROCESS_ID")
 }
 
 // startInProcInferno opens the paired device, publishes it as the TX holder,
 // and starts the capture loop feeding fifoPath. Returns false if the device
-// cannot be opened (no inferno ALSA plugin: caller falls back to InfernoFailed
-// exactly as a missing inferno2pipe binary would). Runs without the app mutex.
+// cannot be opened (no inferno ALSA plugin, ports busy): the caller leaves
+// the server InfernoFailed for the retry. Runs without the app mutex.
 func startInProcInferno(name string, rate, channels int, fifoPath string) bool {
 	applyUnifiedInfernoEnv(name, rate, channels)
-	dev, err := alsapcm.Open("inferno", rate, channels)
+	dev, err := openPairedDevice(rate, channels)
 	if err != nil {
+		if !infernoPluginInstalled() {
+			// Not transient: the backoff retry would log this once a
+			// minute forever on a dev box or simulator. A link flap or an
+			// explicit restart still tries again.
+			logErrorf("in-process inferno: the inferno ALSA plugin is not installed (%v) - build and install alsa_pcm_inferno (DEPLOYMENT.md)", err)
+			mutex.Lock()
+			infernoNoRetry = true
+			mutex.Unlock()
+			return false
+		}
 		logErrorf("in-process inferno: cannot open paired ALSA device: %v", err)
 		return false
 	}
@@ -124,13 +116,27 @@ func startInProcInferno(name string, rate, channels int, fifoPath string) bool {
 	txHolder = dev
 	txHolderDevice = fmt.Sprintf("inferno:%s:%d:%d", sanitizeDanteName(name), rate, channels)
 	txHolderReady = false
-	txHolderFailed = false
 	mutex.Unlock()
 	go infernoRxLoop(dev, fifoPath, quit, done, gen, channels)
-	// Warm up the TX side against the clock overlay, same as the TX-only
-	// holder; recording is gated separately on clock sync (clocksync.go).
+	// Warm up the TX side against the clock overlay; recording is gated
+	// separately on clock sync (clocksync.go).
 	go warmupTxHolder(dev, channels)
 	return true
+}
+
+// infernoPluginInstalled reports whether the inferno ALSA plugin library is
+// where alsa-lib looks for it. A seam for tests.
+var infernoPluginInstalled = func() bool {
+	for _, pattern := range []string{
+		"/usr/lib/*/alsa-lib/libasound_module_pcm_inferno.so",
+		"/usr/lib/alsa-lib/libasound_module_pcm_inferno.so",
+		"/usr/local/lib/alsa-lib/libasound_module_pcm_inferno.so",
+	} {
+		if m, _ := filepath.Glob(pattern); len(m) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // stopInProcInferno stops the capture loop, waits for it to exit, then closes
@@ -180,14 +186,13 @@ func stopInProcInferno() {
 var inProcCloseWait = 3 * time.Second
 
 // infernoRxLoop copies captured frames from the paired device into the FIFO
-// ffmpeg records and monitors from, in the exact interleaved little-endian
-// s32le layout inferno2pipe wrote, so the recording pipeline is unchanged.
+// ffmpeg records and monitors from, as interleaved little-endian s32le.
 //
 // Raw O_NONBLOCK FIFO writes (not os.File) for the same reason as demoGenLoop:
 // Go's poller would park a blocking write with no reader and ignore quit;
 // EAGAIN keeps every iteration responsive. O_RDWR holds a read end so a write
 // with no ffmpeg attached yet gets EAGAIN rather than SIGPIPE.
-func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done chan struct{}, gen uint64, channels int) {
+func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done chan struct{}, gen uint64, channels int) {
 	nameThread(threadRxCapture)
 	defer close(done)
 	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
@@ -282,6 +287,9 @@ func framesAsS32LE(frames []int32, scratch []byte) []byte {
 	return scratch[:len(frames)*4]
 }
 
+// infernoLogSummaryEvery throttles the capture loop's overrun reports.
+var infernoLogSummaryEvery = 10 * time.Second
+
 // captureXrunReport returns a log line when the device's overrun count has
 // grown past what was last reported, plus the count to remember.
 func captureXrunReport(reported, current int64) (string, int64) {
@@ -328,24 +336,6 @@ func sanitizeDanteName(s string) string {
 	return strings.TrimRight(out, "-")
 }
 
-// txInfernoEnv returns the INFERNO_* environment for the TX holder open.
-// The deployed /etc/asound.conf is deliberately minimal (no @args): ALSA
-// device-string arguments are rejected with "Unknown parameters", so every
-// setting travels via the environment, which inferno_aoip merges as gaps
-// behind the ALSA config. These are process-global, so doStartInferno
-// scrubs the instance-separating keys back out of its child's environment.
-func txInfernoEnv(name string, rate, channels int) map[string]string {
-	return map[string]string{
-		"INFERNO_NAME":                sanitizeDanteName(name) + "-TX",
-		"INFERNO_SAMPLE_RATE":         fmt.Sprintf("%d", rate),
-		"INFERNO_TX_CHANNELS":         fmt.Sprintf("%d", channels),
-		"INFERNO_RX_CHANNELS":         "0",
-		"INFERNO_PROCESS_ID":          fmt.Sprintf("%d", txProcessID),
-		"INFERNO_ALT_PORT":            fmt.Sprintf("%d", txAltPort),
-		"INFERNO_TX_SOURCE_BIT_DEPTH": txSourceBitDepth,
-	}
-}
-
 // txSourceBitDepth tells inferno what the transmitted samples really are.
 // Takes are 24-bit PCM (OutputBitsPerSample), decoded into s32 with the low
 // byte zero; inferno's default (32) made it TPDF-dither them down to 24 on
@@ -354,248 +344,14 @@ func txInfernoEnv(name string, rate, channels int) map[string]string {
 // 24 sends them untouched.
 const txSourceBitDepth = "24"
 
-// applyTxInfernoEnv presses the TX settings into the process environment
-// ahead of the holder open (the plugin reads them per open at define time).
-// Callers hold no locks; os.Setenv is process-global but the only other
-// consumer is the inferno2pipe child, whose environment is scrubbed.
-func applyTxInfernoEnv(env map[string]string) {
-	for k, v := range env {
-		os.Setenv(k, v)
-	}
-}
-
-// scrubbedInfernoEnv returns the environment for the inferno2pipe child:
-// the TX holder's instance-separating keys must not leak into it, or the
-// pipe server would move off the default ports (ALT_PORT), collide IDs
-// (PROCESS_ID), or misread its channel counts. RATE/NAME travel as explicit
-// per-child values appended by the caller, never inherited.
-func scrubbedInfernoEnv() []string {
-	out := make([]string, 0, len(os.Environ()))
-	for _, kv := range os.Environ() {
-		key := kv
-		if i := strings.IndexByte(kv, '='); i >= 0 {
-			key = kv[:i]
-		}
-		switch key {
-		case "INFERNO_ALT_PORT", "INFERNO_PROCESS_ID", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS":
-			continue
-		}
-		out = append(out, kv)
-	}
-	return out
-}
-
-// ensureTxHolder reconciles the persistent TX holder with the current audio
-// settings: open at boot, reopen when rate/channels/name move, warm up
-// against the clock overlay. It never holds the app mutex across blocking
-// ALSA IO, so callers must not hold it either - fire and forget with
-// `go ensureTxHolder()`. While a take plays the holder is frozen (the pump
-// owns it) and the reopen is deferred to the playback reaper via
-// txReopenPending.
-//
-// Calls are serialized (txReconcileMu): several triggers fire together (an
-// Inferno restart, a rename, a take ending), and two concurrent reopens
-// each started an inferno instance on the same ports - the loser panicked
-// with "address already in use" inside the plugin while the app, whose
-// warm-up write still succeeded, reported TX ready.
-func ensureTxHolder() {
-	// In single-instance mode the paired device is owned by
-	// doStartInferno/doStopInferno (RX and TX are one instance), so there is
-	// no separate TX holder to reconcile; a rename or settings change goes
-	// through an Inferno restart instead.
-	if inProcRX() {
-		return
-	}
-	txReconcileMu.Lock()
-	defer txReconcileMu.Unlock()
-	mutex.Lock()
-	if demoMode {
-		mutex.Unlock()
-		return
-	}
-	if currentState == StatePlaying || currentState == StatePaused {
-		txReopenPending = true
-		mutex.Unlock()
-		return
-	}
-	txReopenPending = false
-	rate := sampleRates[sampleRateIdx]
-	channels := channelCount
-	name := deviceName
-	// Identity is settings-derived (the device itself is always bare
-	// "inferno"; the per-instance values travel via INFERNO_* env).
-	want := fmt.Sprintf("inferno:%s:%d:%d", sanitizeDanteName(name), rate, channels)
-	if txHolder != nil && txHolderDevice == want {
-		if txHolderReady {
-			mutex.Unlock()
-			return
-		}
-		holder := txHolder
-		mutex.Unlock()
-		warmupTxHolder(holder, channels)
-		return
-	}
-	old := txHolder
-	txHolder = nil
-	txHolderDevice = ""
-	txHolderReady = false
-	txHolderFailed = false
-	if old != nil {
-		old.Close()
-		txWriteLocks.Delete(old)
-	}
-	mutex.Unlock()
-
-	holder, ok := openVerifiedTxHolder(name, rate, channels)
-	if !ok {
-		return
-	}
-	mutex.Lock()
-	if sampleRates[sampleRateIdx] != rate || channelCount != channels || deviceName != name {
-		mutex.Unlock()
-		holder.Close()
-		mutex.Lock()
-		txReopenPending = true
-		mutex.Unlock()
-		go ensureTxHolder()
-		return
-	}
-	txHolder = holder
-	txHolderDevice = want
-	mutex.Unlock()
-	warmupTxHolder(holder, channels)
-}
-
-// txReconcileMu serializes ensureTxHolder (see there). Never taken with the
-// app mutex held; ensureTxHolder takes the app mutex inside it.
-var txReconcileMu sync.Mutex
-
-// txHolderFailed: the last reopen gave up because the TX instance never
-// bound its ports. Guarded by the app mutex; shown by txStatusLocked so the
-// UI says so instead of reporting ready or "no device".
-var txHolderFailed bool
-
-// txPorts are the UDP ports the TX instance binds: INFERNO_ALT_PORT and the
-// next three (arc, cmc, flows control, info request - inferno's
-// settings.rs ALT_PORT handling).
-var txPorts = []int{txAltPort, txAltPort + 1, txAltPort + 2, txAltPort + 3}
-
-// txPortsInUse counts how many txPorts some socket on this host holds, or -1
-// when that cannot be determined (the checks are then skipped). A seam:
-// the test suite replaces it so it never depends on the host's sockets.
-var txPortsInUse = procTxPortsInUse
-
-var procNetUDPPath = "/proc/net/udp"
-
-// procTxPortsInUse reads the kernel's UDP socket table rather than probing
-// with a bind: a probe bind could itself steal a port from an instance that
-// is starting up.
-func procTxPortsInUse() int {
-	data, err := os.ReadFile(procNetUDPPath)
-	if err != nil {
-		return -1
-	}
-	want := map[int]bool{}
-	for _, p := range txPorts {
-		want[p] = true
-	}
-	seen := map[int]bool{}
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines[min(1, len(lines)):] {
-		f := strings.Fields(line)
-		if len(f) < 2 {
-			continue
-		}
-		_, hexPort, ok := strings.Cut(f[1], ":")
-		if !ok {
-			continue
-		}
-		if port, err := strconv.ParseInt(hexPort, 16, 32); err == nil && want[int(port)] {
-			seen[int(port)] = true
-		}
-	}
-	return len(seen)
-}
-
-// txPortWait bounds each wait for the TX ports to be released or bound. A
-// var so tests can shrink it.
-var txPortWait = 3 * time.Second
-
-// waitTxPorts polls until exactly want of the TX ports are held, reporting
-// whether that happened within txPortWait. An unknown count is success.
-func waitTxPorts(want int) bool {
-	deadline := time.Now().Add(txPortWait)
-	for {
-		n := txPortsInUse()
-		if n < 0 || n == want {
-			return true
-		}
-		if time.Now().After(deadline) {
-			return false
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-const txOpenAttempts = 3
-
-// openVerifiedTxHolder opens the TX device and confirms its inferno instance
-// actually came up. The plugin's close only asks the previous instance to
-// shut down, so a reopen straight after it raced the old sockets: the new
-// instance panicked on "address already in use" and died, yet the ALSA
-// handle still opened and accepted writes, so the app reported TX ready with
-// nothing on the network. Now: wait for the old ports to be released, open,
-// and require the new instance to hold all of them; retry, then give up
-// visibly. Called without the app mutex.
-//
-// An open error means no inferno ALSA device at all (dev box, sim, plugin
-// not installed): TX playback is unavailable and takes fall back to local
-// ALSA. A clock-less network is the other case, but that fails at warmup.
-func openVerifiedTxHolder(name string, rate, channels int) (txFrameWriter, bool) {
-	first, last := txPorts[0], txPorts[len(txPorts)-1]
-	fail := func(why string) {
-		logErrorf("TX holder: %s - Inferno TX off", why)
-		mutex.Lock()
-		txHolderFailed = true
-		showWebNotice("Inferno TX failed to start (ports busy) - see log")
-		mutex.Unlock()
-	}
-	for attempt := 1; ; attempt++ {
-		// Ports still held means the open cannot succeed - and the old
-		// holder's sockets would then satisfy the "bound" check below,
-		// passing a dead instance as ready. Count it as a failed attempt.
-		if !waitTxPorts(0) {
-			if attempt >= txOpenAttempts {
-				fail(fmt.Sprintf("UDP %d-%d never released by the previous instance (%d waits of %s)", first, last, attempt, txPortWait))
-				return nil, false
-			}
-			logWarnf("TX holder: UDP %d-%d still held after %s (attempt %d of %d), waiting again", first, last, txPortWait, attempt, txOpenAttempts)
-			continue
-		}
-		applyTxInfernoEnv(txInfernoEnv(name, rate, channels))
-		holder, err := openTxDevice("inferno", rate, channels)
-		if err != nil {
-			logInfof("TX holder unavailable (%v) - Inferno playback off, local fallback", err)
-			return nil, false
-		}
-		if waitTxPorts(len(txPorts)) {
-			return holder, true
-		}
-		holder.Close()
-		if attempt >= txOpenAttempts {
-			fail(fmt.Sprintf("inferno instance never bound UDP %d-%d (%d attempts)", first, last, attempt))
-			return nil, false
-		}
-		logWarnf("TX holder: inferno instance did not bind its ports (attempt %d of %d), retrying", attempt, txOpenAttempts)
-	}
-}
-
 // warmupTxHolder pushes one chunk of silence through a freshly opened holder.
 // The first IO runs the plugin's prepare, which creates the inferno instance
 // (advertising TX from boot) and waits for the clock overlay - up to ~5s
 // with no clock, so this always runs off-mutex. Failure leaves the holder
-// open but unready: inferno playback is refused with a notice until the clock
-// appears, rather than silently playing out of the wrong output.
+// open but unready: inferno playback is refused with a notice (and another
+// warm-up) until the clock appears, rather than silently playing out of the
+// wrong output. The holder belongs to startInProcInferno/stopInProcInferno;
+// this never closes it.
 func warmupTxHolder(holder txFrameWriter, channels int) {
 	zeros := make([]int32, txPumpFrames*channels)
 	if _, err := holder.Write(zeros); err != nil {
@@ -603,12 +359,10 @@ func warmupTxHolder(holder txFrameWriter, channels int) {
 		return
 	}
 	mutex.Lock()
-	if txHolder == holder {
+	if txHolder == holder && !txHolderReady {
 		txHolderReady = true
 		logInfof("TX holder ready (%s)", txHolderDevice)
 		startTxIdleFeeder(holder, channels, sampleRates[sampleRateIdx])
-	} else {
-		holder.Close()
 	}
 	mutex.Unlock()
 }
@@ -686,19 +440,12 @@ func startTxIdleFeeder(holder txFrameWriter, channels, rate int) {
 // 256px OLED menu value, long suits the dashboard. Callers hold the app
 // mutex (same discipline as webNoticeIfLive).
 func txStatusLocked() (short, long string) {
-	name := sanitizeDanteName(deviceName) + "-TX"
-	if inProcRX() {
-		// One paired instance advertises the unit's own name; there is no
-		// separate "-TX" device to point the operator at.
-		name = sanitizeDanteName(deviceName)
-	}
+	name := sanitizeDanteName(deviceName)
 	switch {
 	case txHolder != nil && txHolderReady:
 		return "ready", "Inferno TX ready (" + name + ")"
 	case txHolder != nil:
 		return "no clock", "Inferno TX: waiting for clock"
-	case txHolderFailed && !demoMode:
-		return "failed", "Inferno TX failed to start (ports busy) - see log"
 	case demoMode:
 		return "off", "Inferno TX off (demo mode)"
 	default:
@@ -713,21 +460,6 @@ func txStatusLocked() (short, long string) {
 func txStatusShortLocked() string {
 	short, _ := txStatusLocked()
 	return short
-}
-
-// closeTxHolder drops the persistent TX device (shutdown). All pumps are
-// dead by then: playback is reaped before this runs, and a stale pump exits
-// on its generation check before touching the closed handle.
-func closeTxHolder() {
-	mutex.Lock()
-	defer mutex.Unlock()
-	if txHolder != nil {
-		txHolder.Close()
-		txWriteLocks.Delete(txHolder)
-		txHolder = nil
-		txHolderDevice = ""
-		txHolderReady = false
-	}
 }
 
 // dantePlaybackCmdFor decodes a take to raw s32le on stdout for the pump.

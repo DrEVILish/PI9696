@@ -136,10 +136,12 @@ Playback currently goes to local ALSA (target: route out through Inferno — Kno
 ### Audio Verification
 
 ```bash
-# Verify Inferno stream + FIFO pipeline
-cd inferno && INFERNO_SAMPLE_RATE=48000 ./target/release/inferno2pipe -c 2 -o /tmp/test.fifo
-ffmpeg -f s32le -ar 48000 -ac 2 -i /tmp/test.fifo -c:a pcm_s24le test.wav
-file test.wav
+# Verify the inferno plugin receives (stop the app first: it owns the one
+# inferno instance and its ports), then route a source to it with netaudio
+systemctl stop pi9696
+INFERNO_SAMPLE_RATE=48000 INFERNO_RX_CHANNELS=2 INFERNO_TX_CHANNELS=2 \
+  arecord -D inferno -f S32_LE -r 48000 -c 2 -d 10 /var/tmp/test.wav
+file /var/tmp/test.wav
 ```
 
 ---
