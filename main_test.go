@@ -1986,33 +1986,37 @@ func TestLogLevelSetAndPersist(t *testing.T) {
 		t.Fatalf("expected applyLogLevel to set Debug, got %d", currentLogLevel())
 	}
 
+	// Logging has one parameter, so it edits in place on its Settings row:
+	// press to edit, rotate to choose (nothing applies yet), press to apply.
 	mutex.Lock()
-	currentState = StateLogging
-	selectedMenu = 2 // Info
+	currentState, selectedMenu, menuScrollOffset, editingParameter = StateSettings, settingsLoggingRow, 0, false
 	mutex.Unlock()
-
 	onEncoderClick()
+	mutex.Lock()
+	editing, state := editingParameter, currentState
+	mutex.Unlock()
+	if state != StateSettings || !editing {
+		t.Fatalf("press on Logging: state=%d editing=%v, want in-place editing on Settings", state, editing)
+	}
+	onEncoderRotate(-1) // Debug -> Info
+	if currentLogLevel() != LogDebug {
+		t.Fatalf("rotation applied the level early: %d", currentLogLevel())
+	}
+	mutex.Lock()
+	shown := loggingRowValue()
+	mutex.Unlock()
+	if shown != logLevelNames[LogInfo] {
+		t.Fatalf("Logging row shows %q while choosing, want %q", shown, logLevelNames[LogInfo])
+	}
+	onEncoderClick()
+	mutex.Lock()
+	state, editing, sel := currentState, editingParameter, selectedMenu
+	mutex.Unlock()
 	if currentLogLevel() != LogInfo {
-		t.Fatalf("expected click on Info row to set LogInfo, got %d", currentLogLevel())
+		t.Fatalf("expected the press to apply Info, got %d", currentLogLevel())
 	}
-
-	mutex.Lock()
-	enteredSettingsBack := currentState == StateLogging
-	mutex.Unlock()
-	if !enteredSettingsBack {
-		t.Fatalf("expected level-selection click to stay on the Logging submenu, got state=%d", currentState)
-	}
-
-	// The Back row returns to Settings without changing the level.
-	mutex.Lock()
-	selectedMenu = 4
-	mutex.Unlock()
-	onEncoderClick()
-	mutex.Lock()
-	backToSettings := currentState == StateSettings && currentLogLevel() == LogInfo
-	mutex.Unlock()
-	if !backToSettings {
-		t.Fatalf("expected Back to return to Settings keeping Info, got state=%d level=%d", currentState, currentLogLevel())
+	if state != StateSettings || editing || sel != settingsLoggingRow {
+		t.Fatalf("after applying: state=%d editing=%v row=%d, want back to navigation on the Logging row", state, editing, sel)
 	}
 
 	// A raised level round-trips through the persisted config.
@@ -2023,21 +2027,35 @@ func TestLogLevelSetAndPersist(t *testing.T) {
 	}
 }
 
-func TestLogLevelSubmenuBackTarget(t *testing.T) {
-	origState, origMenu := currentState, selectedMenu
-	t.Cleanup(func() { currentState, selectedMenu = origState, origMenu })
-
+// Rotation wraps through all four levels while editing in place, and
+// leaving Settings mid-edit (hold) discards the choice.
+func TestLogLevelInlineWrapsAndHoldDiscards(t *testing.T) {
+	origLevel, origState, origMenu := currentLogLevel(), currentState, selectedMenu
+	t.Cleanup(func() {
+		applyLogLevel(origLevel)
+		currentState, selectedMenu, editingParameter = origState, origMenu, false
+	})
 	mutex.Lock()
-	currentState = StateLogging
-	selectedMenu = 4 // Back
+	applyLogLevel(LogError)
+	currentState, selectedMenu, menuScrollOffset, editingParameter = StateSettings, settingsLoggingRow, 0, false
 	mutex.Unlock()
 	onEncoderClick()
-
+	onEncoderRotate(-1) // Error wraps to Debug
 	mutex.Lock()
-	got := currentState == StateSettings
+	shown := loggingRowValue()
 	mutex.Unlock()
-	if !got {
-		t.Fatalf("expected Logging Back to go to Settings, got state=%d", currentState)
+	if shown != logLevelNames[LogDebug] {
+		t.Fatalf("rotating back from Error shows %q, want %q", shown, logLevelNames[LogDebug])
+	}
+	onEncoderHold()
+	if currentLogLevel() != LogError {
+		t.Fatalf("hold applied the pending level: %d", currentLogLevel())
+	}
+	mutex.Lock()
+	editing := editingParameter
+	mutex.Unlock()
+	if editing {
+		t.Fatal("hold left the row in edit mode")
 	}
 }
 
@@ -5360,7 +5378,7 @@ func TestRenderEveryStateDoesNotRelockMutex(t *testing.T) {
 	origState, origMode, origEditing := currentState, menuMode, editingParameter
 	t.Cleanup(func() { currentState, menuMode, editingParameter = origState, origMode, origEditing })
 	t.Setenv("PI9696_SIM_OUT", filepath.Join(t.TempDir(), "frame.png"))
-	for st := StateIdle; st <= StateLogging; st++ {
+	for st := StateIdle; st <= StateDisplay; st++ {
 		mutex.Lock()
 		currentState, editingParameter = st, false
 		mutex.Unlock()

@@ -30,7 +30,7 @@ go build -o pi9696 . && sudo ./pi9696
 | Controls | EC11 rotary encoder + Record/Stop/Play buttons |
 | Remote | HTTP on port 8080 (token + session auth, no HTTPS); `PI9696_REMOTE_PORT` overrides |
 | Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport toggle, default off, no auth; switching it off also drops connected controllers) |
-| Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log |
+| Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log. On the OLED it is edited in place on its Settings row (press: `»`, rotate to choose, press to apply) - a single-parameter setting gets no page of its own |
 | File size | ~17.3 MB/min at 48 kHz stereo 24-bit |
 
 ---

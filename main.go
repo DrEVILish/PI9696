@@ -967,7 +967,6 @@ const (
 	StateAudio      // Audio submenu: Sample Rate, Channel Count, Tag, Prefix
 	StateMetering   // Metering submenu: Meter Range, Peak Hold
 	StateDisplay    // Display submenu: Brightness, Auto Dim, Menu Timeout, Back
-	StateLogging    // Logging submenu: Error, Warn, Info, Debug, Back
 )
 
 // Recording output is WAV (PCM 24-bit) only - see OutputBitsPerSample and the
@@ -1431,10 +1430,14 @@ func onEncoderRotate(direction int) {
 		idleBrowsePage = ((idleBrowsePage+direction)%totalPages + totalPages) % totalPages
 
 	case StateSettings:
-		// The top-level Settings screen is pure navigation now - every
-		// parameter lives inside a sub-menu (Audio / Metering / WiFi), so a
-		// rotate just moves the cursor. Editing happens inside those
-		// sub-menus (see StateAudio/StateMetering below).
+		// Navigation, except on a single-parameter row being edited in
+		// place (Logging): there rotation steps through its values, which
+		// apply on the next press (see handleSettingsClick).
+		if editingParameter && selectedMenu == settingsLoggingRow {
+			n := len(logLevelNames)
+			pendingLogLevel = LogLevel(((int(pendingLogLevel)+direction)%n + n) % n)
+			break
+		}
 		navigateMenu(direction)
 
 	case StateAudio:
@@ -1480,11 +1483,6 @@ func onEncoderRotate(direction int) {
 		case 2: // Menu Timeout
 			adjustMenuTimeout(direction)
 		}
-
-	case StateLogging:
-		// The Logging submenu (Error/Warn/Info/Debug) is a direct-select
-		// list, not edit-mode rows - clicking a level applies it at once.
-		navigateMenu(direction)
 
 	case StateCopyFiles:
 		navigateMenu(direction)
@@ -1558,9 +1556,6 @@ func onEncoderClick() {
 
 	case StateDisplay:
 		handleDisplayClick()
-
-	case StateLogging:
-		handleLoggingClick()
 
 	case StatePlaying, StatePaused:
 		// Owner decision: only the Play key (panel or WebUI) pauses and
@@ -1801,7 +1796,7 @@ func applyMenuTimeoutLocked(now time.Time) {
 	switch currentState {
 	case StateIdleBrowse:
 		exitIdleBrowse()
-	case StateSettings, StateAudio, StateMetering, StateDisplay, StateLogging,
+	case StateSettings, StateAudio, StateMetering, StateDisplay,
 		StateCopyFiles, StateSystemOptions, StateNetworkInfo, StateRemoteInfo,
 		StateWifi, StateWifiQR, StateConfirm:
 		currentState = StateIdle
@@ -1823,8 +1818,6 @@ func navigateMenu(direction int) {
 		maxItems = 3 // Meter Range, Peak Hold, Back
 	case StateDisplay:
 		maxItems = 4 // Brightness, Auto Dim, Menu Timeout, Back
-	case StateLogging:
-		maxItems = len(logLevelNames) + 1 // Error, Warn, Info, Debug, Back
 	case StateCopyFiles:
 		maxItems = len(allFiles) + 3 // Start Copy, [All], [NONE], files...
 	case StateSystemOptions:
@@ -1847,6 +1840,9 @@ func handleSettingsClick() {
 	// act on that row (e.g. clicking out of editing Sample Rate must not
 	// simultaneously enter Channel Count).
 	if editingParameter {
+		if selectedMenu == settingsLoggingRow {
+			setLogLevel(pendingLogLevel)
+		}
 		editingParameter = false
 		return
 	}
@@ -1864,10 +1860,13 @@ func handleSettingsClick() {
 		currentState = StateDisplay
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 3: // Logging submenu (Error, Warn, Info, Debug)
-		currentState = StateLogging
-		selectedMenu = 0
-		menuScrollOffset = 0
+	case settingsLoggingRow:
+		// One parameter, so no page of its own (owner request): the row
+		// itself switches to editing ("»"), rotation steps through the
+		// levels, and the next press applies the shown level and leaves
+		// the cursor on this row.
+		pendingLogLevel = currentLogLevel()
+		editingParameter = true
 	case 4: // Copy Files
 		if usbMounted {
 			loadFilesToCopy()
@@ -1941,21 +1940,6 @@ func handleMeteringClick() {
 	case 2: // Back
 		currentState = StateSettings
 		selectedMenu = 1
-		menuScrollOffset = 0
-	}
-}
-
-// handleLoggingClick drives the Logging submenu (StateLogging). It's a
-// direct-select list - clicking a level applies it immediately (and presses
-// it into the persisted config) rather than the press-to-edit dance the
-// numeric Audio/Metering params need; the last row is Back.
-func handleLoggingClick() {
-	switch selectedMenu {
-	case 0, 1, 2, 3: // Error, Warn, Info, Debug
-		setLogLevel(LogLevel(selectedMenu))
-	case 4: // Back
-		currentState = StateSettings
-		selectedMenu = 3
 		menuScrollOffset = 0
 	}
 }
@@ -4689,8 +4673,6 @@ func render() {
 		renderMeteringMenu()
 	case StateDisplay:
 		renderDisplayMenu()
-	case StateLogging:
-		renderLoggingMenu()
 	case StateConfirm:
 		renderConfirmDialog()
 	}
@@ -5184,20 +5166,36 @@ func renderPlayingScreen() {
 	hwManager.DrawPlaybackStatus(formatDuration(pos), formatDuration(playbackDuration), progress, filename, currentState == StatePaused)
 }
 
+// settingsLoggingRow is the Settings row of the in-place Logging setting.
+const settingsLoggingRow = 3
+
+// pendingLogLevel is the level shown while the Logging row is being edited;
+// it applies only on the confirming press. Guarded by the app mutex.
+var pendingLogLevel LogLevel
+
+// loggingRowValue is the Logging row's value: the level being chosen while
+// the row is edited, else the active level.
+func loggingRowValue() string {
+	if currentState == StateSettings && editingParameter && selectedMenu == settingsLoggingRow {
+		return logLevelNames[int(pendingLogLevel)]
+	}
+	return logLevelNames[int(currentLogLevel())]
+}
+
 func renderSettingsMenu() {
 	// No separate header: at 256x64 there isn't room for a title row above a
 	// scrollable list without it colliding with either the status bar above
 	// or the first item below, so the list starts right under the status bar.
 
 	// Menu items using FiraCode MenuItem rendering. The top level carries
-	// only sub-menu entries and actions; every parameter lives one level down
-	// (Audio / Metering / WiFi) so the screen stays to a couple of focused
-	// pages instead of a long scroll of ten-odd rows.
+	// sub-menu entries and actions; multi-parameter groups live one level
+	// down (Audio / Metering / Display / WiFi). A single-parameter setting
+	// (Logging) is edited in place on its row instead of opening a page.
 	allItems := []hardware.MenuItem{
 		{Label: "Audio →", Value: fmt.Sprintf("WAV %dch", channelCount)},
 		{Label: "Metering →", Value: fmt.Sprintf("%ddB", int(vuRangeOptions[vuRangeIdx]))},
 		{Label: "Display →", Value: fmt.Sprintf("%d%%", oledBrightnessPct)},
-		{Label: "Logging →", Value: logLevelNames[int(currentLogLevel())]},
+		{Label: "Logging", Value: loggingRowValue()},
 		{Label: "Copy Files →", Value: ""},
 		{Label: "System Options →", Value: ""},
 		{Label: "Network Info →", Value: ""},
@@ -5716,80 +5714,6 @@ func renderMeteringMenu() {
 			}
 		}
 
-		labelText := prefix + item.Label
-		hwManager.DrawText(8, y, labelText)
-
-		if item.Value != "" {
-			valueWidth := hwManager.GetTextWidth(item.Value)
-			hwManager.DrawText(256-valueWidth-32, y, item.Value)
-		}
-		y += fontHeight
-	}
-
-	if totalItems > maxVisibleItems {
-		hwManager.SwitchToContext("details")
-		if menuScrollOffset > 0 {
-			hwManager.DrawText(240, 22, "↑")
-		}
-		if menuScrollOffset+maxVisibleItems < totalItems {
-			hwManager.DrawText(240, 61, "↓")
-		}
-	}
-}
-
-// renderLoggingMenu draws the Logging submenu (StateLogging): a direct-select
-// list of the four levels plus Back. The active level is marked so it reads as
-// a picker (the value is what a selection means, not an editable parameter).
-func renderLoggingMenu() {
-	items := make([]hardware.MenuItem, 0, len(logLevelNames)+1)
-	for i, name := range logLevelNames {
-		mark := " "
-		if LogLevel(i) == currentLogLevel() {
-			mark = "●"
-		}
-		items = append(items, hardware.MenuItem{Label: name, Value: mark})
-	}
-	items = append(items, hardware.MenuItem{Label: "← Back", Value: ""})
-	totalItems := len(items)
-	maxVisibleItems := 4
-
-	if selectedMenu < menuScrollOffset {
-		menuScrollOffset = selectedMenu
-	} else if selectedMenu >= menuScrollOffset+maxVisibleItems {
-		menuScrollOffset = selectedMenu - maxVisibleItems + 1
-	}
-	if menuScrollOffset > totalItems-maxVisibleItems {
-		menuScrollOffset = totalItems - maxVisibleItems
-	}
-	if menuScrollOffset < 0 {
-		menuScrollOffset = 0
-	}
-
-	endIdx := menuScrollOffset + maxVisibleItems
-	if endIdx > totalItems {
-		endIdx = totalItems
-	}
-	visibleItems := items[menuScrollOffset:endIdx]
-	visibleSelectedIndex := selectedMenu - menuScrollOffset
-
-	y := 22
-	fontHeight := 13
-
-	for i, item := range visibleItems {
-		if i == visibleSelectedIndex {
-			if err := hwManager.SwitchToContext("selected"); err != nil {
-				return
-			}
-		} else {
-			if err := hwManager.SwitchToContext("menu"); err != nil {
-				return
-			}
-		}
-
-		prefix := "  "
-		if i == visibleSelectedIndex {
-			prefix = "> "
-		}
 		labelText := prefix + item.Label
 		hwManager.DrawText(8, y, labelText)
 
