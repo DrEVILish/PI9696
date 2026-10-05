@@ -2115,21 +2115,25 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
    ftl-themes sprite: stroke inherits each key's color via currentColor. */
 .transport-row{--icon-size:clamp(14px,2.2vw,30px);display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
 .transport-row button{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;display:flex;align-items:center;justify-content:center}
-/* The keys mirror the front panel's lamps: unlit at rest, REC lit red only
-   while a take is recording, PLAY lit green only while playing and
-   flashing while paused (the panel lamp's ~2 Hz). The row carries the
-   state (is-rec / is-play / is-pause, set by renderTransportRow). */
-.transport-row .record,.transport-row .play{border-color:var(--border);color:var(--muted)}
-.transport-row .stop{color:var(--accent)}
-.transport-row.is-rec .record{border-color:var(--danger);color:var(--danger);background:color-mix(in srgb,var(--danger) 18%,transparent);box-shadow:0 0 0.8em color-mix(in srgb,var(--danger) 60%,transparent)}
-.transport-row.is-play .play,.transport-row.is-pause .play{border-color:var(--success);color:var(--success);background:color-mix(in srgb,var(--success) 16%,transparent);box-shadow:0 0 0.8em color-mix(in srgb,var(--success) 55%,transparent)}
+/* The keys mirror the front panel's lamps (owner, 2026-10-05): each key
+   always shows its colour, dim while its LED is off, and glows strongly
+   when it is on - REC while a take records, PLAY while playing (flashing
+   while paused, the panel lamp's ~2 Hz), STOP while the transport is
+   stopped. The row carries the state (is-rec / is-play / is-pause /
+   is-stop, set by renderTransportRow). */
+.transport-row .record{--key-c:var(--danger)}
+.transport-row .stop{--key-c:var(--accent)}
+.transport-row .play{--key-c:var(--success)}
+.transport-row .record,.transport-row .stop,.transport-row .play{color:color-mix(in srgb,var(--key-c) 42%,transparent);border-color:color-mix(in srgb,var(--key-c) 30%,var(--border));background:color-mix(in srgb,var(--key-c) 5%,transparent);box-shadow:none;transition:box-shadow .15s,color .15s,background .15s}
+.transport-row.is-rec .record,.transport-row.is-play .play,.transport-row.is-pause .play,.transport-row.is-stop .stop{color:var(--key-c);border-color:var(--key-c);background:color-mix(in srgb,var(--key-c) 24%,transparent);box-shadow:0 0 0.9em 0.15em color-mix(in srgb,var(--key-c) 75%,transparent),0 0 2.4em 0.3em color-mix(in srgb,var(--key-c) 35%,transparent),inset 0 0 0.8em color-mix(in srgb,var(--key-c) 45%,transparent)}
+.transport-row.is-rec .record svg,.transport-row.is-play .play svg,.transport-row.is-pause .play svg,.transport-row.is-stop .stop svg{filter:drop-shadow(0 0 0.35em var(--key-c))}
 .transport-row.is-pause .play{animation:pi-lamp-flash 0.5s steps(1,end) infinite alternate}
-@keyframes pi-lamp-flash{to{background:transparent;box-shadow:none;color:var(--muted);border-color:var(--border)}}
+@keyframes pi-lamp-flash{to{color:color-mix(in srgb,var(--key-c) 42%,transparent);border-color:color-mix(in srgb,var(--key-c) 30%,var(--border));background:color-mix(in srgb,var(--key-c) 5%,transparent);box-shadow:none}}
 @media (prefers-reduced-motion:reduce){.transport-row.is-pause .play{animation:none;border-style:dashed}}
 /* Text mode: the same transport keys but labelled instead of icon glyphs.
    Buttons stretch to fit and the label takes the accent colour the icon had. */
 .transport-row.text button{width:auto;min-width:clamp(2em,3.2vw,3.4em);font-size:clamp(0.55em,0.95vw,0.85em);letter-spacing:0.08em;padding:0 0.3em}
-.transport-row.text .stop{color:var(--accent)}
+
 .header-actions{position:absolute;top:0.8em;right:clamp(0.5em,2vw,1.5em);display:flex;gap:0.5em}
 /* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
    - the base button{} rule above only targets <button>, so colors/border
@@ -2150,7 +2154,7 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 .dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--accent);background:var(--surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em;--icon-size:1em}
 .dl-all:hover{border-color:var(--accent)}
 
-.grid{display:grid;grid-template-columns:var(--pi-columns,minmax(0,1fr) minmax(0,1.5fr));gap:var(--pi-gap,1.2em)}
+.grid{display:grid;grid-template-columns:var(--pi-columns,minmax(0,1fr));gap:var(--pi-gap,1.2em)}
 .grid>*{min-width:0}
 /* Layout bridge (companion to the :root color bridge above): the structural
    knobs a layout theme may turn, with the built-in geometry as fallback.
@@ -2187,14 +2191,11 @@ main.app-main{display:contents}
 /* Scrollable table wrapper for narrow viewports */
 .recordings-wrap{overflow-x:auto;max-width:100%}
 
-@media (min-width:801px){
-  body{min-height:100vh;display:flex;flex-direction:column}
-  .grid{flex:1;min-height:0;align-self:stretch}
-  .panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
-  .panel h2{flex:none}
-  #recordings{overflow-y:auto;flex:1;min-height:0}
-  .panel.center{overflow-y:auto}
-}
+/* Owner layout: one column (Transport Status, then Recordings under the
+   reel-to-reel) and no pane scrolls - every pane is as tall as what it
+   holds and the page scrolls instead. Only a recordings table wider than
+   the screen scrolls sideways, inside its own wrapper. */
+.panel.center #status,.panel.center .deck-status{max-width:56rem;margin-left:auto;margin-right:auto}
 
 /* Modals: the settings sheet and the stop-recording confirmation. The box,
    overlay and close button are the shared modal family; this app keeps
@@ -2359,9 +2360,14 @@ main.app-main{display:contents}
 .meter-body{flex:1;min-width:0;display:flex;align-items:center;overflow:hidden;transition:opacity 0.25s ease}
 .meter-body{justify-content:center}
 .meter-body .meter-bridge{flex:0 1 auto;min-width:0;max-width:100%}
-.meter-band.collapsed{height:auto}
-.meter-band.collapsed .meter-bar{flex-direction:row;align-items:center}
-.meter-band.collapsed .meter-body{display:none}
+/* Collapsed, the band disappears entirely: the header's large Meters
+   button brings it back. */
+.meter-band.collapsed{display:none}
+.meter-open{display:inline-flex;align-items:center;gap:0.45em;--icon-size:1.4em;height:2.6em;padding:0 0.9em;font-size:0.95em;letter-spacing:0.08em;text-transform:uppercase}
+.meter-open[hidden]{display:none}
+/* In the header's bottom-right corner, clear of the transport keys. */
+header.deck .meter-open{position:absolute;right:clamp(0.5em,2vw,1.5em);bottom:0.7em}
+@media (max-width:800px){header.deck .meter-open{position:static;margin-left:auto}}
 /* Footer: disk space and record time, plus the System pane toggle. */
 .app-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;display:flex;align-items:center;gap:var(--space-m,1em);padding:0.45em 1.5em;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);font-size:0.85em;color:var(--muted)}
 .footer-disk b{color:var(--text);font-weight:normal}
@@ -2463,6 +2469,9 @@ html[data-theme] body{background:transparent}
     <button hx-post="/api/input/encoder/right" aria-label="Encoder right" title="Encoder right"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-right"/></svg></button>
   </div>
   <div class="transport-row" id="transportRow"></div>
+  <button class="meter-open btn btn-secondary" id="meterOpen" type="button" title="Show the level meters" aria-controls="meterFooter" aria-expanded="false" hidden>
+    <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-volume"/></svg><span>Meters</span>
+  </button>
   <div class="header-actions">
     <span class="icon-btn conn off" id="connLamp" title="Server disconnected">
       <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-broadcast"/></svg>
@@ -2742,8 +2751,9 @@ function renderTransportRow() {
     html += '<button class="btn stop" data-stop title="Stop">STOP</button>';
     html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? 'II' : '>');
   }
+  var stopped = !transportState.rec && !transportState.playing && !transportState.paused;
   row.className = 'transport-row transport' + (ICON_MODE ? '' : ' text') + (transportState.rec ? ' is-rec' : '') +
-    (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : ''));
+    (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : '')) + (stopped ? ' is-stop' : '');
   row.innerHTML = html;
   // These controls are recreated after htmx's initial DOM scan whenever the
   // play/pause state or button style changes, so explicitly process the new
@@ -2940,18 +2950,23 @@ var meterToggle = document.getElementById('meterToggle');
 var meterBody = document.getElementById('meterBody');
 var meterCaret = document.getElementById('meterCaretSvg');
 if (meterToggle && meterFooter && meterBody && meterCaret) {
-  var collapsed = localStorage.getItem('pi9696_meterCollapsed') === '1';
+  var collapsed = false;
+  try { collapsed = localStorage.getItem('pi9696_meterCollapsed') === '1'; } catch (e) {}
+  var meterOpen = document.getElementById('meterOpen');
   function applyCollapse() {
     meterFooter.classList.toggle('collapsed', collapsed);
+    if (meterOpen) { meterOpen.hidden = !collapsed; meterOpen.setAttribute('aria-expanded', !collapsed); }
     meterCaret.style.transform = collapsed ? 'rotate(-90deg)' : '';
     meterToggle.setAttribute('aria-expanded', !collapsed);
   }
   applyCollapse();
-  meterToggle.addEventListener('click', function() {
+  function toggleMeters() {
     collapsed = !collapsed;
-    localStorage.setItem('pi9696_meterCollapsed', collapsed ? '1' : '0');
+    try { localStorage.setItem('pi9696_meterCollapsed', collapsed ? '1' : '0'); } catch (e) {}
     applyCollapse();
-  });
+  }
+  meterToggle.addEventListener('click', toggleMeters);
+  if (meterOpen) meterOpen.addEventListener('click', toggleMeters);
 }
 
 // The meter band is as tall as the header (owner layout): measure the

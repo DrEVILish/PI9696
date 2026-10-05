@@ -314,9 +314,9 @@ func TestLayoutBridgeKeepsBuiltInGeometry(t *testing.T) {
 	body := rr.Body.String()
 	// Layout bridge: identical-fallback vars themes may turn. Unthemed,
 	// every fallback is the built-in geometry (two columns since the owner
-	// layout of 2026-10-05: Transport Status beside Recordings).
+	// layout of 2026-10-05: one column, Recordings under Transport Status).
 	for _, want := range []string{
-		`grid-template-columns:var(--pi-columns,minmax(0,1fr) minmax(0,1.5fr))`,
+		`grid-template-columns:var(--pi-columns,minmax(0,1fr))`,
 		`gap:var(--pi-gap,1.2em)`,
 		`flex-direction:var(--pi-deck-dir,row)`,
 	} {
@@ -729,21 +729,18 @@ func TestDashboardTransportLampsFollowState(t *testing.T) {
 	mux := newRemoteMux()
 	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
 	for _, want := range []string{
-		`.transport-row .record,.transport-row .play{border-color:var(--border);color:var(--muted)}`,
-		`.transport-row.is-rec .record{`,
-		`.transport-row.is-play .play,.transport-row.is-pause .play{`,
+		// dim in their own colour while the LED is off...
+		`.transport-row .record,.transport-row .stop,.transport-row .play{color:color-mix(in srgb,var(--key-c) 42%,transparent)`,
+		// ...and a strong glow when it is on
+		`.transport-row.is-rec .record,.transport-row.is-play .play,.transport-row.is-pause .play,.transport-row.is-stop .stop{color:var(--key-c)`,
 		`.transport-row.is-pause .play{animation:pi-lamp-flash`,
 		`@media (prefers-reduced-motion:reduce){.transport-row.is-pause .play{animation:none`,
 		`rec: !!m.recording`,
 		`(transportState.rec ? ' is-rec' : '')`,
+		`(stopped ? ' is-stop' : '')`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lacks %q", want)
-		}
-	}
-	for _, stale := range []string{`.transport-row .record{border-color:var(--danger)`, `.transport-row .play{border-color:var(--success)`} {
-		if strings.Contains(body, stale) {
-			t.Errorf("dashboard still lights a key at rest: %q", stale)
 		}
 	}
 }
@@ -773,7 +770,7 @@ func TestDashboardOwnerLayout(t *testing.T) {
 			t.Errorf("dashboard still has %q", gone)
 		}
 	}
-	for _, want := range []string{`id="meterToggle"`, `.meter-caret{--icon-size:1.6em;width:2.9em;height:2.9em`, `id="sysToggle"`, `class="sys-graph"`, `repeat(auto-fill,minmax(`, `var TELE_H = 112, TELE_H_SMALL = 70;`, `id="sysLamp" cx="54" cy="255" r="5"`} {
+	for _, want := range []string{`id="meterToggle"`, `.meter-caret{--icon-size:1.6em;width:2.9em;height:2.9em`, `id="meterOpen"`, `.meter-band.collapsed{display:none}`, `id="sysToggle"`, `class="sys-graph"`, `repeat(auto-fill,minmax(`, `var TELE_H = 112, TELE_H_SMALL = 70;`, `id="sysLamp" cx="54" cy="255" r="5"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lacks %q", want)
 		}

@@ -135,10 +135,11 @@ Playback path:
 ### WebUI Dashboard
 
 - Layout (owner, 2026-10-05), top to bottom:
-  - **Header**: logo, live OLED mirror (PNG), on-screen encoder, and the transport keys. These drive the same handlers as the hardware and light like the panel lamps: REC red only while recording, PLAY green only while playing, flashing while paused.
-  - **Level meters**: a full-width band the height of the header. Per-channel VU meters arrive over a 100 ms WebSocket push. A large toggle collapses the band to its bar.
+  - **Header**: logo, live OLED mirror (PNG), on-screen encoder, and the transport keys. These drive the same handlers as the hardware and behave like lamps: each key is dim in its own colour while its LED is off and glows strongly when on. REC is on while recording; PLAY while playing, flashing while paused; STOP while the transport is stopped.
+  - **Level meters**: a full-width band the height of the header. Per-channel VU meters arrive over a 100 ms WebSocket push. A large toggle collapses the band completely into the header, where a METERS button brings it back.
   - **Transport Status**: the reel-to-reel deck (its record lamp is the larger SYS lamp), the transport state line, then the Status table: rate, channels, format, tag, Inferno, Inferno TX, clock, network, uptime, version. There is no Stop button, Peak/RMS or temperature here: the deck keys, meters and System graphs cover those.
-  - **Recordings**, beside Transport Status: one line per take, a play button per row (see Playback), downloads that save to disk.
+  - **Recordings**, under Transport Status: one line per take, with a play button per row (see Playback), channel names, and downloads that save to disk.
+  - No pane scrolls: each pane is as tall as its contents and the page scrolls. Only a table wider than the screen scrolls sideways in its own box.
   - **Footer**: disk space and record time left, plus a System button. It pops up a full-width System pane with the CPU, app CPU by subsystem, RAM, temperature and disk graphs in a wrapping grid.
 - Settings modal (all persisted settings)
 - INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
