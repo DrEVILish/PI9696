@@ -7903,9 +7903,15 @@ func waitWrites(t *testing.T, f *fakeTxHolder, atLeast int, within time.Duration
 func TestTxIdleFeederWritesSilenceAndYieldsToPump(t *testing.T) {
 	saveTxGlobals(t)
 	enableTxIdleFeed(t)
+	// Earlier tests leave reconciles behind: an inferno worker request or
+	// a `go ensureTxHolder()` that lands mid-test and swaps txHolder out,
+	// which stops the feeder after one write. Drain the worker, and give
+	// the holder the identity a reconcile would want so a late one keeps it.
+	quiesceInfernoWorker(t)
 	holder := &fakeTxHolder{}
 	mutex.Lock()
 	txHolder, txHolderReady = holder, true
+	txHolderDevice = fmt.Sprintf("inferno:%s:%d:%d", sanitizeDanteName(deviceName), sampleRates[sampleRateIdx], channelCount)
 	startTxIdleFeeder(holder, 2, 48000)
 	mutex.Unlock()
 	t.Cleanup(func() {
