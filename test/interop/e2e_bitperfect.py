@@ -4,15 +4,16 @@
 Run on Pi-B (the second host; needs numpy, netaudio, aplay/arecord, the
 inferno ALSA plugin and ssh + HTTP access to Pi-A, which runs the pi9696 app).
 
-  1. Pi-B transmits a sample-accurate timecode on every channel: each sample is
-     a 24-bit counter, v = ((frame + ch*OFF) mod M) + 1, so the frame number
-     is recoverable from any sample of any channel. It is sent with
+  1. Pi-B transmits an audible, deterministic test signal (a tone per channel
+     plus a melody that steps every second; see signal()) with
      INFERNO_TX_SOURCE_BIT_DEPTH=24, i.e. untouched.
   2. netaudio routes it to Pi-A, and Pi-A records a take through the app
      (WebUI record start/stop, same path as the button).
   3. netaudio routes Pi-A's transmit channels to a receiver on Pi-B, Pi-A
      plays the take back through the app (play button), Pi-B records it.
-  4. The two recordings are aligned on the timecode and compared bit for bit.
+  4. The take is checked bit for bit against the regenerated source, and
+     Pi-B's recording (aligned by cross-correlation) bit for bit against the
+     take.
 
 Both hosts must share one PTP clock (Pi-A's recording gate refuses takes
 otherwise; see DEPLOYMENT.md "Two inferno hosts"). With the same clock and
@@ -30,9 +31,9 @@ import urllib.parse, urllib.request
 
 import numpy as np
 
-M = (1 << 23) - 1
-OFF = 100003
 RATE = 48000
+AMP = 0.25            # each of the two tones; together about -6 dBFS peak, ~-12 dBFS RMS
+SILENCE = 1 << 8      # |sample| below this (24-bit) counts as silence
 
 
 def log(msg):
@@ -45,13 +46,75 @@ def fail_setup(msg):
 
 
 # --- signal and analysis ----------------------------------------------------
+#
+# The test signal is audible, so a person can listen to every recording
+# (owner rule: test audio is 20 Hz - 20 kHz and above -30 dBFS, never a
+# counter or noise). Each channel carries a steady tone of its own,
+# 200 + 97*ch Hz (ch 0..127: 200 Hz - 12.5 kHz), plus a "melody" tone that
+# changes pitch every second, 1001 + 10*((sec*7919) % 1000) Hz (1-11 kHz),
+# the same on every channel. All frequencies are whole Hz, so every tone
+# completes whole cycles each second: no click at the pitch steps, and the
+# signal is exactly periodic in nothing shorter than its whole length. The
+# per-second melody makes any second unique, which is what alignment by
+# cross-correlation needs; the comparison itself stays bit for bit.
 
-def gen_timecode(path, ch, secs):
-    offs = (np.arange(ch, dtype=np.int64) * OFF)[None, :]
+def channel_freq(ch):
+    return 200 + 97 * ch
+
+
+def melody_freq(sec):
+    # Ends in 1 Hz (odd, not a multiple of 5): coprime with 200 Hz, so even
+    # channel 0 alone repeats only once a second. Multiples of 10 Hz made
+    # it repeat every 0.1 s and blocks aligned to the wrong place.
+    return 1001 + 10 * ((sec * 7919) % 1000)
+
+
+def signal(n, chans):
+    """24-bit sample values for absolute source frames n (1-D int array) on
+    channels 0..chans-1, as the sender transmits them (exactly)."""
+    n = np.asarray(n, dtype=np.int64)
+    t = (n % RATE) / RATE                      # whole-Hz tones: phase restarts each second
+    mel = np.sin(2 * np.pi * np.vectorize(melody_freq)(n // RATE) * t) if len(n) else n
+    out = np.empty((len(n), chans), dtype=np.int64)
+    for c in range(chans):
+        x = AMP * np.sin(2 * np.pi * channel_freq(c) * t) + AMP * mel
+        out[:, c] = np.round(x * ((1 << 23) - 1)).astype(np.int64)
+    return out
+
+
+def gen_signal(path, ch, secs):
     with open(path, "wb") as f:
         for start in range(0, secs * RATE, RATE):
-            n = np.arange(start, min(start + RATE, secs * RATE), dtype=np.int64)[:, None]
-            f.write((((n + offs) % M + 1).astype(np.int32) << 8).astype("<i4").tobytes())
+            n = np.arange(start, min(start + RATE, secs * RATE), dtype=np.int64)
+            f.write((signal(n, ch).astype(np.int32) << 8).astype("<i4").tobytes())
+
+
+def find_offset(hay, needle):
+    """Where needle occurs exactly in hay (both frames x channels, or 1-D):
+    candidates by channel 0's first samples, then the whole window checked
+    on every channel. None if absent."""
+    m = len(needle)
+    if m == 0 or m > len(hay):
+        return None
+    h0 = hay if hay.ndim == 1 else hay[:, 0]
+    n0 = needle if needle.ndim == 1 else needle[:, 0]
+    cand = np.flatnonzero(h0[: len(h0) - m + 1] == n0[0])
+    for j in range(1, min(m, 8)):
+        cand = cand[h0[cand + j] == n0[j]]
+    for k in cand:
+        if np.array_equal(hay[k:k + m], needle):
+            return int(k)
+    return None
+
+
+def nearest_offset(hay, needle):
+    """Best alignment of needle in hay by FFT cross-correlation, for when an
+    exact match fails (a take that is not bit-exact still gets compared)."""
+    if len(needle) > len(hay):
+        return None
+    size = 1 << int(np.ceil(np.log2(len(hay) + len(needle))))
+    corr = np.fft.irfft(np.fft.rfft(hay.astype(np.float64), size) * np.conj(np.fft.rfft(needle.astype(np.float64), size)), size)
+    return int(np.argmax(corr[: len(hay) - len(needle) + 1]))
 
 
 def load_wav24(path, ch):
@@ -81,56 +144,61 @@ def load_raw32(path, ch):
     return (raw[: len(raw) // ch * ch] >> 8).reshape(-1, ch).astype(np.int64)
 
 
-def timecode(x):
-    """Frame number carried by each sample (valid only where x != 0)."""
-    return (x - 1 - (np.arange(x.shape[1], dtype=np.int64) * OFF)[None, :]) % M
-
-
 def describe(x, name):
-    """Integrity of one recording: the longest run of frames whose timecode is
-    identical across channels and rises by exactly 1 per frame."""
-    full = (x != 0).all(axis=1)
-    rows = np.flatnonzero(full)
+    """One recording: where the signal is (first/last non-silent frame) and
+    whether it has silent holes inside (a dropout), as runs of audio."""
+    loud = (np.abs(x) >= SILENCE).any(axis=1)
+    rows = np.flatnonzero(loud)
     if len(rows) == 0:
         return {"name": name, "frames": len(x), "audio": False}
-    k = timecode(x)
-    agree = (k[rows] == k[rows, :1]).all(axis=1)
-    kr = k[rows, 0]
-    ok = (np.diff(rows) == 1) & (np.diff(kr) % M == 1) & agree[1:] & agree[:-1]
-    breaks = np.flatnonzero(~ok)
-    starts = np.concatenate(([0], breaks + 1))
-    ends = np.concatenate((breaks, [len(rows) - 1]))
-    best = int(np.argmax(ends - starts))
-    s0, s1 = int(rows[starts[best]]), int(rows[ends[best]])
+    s0, s1 = int(rows[0]), int(rows[-1])
+    # a hole is >= 2 ms of silence on every channel inside the stream
+    quiet = ~loud[s0:s1 + 1]
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], quiet.astype(np.int8), [0]))))
+    holes = [(int(a), int(b)) for a, b in zip(edges[::2], edges[1::2]) if b - a >= RATE // 500]
     return {
         "name": name, "frames": len(x), "audio": True,
         "stream_first_frame": s0, "stream_last_frame": s1,
         "stream_seconds": round((s1 - s0 + 1) / RATE, 3),
-        "timecode_first": int(k[s0, 0]), "timecode_last": int(k[s1, 0]),
-        "misaligned_frames": int((~agree).sum()),
-        "runs": len(starts),
-        "nonzero_frames_outside_stream": int((x[:s0] != 0).any(axis=1).sum() + (x[s1 + 1:] != 0).any(axis=1).sum()),
+        "runs": len(holes) + 1,
+        "holes": [{"at_s": round((s0 + a) / RATE, 3), "ms": round((b - a) * 1000 / RATE, 1)} for a, b in holes[:10]],
     }
+
+
+def source_offset(x_seg, chans, secs):
+    """The source frame where x_seg (a recording's stream) starts: correlate
+    its first second against the whole source on channel 0."""
+    w = min(RATE, len(x_seg))
+    src0 = signal(np.arange(secs * RATE), 1)[:, 0]
+    k = find_offset(src0, x_seg[:w, 0])
+    return k if k is not None else nearest_offset(src0, x_seg[:w, 0])
 
 
 def coverage(a, b, stall_s):
     """Underrun-recovery mode: how much of the take reached Pi-B, how long
-    the longest gap is, and whether every frame that arrived is exact."""
+    the longest gap is, and whether every frame that arrived is exact.
+    Pi-B's capture is cut into 0.1 s blocks, each located in the take."""
     da, db = describe(a, "Pi-A take"), describe(b, "Pi-B capture")
     result = {"pi_a_take": da, "pi_b_capture": db}
     if not da["audio"] or not db["audio"]:
         result["verdict"] = "no audio"
         return result, False
     a_seg = a[da["stream_first_frame"]: da["stream_last_frame"] + 1]
-    full_b = (b != 0).all(axis=1)
-    rows = np.flatnonzero(full_b)
-    kb = timecode(b)[rows, 0]
-    idx = (kb - da["timecode_first"]) % M  # take frame each B frame carries
-    inside = idx < len(a_seg)
-    rows, idx = rows[inside], idx[inside]
     present = np.zeros(len(a_seg), dtype=bool)
-    present[idx] = True
-    exact = (b[rows] == a_seg[idx]).all(axis=1)
+    not_exact = 0
+    blk = RATE // 10
+    for start in range(db["stream_first_frame"], db["stream_last_frame"] + 1 - blk, blk):
+        block = b[start:start + blk]
+        if not (np.abs(block) >= SILENCE).any():
+            continue
+        k = find_offset(a_seg, block)
+        if k is None:
+            not_exact += blk
+            continue
+        if np.array_equal(a_seg[k:k + blk], block):
+            present[k:k + blk] = True
+        else:
+            not_exact += blk
     missing = np.flatnonzero(~present)
     gaps = np.split(missing, np.flatnonzero(np.diff(missing) != 1) + 1) if len(missing) else []
     longest = max((len(g) for g in gaps), default=0)
@@ -139,36 +207,46 @@ def coverage(a, b, stall_s):
         "take_frames_received": int(present.sum()),
         "missing_runs": len(gaps),
         "longest_gap_s": round(longest / RATE, 3),
-        "received_frames_not_exact": int((~exact).sum()),
+        "received_frames_not_exact": int(not_exact),
         "stall_s": stall_s,
     })
-    ok = result["received_frames_not_exact"] == 0 and longest / RATE <= stall_s + 1.0
+    ok = not_exact == 0 and longest / RATE <= stall_s + 1.0
     result["verdict"] = "RECOVERED" if ok else "NOT RECOVERED"
     return result, ok
 
 
-def compare(a, b):
-    """Align b to a on the timecode and compare every sample of a's stream."""
+def compare(a, b, secs):
+    """Pi-A's take against the source it recorded (bit for bit), and Pi-B's
+    capture of the playback against the take (bit for bit)."""
     da, db = describe(a, "Pi-A take"), describe(b, "Pi-B capture")
     result = {"pi_a_take": da, "pi_b_capture": db}
     if not da["audio"] or not db["audio"]:
         result["verdict"] = "no audio in " + ("the take" if not da["audio"] else "Pi-B's capture")
         return result, False
     a_seg = a[da["stream_first_frame"]: da["stream_last_frame"] + 1]
-    # where does the take's first frame appear in Pi-B's recording?
-    kb = timecode(b)[:, 0]
-    full_b = (b != 0).all(axis=1)
-    hits = np.flatnonzero(full_b & (kb == da["timecode_first"]))
-    if len(hits) == 0:
-        # take start missing in B: align on the first take frame B does have
-        common = np.flatnonzero(full_b & (((kb - da["timecode_first"]) % M) < len(a_seg)))
-        if len(common) == 0:
-            result["verdict"] = "Pi-B's capture holds no frame of the take"
-            return result, False
-        bpos = int(common[0])
-        apos = int((kb[bpos] - da["timecode_first"]) % M)
+
+    # 1. the take is the source, exactly
+    k0 = source_offset(a_seg, a.shape[1], secs)
+    if k0 is None:
+        result["take_vs_source"] = "the take's first second is not found in the source"
     else:
-        bpos, apos = int(hits[0]), 0
+        src = signal(np.arange(k0, k0 + len(a_seg)), a.shape[1])
+        d = src != a_seg
+        result["take_vs_source"] = {"source_start_s": round(k0 / RATE, 3), "samples_compared": int(d.size),
+                                    "samples_different": int(d.sum())}
+
+    # 2. Pi-B's capture holds the take, exactly
+    w = min(RATE, len(a_seg))
+    bpos = find_offset(b, a_seg[:w])
+    if bpos is None:
+        # the take's start may be missing in B: try a second later
+        apos = w
+        bpos = find_offset(b, a_seg[apos:apos + w]) if len(a_seg) > 2 * w else None
+        if bpos is None:
+            result["verdict"] = "Pi-B's capture does not hold the take"
+            return result, False
+    else:
+        apos = 0
     n = min(len(a_seg) - apos, len(b) - bpos)
     a_cmp, b_cmp = a_seg[apos:apos + n], b[bpos:bpos + n]
     diff = a_cmp != b_cmp
@@ -190,8 +268,9 @@ def compare(a, b):
             "pi_a": int(a_cmp[f, ch]), "pi_b": int(b_cmp[f, ch]),
             "max_abs_diff": int(np.abs(a_cmp - b_cmp)[diff].max()),
         }
-    perfect = (result["samples_different"] == 0 and apos == 0 and result["take_frames_missing_at_end_in_b"] == 0
-               and da["misaligned_frames"] == 0 and da["runs"] == 1)
+    take_exact = isinstance(result.get("take_vs_source"), dict) and result["take_vs_source"]["samples_different"] == 0
+    perfect = (take_exact and result["samples_different"] == 0 and apos == 0
+               and result["take_frames_missing_at_end_in_b"] == 0 and da["runs"] == 1)
     result["verdict"] = "BIT-PERFECT" if perfect else "DIFFERENT"
     return result, perfect
 
@@ -298,7 +377,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--pia", default="192.0.2.69", help="Pi-A address (pi9696 WebUI)")
     p.add_argument("--pia-ssh", default=None, help="ssh target for Pi-A (default root@<pia>)")
-    p.add_argument("--pia-name", default="PI9696", help="Pi-A's inferno device name")
+    p.add_argument("--pia-name", default="PI9696", help="Pi-A's inferno device name (as the WebUI shows it)")
     p.add_argument("--plugin", required=True, help="inferno ALSA plugin (.so) for Pi-B's instances")
     p.add_argument("--secs", type=int, default=20, help="take length")
     p.add_argument("--work", default="/var/tmp/pi9696-e2e")
@@ -325,14 +404,14 @@ def main():
     if subscriptions_on(a.pia_name):
         fail_setup(f"{a.pia_name} already has subscriptions; refusing to change them")
 
-    sig = f"{a.work}/timecode.raw"
+    sig = f"{a.work}/signal.raw"
     # long enough to outlast discovery and routing; stopped explicitly
-    log(f"generating {ch}-ch timecode ({a.secs + 300} s)")
-    gen_timecode(sig, ch, a.secs + 300)
+    log(f"generating the {ch}-ch test signal ({a.secs + 300} s; audible tones, see signal())")
+    gen_signal(sig, ch, a.secs + 300)
 
     procs = []
     try:
-        # 1-2: Pi-B transmits the timecode, Pi-A records it
+        # 1-2: Pi-B transmits the test signal, Pi-A records it
         src = subprocess.Popen(["aplay", "-q", "-D", "inferno", "-f", "S32_LE", "-r", str(RATE), "-c", str(ch), sig],
                                env=inferno_env(asoundrc, "E2ESRC", ch, 0, {"INFERNO_TX_SOURCE_BIT_DEPTH": "24"}),
                                stdout=subprocess.DEVNULL, stderr=open(f"{a.work}/src.log", "w"))
@@ -396,7 +475,7 @@ def main():
         if a.stall_at is not None:
             result, perfect = coverage(load_wav24(local_take, ch), load_raw32(cap, ch), a.stall_ms / 1000)
         else:
-            result, perfect = compare(load_wav24(local_take, ch), load_raw32(cap, ch))
+            result, perfect = compare(load_wav24(local_take, ch), load_raw32(cap, ch), a.secs + 300)
         result["take"] = take
         print(json.dumps(result, indent=2))
         log("RESULT: " + result["verdict"])
@@ -406,7 +485,7 @@ def main():
             if pr.poll() is None:
                 pr.terminate()
         if not a.keep:
-            for f in ("timecode.raw",):
+            for f in ("signal.raw",):
                 try:
                     os.remove(f"{a.work}/{f}")
                 except OSError:
