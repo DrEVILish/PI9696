@@ -517,13 +517,15 @@ Nothing outstanding for `ftl-themes`.
   `inferno2pipe` from the same build receives correctly. Unresolved: all
   instances share 192.0.2.69, so the unicast endpoints the transmitter
   advertises cannot be resolved per receiver. Needs a second host to settle.
-- **No hardware inferno-network device on the LAN**, so the clock comes from the test stub rather
-  than Statime — see the clock section.
-- **Clock units on this unit:** `statime.service` reinstalled from the template
-  (it used to point at a missing debug binary) but **disabled**: this LAN has no
-  PTPv1 leader, so the boot clock stays the stub and **recording is refused**
-  until statime is enabled with a leader present (or the two-host PTPv2 recipe
-  is used). `/var/log/pi9696/` created and `pi9696.service` reinstalled from the
+- **Clock: the LAN's hardware interface leads.** An inferno-network USB
+  interface (AVIO, 2x2) on the LAN is the PTPv1 leader. Since 2026-10-05
+  `statime.service` is **enabled** with the deployed `deploy/statime.toml`
+  (PTPv1 slave, usrvclock export), so the unit follows it (offset a few µs)
+  and recording is allowed. The unit must follow the same leader as every
+  device it exchanges audio with: on a different clock (the two-host PTPv2
+  recipe while the interface leads PTPv1) received audio lands outside the
+  window the capture reads, and the meters and takes are silent.
+  `/var/log/pi9696/` created and `pi9696.service` reinstalled from the
   template (2026-10-01).
 - **Gaps in the input** show as capture overruns, logged by the app's capture
   loop at most every 10 s (`in-process inferno: N capture overrun(s)`, Error
