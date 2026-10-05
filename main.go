@@ -1202,6 +1202,7 @@ func main() {
 	var err error
 	openLogFileSink()
 	loadPersistedConfig()
+	startProfiler()
 
 	hwManager, err = hardware.NewHardwareManager()
 	if err != nil {

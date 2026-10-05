@@ -362,6 +362,8 @@ sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/statime.service \
 printf 'PI9696_REMOTE_PORT=80\n' > /opt/pi9696/.env   # optional; default 8080
 # optional: behind a reverse proxy, name it so login rate limiting is per client
 # printf 'PI9696_TRUSTED_PROXIES=<proxy-ip>\n' >> /opt/pi9696/.env
+# optional: Go pprof profiles of the running app (loopback only, no auth)
+# printf 'PI9696_PPROF=127.0.0.1:6060\n' >> /opt/pi9696/.env
 systemctl daemon-reload
 # exactly one clock: statime (network PTP leader present - required to record)
 # or the stub (no leader: monitor/playback only). They conflict.
