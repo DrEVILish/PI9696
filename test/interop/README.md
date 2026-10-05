@@ -15,21 +15,22 @@ anything on the test unit: the analysis runs on the second host.
 | `channel_list_check.sh` | second host | Channel-list round trip: one RX (`inferno2pipe`) or TX (ALSA plugin) device per count from a given inferno tree, `netaudio channel list`, check every channel 1..N came back (U13) |
 | `arc_page_check.py` | second host | Feeds every RX/TX channel-list page in a pcap to netaudio's own page parser and prints which pages it accepts or rejects (U13) |
 | `e2e_bitperfect.py` | second host | Two-Pi bit-perfect test: the second host transmits a sample-accurate timecode (24-bit counter per channel), pi9696 records a take through the WebUI, plays it back, the second host records the playback, and the two recordings are aligned on the timecode and compared bit for bit. Exit 0 only if every frame of the take reaches the second host unchanged |
+| `music_score.py` | dev server (numpy/scipy) | Real-music check: scores a pi9696 take of the LAN's playlist source (an inferno-network USB interface fed by a computer) against the source FLACs. Per 1 s block: track and offset by cross-correlation, gain fit, in-band match % (target > 99%), clicks (impulses absent from the source) and dropouts. Not bit-exact: the computer resamples 44.1 kHz to 48 kHz |
 
 ## Setup that matters
 
 1. **One shared clock.** The clock stub (`fake_usrvclock_server`) publishes each
    host's own `CLOCK_MONOTONIC_RAW` (uptime), so two hosts on stubs are days
-   apart. Use statime on both: the second host as PTPv2 master
-   (`priority1` below the unit's 251, `usrvclock-export = false`, plus the stock
-   stub for its own inferno), pi9696 as slave with export on. Statime has no
-   PTPv1 master, so PTPv2 is the only option without hardware on the LAN.
-2. **Keep the stub out of the way on the unit.** `pi9696.service` has
-   `Wants=pi9696-clock`, and `systemctl mask --runtime` does not override a unit
-   file in `/etc/systemd/system`, so any `start`/`restart` of the app brings
-   the stub back and it takes over `/tmp/ptp-usrvclock`. Stop `pi9696-clock`
-   and run the app outside `pi9696.service` for the duration, then check
-   `ss -xp | grep ptp-usrvclock` shows only statime.
+   apart. The LAN now has a hardware PTPv1 leader (the USB interface): run
+   statime as a PTPv1 slave with export on (`deploy/statime.toml`) on **both**
+   hosts, so they also share the interface's clock. Without a hardware leader,
+   the second host can be a PTPv2 master instead (`priority1` below the
+   unit's 251, `usrvclock-export = false`, plus the stock stub for its own
+   inferno), but then neither host can exchange audio with the interface.
+2. **Keep the stub out of the way on the unit.** `pi9696.service` only orders
+   after `pi9696-clock` (no `Wants=`), and the stub `Conflicts=statime`, so
+   with `statime.service` enabled a restart of the app leaves statime in
+   charge. Check `ss -xp | grep ptp-usrvclock` shows only statime.
 3. **Instance ports.** Every extra inferno instance on a host needs its own
    `INFERNO_PROCESS_ID` + `INFERNO_ALT_PORT` block (probe 4/10400, aplay test
    6/10600, `ITEST-RX` 5/10500 were used here).
@@ -37,8 +38,8 @@ anything on the test unit: the analysis runs on the second host.
    is already 24-bit (expect ~25% of samples at ±1 LSB otherwise). Since the
    fork includes upstream's configurable dither (`ef39a28`), set
    `INFERNO_TX_SOURCE_BIT_DEPTH=24` on a 24-bit-exact source; the old
-   test-only patch is no longer needed. pi9696's own transmitter does not set
-   it yet, so its playback is dithered (`e2e_bitperfect.py` would report it).
+   test-only patch is no longer needed. pi9696's own transmitter sets it
+   (takes are 24-bit), so its playback is undithered.
 
 ## Known limits of `compare.py`
 
