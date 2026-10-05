@@ -3662,7 +3662,7 @@ func startPlayback() {
 		logWarnf("startPlayback refused: transport busy")
 		return
 	}
-	file := latestRecording()
+	file := playbackSourceLocked()
 	if file == "" {
 		logWarnf("No recordings to play")
 		return

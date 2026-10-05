@@ -3861,14 +3861,18 @@ func panelWSMessages() (config, recs string, configChanged, recsChanged bool) {
 	// data source (and shares its documented blind spot: in-place content
 	// edits without mtime change). An active take grows its file, which
 	// bumps the day-dir mtime, so live durations keep flowing.
-	if recKey, ok := recordingFilesKey(); ok && recKey == lastPanelRecsKey && lastPanelRecsKey != "" {
+	// The playback selection is part of the key: it marks a row.
+	mutex.Lock()
+	sel := selectedPlayback
+	mutex.Unlock()
+	if recKey, ok := recordingFilesKey(); ok && recKey+"|"+sel == lastPanelRecsKey && lastPanelRecsKey != "" {
 		return config, lastPanelRecs, configChanged, false
 	}
 	if r, err := renderRecordingsHTMLLimit(latestRecsPushCap); err == nil {
 		recs, recsChanged = r, r != lastPanelRecs
 		lastPanelRecs = r
 		if key, ok := recordingFilesKey(); ok {
-			lastPanelRecsKey = key
+			lastPanelRecsKey = key + "|" + sel
 		}
 	}
 	return config, recs, configChanged, recsChanged
@@ -4134,11 +4138,12 @@ func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
 var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <div class="recordings-wrap scroll">
 <table class="table is-sticky">
-<thead><tr><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
+<thead><tr><th></th><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
 <tbody>
-{{if not .Rows}}<tr><td colspan="7"><div class="empty-state"><span class="empty-state-icon">&#8709;</span><span class="empty-state-title">None yet.</span><span class="empty-state-hint">Takes appear here as they finalize.</span></div></td></tr>{{else}}
-{{range .Rows}}<tr>
-<td>{{.Name}}</td>
+{{if not .Rows}}<tr><td colspan="8"><div class="empty-state"><span class="empty-state-icon">&#8709;</span><span class="empty-state-title">None yet.</span><span class="empty-state-hint">Takes appear here as they finalize.</span></div></td></tr>{{else}}
+{{range .Rows}}<tr{{if .Selected}} class="is-selected" aria-selected="true"{{end}}>
+<td class="recs-play"><form hx-post="/api/playback/select" hx-target="#recordings" hx-swap="innerHTML"><input type="hidden" name="file" value="{{.RelPath}}"><button class="btn btn-sm btn-secondary" type="submit" name="play" value="1" title="Play this take" aria-label="Play {{.Name}}"><svg class="icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-play"/></svg></button></form></td>
+<td>{{.Name}}{{if .Selected}} <span class="badge">selected</span>{{end}}</td>
 <td>{{.Channels}}</td>
 <td>{{.Format}} {{.SampleRate}}kHz</td>
 <td>{{.StartStr}}</td>
@@ -4163,6 +4168,7 @@ type recordingsView struct {
 type recordingRow struct {
 	Name        string
 	RelPath     string
+	Selected    bool // the take Play starts (see playselect.go)
 	Channels    int
 	Format      string
 	SampleRate  int
@@ -4343,8 +4349,13 @@ func renderRecordingsHTMLLimit(limit int) (string, error) {
 		files = files[len(files)-limit:]
 		view.Capped = true
 	}
+	mutex.Lock()
+	sel := selectedPlayback
+	mutex.Unlock()
 	for _, f := range files {
-		view.Rows = append(view.Rows, buildRecordingRow(f))
+		row := buildRecordingRow(f)
+		row.Selected = f == sel
+		view.Rows = append(view.Rows, row)
 	}
 	var buf bytes.Buffer
 	if err := recordingsTmpl.Execute(&buf, view); err != nil {
@@ -4580,6 +4591,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/monitor/start", requireAuth(handleAPIMonitorStart))
 	mux.HandleFunc("POST /api/monitor/stop", requireAuth(handleAPIMonitorStop))
 	mux.HandleFunc("GET /api/recordings", requireAuth(handleAPIRecordings))
+	mux.HandleFunc("POST /api/playback/select", requireAuth(handleAPIPlaybackSelect))
 	mux.HandleFunc("GET /download-all", requireAuth(handleDownloadAll))
 	mux.HandleFunc("GET /download/{filepath...}", requireAuth(handleDownload))
 
