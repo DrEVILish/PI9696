@@ -323,12 +323,19 @@ func (d *TTFDisplay) noteDraw(op byte, text string, args ...int) {
 // per-pixel color path, which dominated idle CPU.
 func (d *TTFDisplay) fillCanvas(r image.Rectangle, v byte) {
 	r = r.Intersect(d.canvas.Rect)
-	for y := r.Min.Y; y < r.Max.Y; y++ {
-		off := d.canvas.PixOffset(r.Min.X, y)
-		row := d.canvas.Pix[off : off+r.Dx()]
-		for i := range row {
-			row[i] = v
-		}
+	if r.Empty() {
+		return
+	}
+	// Fill the first row (by doubling copies), then copy it down.
+	off := d.canvas.PixOffset(r.Min.X, r.Min.Y)
+	first := d.canvas.Pix[off : off+r.Dx()]
+	first[0] = v
+	for n := 1; n < len(first); n *= 2 {
+		copy(first[n:], first[:n])
+	}
+	for y := r.Min.Y + 1; y < r.Max.Y; y++ {
+		off += d.canvas.Stride
+		copy(d.canvas.Pix[off:off+len(first)], first)
 	}
 }
 
