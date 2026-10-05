@@ -5983,9 +5983,10 @@ func TestUnifiedInfernoEnvDefaultsPluginLogLevel(t *testing.T) {
 
 // fakeFfmpegArgsScript records its argv (one per line) to $FAKE_FFMPEG_ARGS
 // and then behaves like fakeChildScript, so a test can assert on the exact
-// command a take was started with.
+// command a take was started with. The list is written to a temp file and
+// renamed into place, so a polling test never reads it half-written.
 const fakeFfmpegArgsScript = `#!/bin/sh
-printf '%s\n' "$@" > "$FAKE_FFMPEG_ARGS"
+printf '%s\n' "$@" > "$FAKE_FFMPEG_ARGS.tmp" && mv "$FAKE_FFMPEG_ARGS.tmp" "$FAKE_FFMPEG_ARGS"
 trap 'kill $! 2>/dev/null; exit 0' TERM
 sleep 300 >/dev/null 2>&1 &
 wait $!
