@@ -1,7 +1,7 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `382dc90` on the `DrEVILish/inferno` fork's `dev`)
+AoIP stack, pinned at `3881fff` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
@@ -31,6 +31,7 @@ and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
 | U16 | ALSA plugin | A panic in any plugin callback aborts the host process; one is reachable by querying the PCM before prepare (teodly/inferno#8) | the app hosts the plugin in-process (`PI9696_INPROC_RX`), so a plugin panic kills the recorder | **fixed in the fork** (`20d639a`, `2af5592`) |
 | U17 | inferno RX | Stale audio after an RX channel is disconnected: clicks from the previous ring cycle, and sometimes one channel replaying its last 0.34 s until the stream stops (teodly/inferno#41) | old audio lands in a take after a source is unrouted | **fixed in the fork** (`d6f04ab`, `66d67fa`, `d2c936f`; test `b837e3d`) |
 | U18 | inferno TX | A transmitter restart (the ALSA plugin's underrun recovery) dropped every TX flow | each underrun cut every receiver off for ~5-6 s until it re-requested | **fixed in the fork** (`382dc90`) |
+| U19 | inferno RX/TX | The realtime loops woke the ALSA application on every packet | thousands of needless wakeups a second; the largest CPU cost of an idle recorder with live flows | **fixed in the fork** (`3881fff`) |
 
 ---
 
@@ -397,4 +398,19 @@ The underruns themselves came from pi9696 (fixed there: idle feeder, TryLock
 pump, gapless hand-over) and the dither from not setting
 `TX_SOURCE_BIT_DEPTH` (U3). With all fixes the test is bit-perfect: every
 one of 32,768,000 samples (32 ch x 21.3 s) identical at the second Pi.
+
+## U19 — The realtime loops woke the application on every packet
+
+**Found** profiling the idle recorder (subscribed both ways to a 2-channel
+interface, no take running): ~20k `ppoll`/eventfd `read`/`write` syscalls
+per 5 s. The RX and TX loops called the `TransferNotifier` callback on every
+iteration. The plugin's callback writes its poll eventfd, so each packet woke
+the app's blocked `snd_pcm_readi`/`writei`. The app found less than a period
+available and went back to sleep: ~2300 RX and ~1300 TX wakeups a second.
+
+**Fixed** by `3881fff`: `NotifyThrottle` spaces notifications at least a
+quarter of the ALSA period apart. The TX branch that precedes a long wait
+still always notifies. Result: the eventfd syscalls drop out of the profile
+and the process falls from 31% to 24% of one core. The remainder is real
+packet I/O for the live flows (and the OLED render, fixed in pi9696).
 

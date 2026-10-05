@@ -196,11 +196,11 @@ Full install record, including the clock service and the kernel limits, is in
 # 1. SPI must be enabled or the app exits at startup (display init opens SPI)
 sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' /boot/firmware/config.txt && sudo reboot
 
-# 2. Inferno (pinned to fork dev 382dc90; note the submodules, and that the binary the app
+# 2. Inferno (pinned to fork dev 3881fff; note the submodules, and that the binary the app
 #    runs is target/release/inferno2pipe, not "inferno")
 sudo apt install -y build-essential pkg-config libasound2-dev libudev-dev
 git clone https://github.com/DrEVILish/inferno inferno
-cd inferno && git checkout 382dc90 && git submodule update --init --recursive
+cd inferno && git checkout 3881fff && git submodule update --init --recursive
 cargo build --release && cd ..
 
 # 3. A clock source must be exporting the usrvclock overlay, or Inferno starts
@@ -305,7 +305,7 @@ Design debt worth flagging here:
 8. **Sim config path** — `PI9696_SIM=1` writes to `/tmp/pi9696-config.json`; real Pi writes to `/etc/pi9696/config.json`. Resolved once in `init()`: set `PI9696_CONFIG` before startup to override (tests reassign `ConfigPath` directly).
 9. **FIFO buffer needs `CAP_SYS_RESOURCE`** — the 4 MB raw FIFO needs the capability to grow; a `CapabilityBoundingSet` on the unit silently costs it, and the recorder keeps working at the 64 KB default. See DEPLOYMENT.md.
 10. **Stuck takes are always stoppable** — `stopRecording`/`stopMonitor` escalate from SIGTERM to SIGKILL after 10 s (`ffmpegStopGrace`): an ffmpeg blocked reading an empty FIFO never acts on SIGTERM, which used to wedge the transport. The grace is long enough for ffmpeg to finalize a partial WAV on slow storage.
-11. **Above 16 channels relies on the U13 fix** — stock inferno pages its receive-channel list 32 at a time and pads short pages, so netaudio cannot read or subscribe a receiver beyond 16 channels (INFERNO-UPSTREAM.md U13). The fix is on the fork's `dev` (`dbd9570`, in the pinned `382dc90`); a build without it shows PI9696 as TX 0 / RX 0 in netaudio, which is what happened between the #49 deploy and 2026-10-04 (the fix had only been a patch file).
+11. **Above 16 channels relies on the U13 fix** — stock inferno pages its receive-channel list 32 at a time and pads short pages, so netaudio cannot read or subscribe a receiver beyond 16 channels (INFERNO-UPSTREAM.md U13). The fix is on the fork's `dev` (`dbd9570`, in the pinned `3881fff`); a build without it shows PI9696 as TX 0 / RX 0 in netaudio, which is what happened between the #49 deploy and 2026-10-04 (the fix had only been a patch file).
 
 ---
 
