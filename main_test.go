@@ -5960,6 +5960,22 @@ func TestUnifiedInfernoEnv(t *testing.T) {
 	}
 }
 
+// The plugin logs at debug unless told otherwise; the app defaults it to
+// info, but never overrides a RUST_LOG the service environment sets.
+func TestUnifiedInfernoEnvDefaultsPluginLogLevel(t *testing.T) {
+	saveTxGlobals(t)
+	t.Setenv("RUST_LOG", "")
+	applyUnifiedInfernoEnv("PI9696", 48000, 2)
+	if got := os.Getenv("RUST_LOG"); got != "info" {
+		t.Errorf("RUST_LOG = %q, want the info default", got)
+	}
+	t.Setenv("RUST_LOG", "warn,inferno_aoip=debug")
+	applyUnifiedInfernoEnv("PI9696", 48000, 2)
+	if got := os.Getenv("RUST_LOG"); got != "warn,inferno_aoip=debug" {
+		t.Errorf("RUST_LOG = %q, an explicit setting was overridden", got)
+	}
+}
+
 // fakeFfmpegArgsScript records its argv (one per line) to $FAKE_FFMPEG_ARGS
 // and then behaves like fakeChildScript, so a test can assert on the exact
 // command a take was started with.

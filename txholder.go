@@ -69,6 +69,9 @@ var (
 	inProcRxGen    uint64        // generation tag, bumped per (re)start
 )
 
+// infernoDefaultLog is the plugin's log filter unless RUST_LOG is set.
+const infernoDefaultLog = "info"
+
 // applyUnifiedInfernoEnv sets the plugin config for the paired instance:
 // equal RX and TX channels, the unit's own name and the default UDP ports.
 // The deployed /etc/asound.conf is deliberately minimal (no @args: ALSA
@@ -80,6 +83,12 @@ func applyUnifiedInfernoEnv(name string, rate, channels int) {
 	os.Setenv("INFERNO_TX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_RX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_TX_SOURCE_BIT_DEPTH", txSourceBitDepth)
+	// The plugin's logger defaults to debug, which floods the journal (it
+	// once rotated the WebUI access code away). It reads RUST_LOG once, at
+	// the first open; an explicit setting in the service env still wins.
+	if os.Getenv("RUST_LOG") == "" {
+		os.Setenv("RUST_LOG", infernoDefaultLog)
+	}
 	// Never inherit a port block or process id from the service environment:
 	// the unit's one instance owns the default ports.
 	os.Unsetenv("INFERNO_ALT_PORT")
