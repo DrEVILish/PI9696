@@ -133,12 +133,15 @@ Playback path:
 
 ### WebUI Dashboard
 
-- Live OLED mirror (PNG)
-- On-screen encoder/buttons driving same handlers as hardware
+- Layout (owner, 2026-10-05), top to bottom:
+  - **Header**: logo, live OLED mirror (PNG), on-screen encoder, and the transport keys. These drive the same handlers as the hardware and light like the panel lamps: REC red only while recording, PLAY green only while playing, flashing while paused.
+  - **Level meters**: a full-width band the height of the header. Per-channel VU meters arrive over a 100 ms WebSocket push. A large toggle collapses the band to its bar.
+  - **Transport Status**: the reel-to-reel deck (its record lamp is the larger SYS lamp), the transport state line, then the Status table: rate, channels, format, tag, Inferno, Inferno TX, clock, network, uptime, version. There is no Stop button, Peak/RMS or temperature here: the deck keys, meters and System graphs cover those.
+  - **Recordings**, beside Transport Status: one line per take, a play button per row (see Playback), downloads that save to disk.
+  - **Footer**: disk space and record time left, plus a System button. It pops up a full-width System pane with the CPU, app CPU by subsystem, RAM, temperature and disk graphs in a wrapping grid.
 - Settings modal (all persisted settings)
-- Per-channel VU meters over 100 ms WebSocket push
 - INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
-- Status panel shows the clock state (`Synced (PTP slave, 8µs)` / `Locking` / `Not synced (…)`) and the TX state in inferno terms (`Inferno TX ready (PI9696)`)
+- The Status table shows the clock state (`Synced (PTP slave, 8µs)` / `Locking` / `Not synced (…)`) and the TX state in inferno terms (`ready` / `no clock` / `off`)
 - Sample rate must be visible to an inferno controller (netaudio) for both TX and RX (owner requirement). inferno now answers the rate probe (INFERNO-UPSTREAM.md U2, in the pinned fork commit: `netaudio device show` reports it); RX+TX as one instance (U8): the app always runs exactly one inferno instance, in-process, with equal RX and TX
 - Theming: ftl-themes bundles (34 themes, `third_party/ftl-themes` submodule @ `b417e94`, v4.1.0 + unreleased — always track latest upstream; `html[data-theme]` slugs unchanged) —
   one linked stylesheet + `html[data-theme]`; the `third_party/ftl-themes/CONTRACT.md`
@@ -285,7 +288,7 @@ test/gotest.sh       # vet + the full suite under -race (the standard check)
 |---------|-------|
 | Display blank | SPI enabled? Wiring per WIRING.md? Running as root? |
 | `[INF]` never lights | Ethernet up? `ip addr show eth0`? Inferno binary built? |
-| Recording fails | `NO CLOCK SYNC`? statime running and locked (`systemctl status statime`, Status panel Clock row)? Low disk (<30 min)? Already recording? OLED flashes the reason |
+| Recording fails | `NO CLOCK SYNC`? statime running and locked (`systemctl status statime`, Status table Clock row)? Low disk (<30 min)? Already recording? OLED flashes the reason |
 | Gaps in a take | `journalctl -u pi9696 \| grep 'capture overrun'` - the in-process capture loop logs overruns (gaps in the input) |
 | WebUI unreachable | Any interface with IP? `ss -tlnp \| grep ${PI9696_REMOTE_PORT:-8080}` |
 | USB not detected | `mount -t tmpfs none /media/usb` for testing; real USB: `lsblk` |

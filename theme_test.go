@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The adoption promise: with no theme selected the dashboard is unchanged.
@@ -262,7 +263,7 @@ func TestDashboardCarriesAppShell(t *testing.T) {
 		`class="deck app-bar"`,
 		`<aside class="app-rail" aria-hidden="true"></aside>`,
 		`<main class="app-main">`,
-		`class="meter-footer app-status"`,
+		`class="app-footer app-status"`,
 		`main.app-main{display:contents}`,
 		`.app-rail:empty{display:none}`,
 	} {
@@ -312,9 +313,10 @@ func TestLayoutBridgeKeepsBuiltInGeometry(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 	body := rr.Body.String()
 	// Layout bridge: identical-fallback vars themes may turn. Unthemed,
-	// every fallback is the long-standing geometry.
+	// every fallback is the built-in geometry (two columns since the owner
+	// layout of 2026-10-05: Transport Status beside Recordings).
 	for _, want := range []string{
-		`grid-template-columns:var(--pi-columns,1fr 1.6fr 1fr)`,
+		`grid-template-columns:var(--pi-columns,minmax(0,1fr) minmax(0,1.5fr))`,
 		`gap:var(--pi-gap,1.2em)`,
 		`flex-direction:var(--pi-deck-dir,row)`,
 	} {
@@ -363,7 +365,7 @@ func TestDualClassMarkupPresent(t *testing.T) {
 	for _, want := range []string{
 		`class="field-row"`,
 		`class="switch"`,
-		`class="panel left panel"`,
+		`class="panel center panel"`,
 		`class="icon-btn btn btn-icon"`,
 		`'transport-row transport'`,
 		`is-pause`,
@@ -742,6 +744,66 @@ func TestDashboardTransportLampsFollowState(t *testing.T) {
 	for _, stale := range []string{`.transport-row .record{border-color:var(--danger)`, `.transport-row .play{border-color:var(--success)`} {
 		if strings.Contains(body, stale) {
 			t.Errorf("dashboard still lights a key at rest: %q", stale)
+		}
+	}
+}
+
+// Owner layout (2026-10-05): header, then a full-width level-meter band,
+// then Transport Status (reel, state line, then the former Status table)
+// beside Recordings; System is a pop-up pane over a footer that carries
+// disk space and record time. Transport Status lost its Stop button, TX
+// line, Peak/RMS and temperature.
+func TestDashboardOwnerLayout(t *testing.T) {
+	mux := newRemoteMux()
+	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
+	order := []string{`<header class="deck`, `<main class="app-main">`, `id="meterFooter"`, `<div class="panel center panel">`, `class="r2r"`, `<div id="status">`, `<div id="config" class="deck-status"`, `class="panel recordings-section"`, `</main>`, `id="sysPane"`, `id="appFooter"`}
+	last := -1
+	for _, w := range order {
+		i := strings.Index(body, w)
+		if i < 0 {
+			t.Fatalf("dashboard lacks %q", w)
+		}
+		if i < last {
+			t.Errorf("%q is out of order", w)
+		}
+		last = i
+	}
+	for _, gone := range []string{`class="panel left panel"`, `class="panel right panel"`, `<h2>Status</h2>`, `data-record-stop`, `sys-readout`} {
+		if strings.Contains(body, gone) {
+			t.Errorf("dashboard still has %q", gone)
+		}
+	}
+	for _, want := range []string{`id="meterToggle"`, `.meter-caret{--icon-size:1.6em;width:2.9em;height:2.9em`, `id="sysToggle"`, `class="sys-graph"`, `repeat(auto-fill,minmax(`, `var TELE_H = 112, TELE_H_SMALL = 70;`, `id="sysLamp" cx="54" cy="255" r="5"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard lacks %q", want)
+		}
+	}
+
+	var buf strings.Builder
+	statusTmpl.Execute(&buf, statusView{Recording: true, Elapsed: "00:00:05", Meter: "Peak: -6.0dB  RMS: -18.3dB", Uptime: "1h", CPUTemp: 50, DiskTotal: 62, DiskFree: 34, RecordTime: "32:21:21"})
+	st := buf.String()
+	for _, gone := range []string{"Peak:", "Temp", "Uptime", "<button"} {
+		if strings.Contains(st, gone) {
+			t.Errorf("Transport Status line still shows %q: %s", gone, st)
+		}
+	}
+	if !strings.Contains(st, `id="diskInfo"`) || !strings.Contains(st, `hx-swap-oob="true"`) || !strings.Contains(st, "32:21:21") {
+		t.Errorf("status push does not refresh the footer's disk line: %s", st)
+	}
+	buf.Reset()
+	configTmpl.Execute(&buf, configView{Uptime: "3h 12m", Version: "1.20.0"})
+	if !strings.Contains(buf.String(), "<td>Uptime</td><td>3h 12m</td>") {
+		t.Errorf("Status table lacks uptime: %s", buf.String())
+	}
+}
+
+func TestFormatUptime(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		30 * time.Second: "0m", 7 * time.Minute: "7m", 3*time.Hour + 12*time.Minute: "3h 12m",
+		50*time.Hour + 5*time.Minute: "2d 2h 5m",
+	} {
+		if got := formatUptime(d); got != want {
+			t.Errorf("formatUptime(%v) = %q, want %q", d, got, want)
 		}
 	}
 }

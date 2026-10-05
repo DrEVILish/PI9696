@@ -2066,7 +2066,7 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
    is deliberately gone. See TestDefaultThemeIsFTL. */
 :root{--meter-h:120px;--meter-low:var(--success,#0aff9d);--meter-mid:var(--warning,#ffe400);--meter-high:var(--danger,#ff2a2a)}
 *{box-sizing:border-box}
-body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--surface,#0a1a2e),var(--bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 260px}
+body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--surface,#0a1a2e),var(--bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 4em}
 h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 var(--space-s,0.8em)}
 a{color:var(--accent)}
 input{font-family:inherit;background:var(--input-bg,#08192b);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
@@ -2150,7 +2150,8 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 .dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--accent);background:var(--surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em;--icon-size:1em}
 .dl-all:hover{border-color:var(--accent)}
 
-.grid{display:grid;grid-template-columns:var(--pi-columns,1fr 1.6fr 1fr);gap:var(--pi-gap,1.2em)}
+.grid{display:grid;grid-template-columns:var(--pi-columns,minmax(0,1fr) minmax(0,1.5fr));gap:var(--pi-gap,1.2em)}
+.grid>*{min-width:0}
 /* Layout bridge (companion to the :root color bridge above): the structural
    knobs a layout theme may turn, with the built-in geometry as fallback.
    Themes set --pi-* under their own scope to reflow the page (e.g. a wall
@@ -2166,11 +2167,16 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 main.app-main{display:contents}
 .app-rail:empty{display:none}
 
-.recordings-section{padding:0 1.2em 1.2em}
-.recordings-section h2{margin:var(--space-l,1.2em) 0 var(--space-xs,0.6em);font-size:1.1em;letter-spacing:0.05em}
+.recordings-section h2{font-size:1.1em;letter-spacing:0.05em}
+/* The former Status panel, under the reel-to-reel (owner layout). */
+.deck-status{margin-top:0.6em}
+.deck-status table{width:100%}
 /* The table is the shared .table.is-sticky (sticky head + themed rows);
    only the download cell's right alignment stays app-owned. */
 .recs-dl{text-align:right}
+/* One line per take: the table scrolls sideways in its own wrapper rather
+   than wrapping dates onto three lines or widening the page. */
+.recordings-wrap .table td,.recordings-wrap .table th{white-space:nowrap}
 .recs-note{font-size:0.75em;color:var(--muted);margin:0.6em 0 0}
 
 /* Scrollable table wrapper for narrow viewports */
@@ -2181,8 +2187,8 @@ main.app-main{display:contents}
   .grid{flex:1;min-height:0;align-self:stretch}
   .panel{display:flex;flex-direction:column;min-height:0;overflow:hidden}
   .panel h2{flex:none}
-  .recordings-section{flex:0 0 auto}
-  #recordings{overflow-y:auto;max-height:30vh}
+  #recordings{overflow-y:auto;flex:1;min-height:0}
+  .panel.center{overflow-y:auto}
 }
 
 /* Modals: the settings sheet and the stop-recording confirmation. The box,
@@ -2320,7 +2326,7 @@ main.app-main{display:contents}
 .r2r .hud-band{fill:none;stroke:var(--border);stroke-width:1}
 .r2r .hud-lamp{fill:#11304a}
 .r2r .hud-lamp.on{fill:var(--success);filter:drop-shadow(0 0 3px var(--success))}
-.r2r .hud-lamp.rec{fill:var(--danger);filter:drop-shadow(0 0 3px var(--danger))}
+.r2r .hud-lamp.rec{fill:var(--danger);filter:drop-shadow(0 0 6px var(--danger))}
 .r2r #linkLamp{fill:#15324a}
 .r2r #linkLamp.on{fill:rgba(0,217,255,0.9);filter:drop-shadow(0 0 3px rgba(0,217,255,0.8))}
 .r2r .hud-text{fill:var(--muted);font-size:9px;letter-spacing:0.22em;font-family:"Consolas",monospace}
@@ -2337,13 +2343,31 @@ main.app-main{display:contents}
 /* Pinned meter footer: always visible at the bottom of the viewport so the
    VU levels stay on screen while you operate the transport, with a slim
    header bar that collapses/expands the meter bank on demand. */
-.meter-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);backdrop-filter:blur(2px)}
-.meter-bar{display:flex;align-items:center;gap:var(--space-m,1em);padding:0.3em 1.2em;border-bottom:1px solid var(--border)}
+/* Level meters: a full-width band right under the header, as tall as the
+   header (--deck-h is measured from it, see the script), collapsible to
+   its bar with a large toggle. Owner layout 2026-10-05. */
+.meter-band{display:flex;align-items:stretch;gap:var(--space-m,1em);height:var(--deck-h,150px);margin:0 0 1.2em;background:rgba(3,8,15,0.6);border:1px solid var(--border);border-radius:10px;padding:0.4em 1em;box-sizing:border-box;--meter-h:calc(var(--deck-h,150px) - 3.4em)}
+.meter-bar{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0.5em;flex:none;min-width:7.5em}
 .meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--muted);text-transform:uppercase}
 .meter-badge{font-size:0.62em;letter-spacing:0.12em;color:var(--accent);border:1px solid var(--border);border-radius:10px;padding:0.05em 0.6em}
-.meter-caret{width:1.9em;height:1.9em;border-radius:50%;margin-left:auto}
-.meter-body{padding:var(--space-s,0.7em) var(--space-m,1em);transition:max-height 0.25s ease,opacity 0.25s ease,padding 0.25s ease;max-height:220px;overflow:hidden}
-.meter-footer.collapsed .meter-body{max-height:0;padding-top:0;padding-bottom:0;opacity:0}
+.meter-caret{--icon-size:1.6em;width:2.9em;height:2.9em;border-radius:50%}
+.meter-body{flex:1;min-width:0;display:flex;align-items:center;overflow:hidden;transition:opacity 0.25s ease}
+.meter-body{justify-content:center}
+.meter-body .meter-bridge{flex:0 1 auto;min-width:0;max-width:100%}
+.meter-band.collapsed{height:auto}
+.meter-band.collapsed .meter-bar{flex-direction:row;align-items:center}
+.meter-band.collapsed .meter-body{display:none}
+/* Footer: disk space and record time, plus the System pane toggle. */
+.app-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;display:flex;align-items:center;gap:var(--space-m,1em);padding:0.45em 1.5em;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);font-size:0.85em;color:var(--muted)}
+.footer-disk b{color:var(--text);font-weight:normal}
+.sys-toggle{margin-left:auto;display:inline-flex;align-items:center;gap:0.5em;--icon-size:1.3em;padding:0.35em 1em;font-size:0.95em}
+.sys-toggle svg{transform:rotate(180deg);transition:transform 0.2s ease}
+.sys-toggle[aria-expanded="true"] svg{transform:none}
+/* System: a full-width pane that pops up above the footer; graphs flow
+   in a grid that wraps onto more rows rather than cramping. */
+.sys-pane{position:fixed;left:0;right:0;bottom:var(--footer-h,2.6em);z-index:149;max-height:72vh;overflow-y:auto;padding:0.6em 1.5em 1em;background:rgba(3,8,15,0.96);border-top:1px solid var(--border);box-shadow:0 -10px 40px rgba(0,180,255,0.14)}
+.sys-pane[hidden]{display:none}
+.sys-pane h2{margin:0.2em 0 0.4em;font-size:0.8em;letter-spacing:0.25em;text-transform:uppercase;color:var(--muted)}
 /* The meter bank itself - a shared dB-FS scale (standard audio-meter log
    taper, see VU_CURVE/vuPct in the script) beside one meter per channel. */
 .meter-bridge{display:flex;align-items:stretch;justify-content:center;gap:var(--space-s,0.8em);max-width:1300px;margin:0 auto;background:#050c16;border:1px solid var(--border);border-radius:10px;padding:var(--space-s,0.7em) var(--space-m,1em);box-shadow:inset 0 0 24px rgba(0,180,255,0.06)}
@@ -2365,10 +2389,9 @@ main.app-main{display:contents}
 .ch-label{font-size:0.6em;color:var(--muted);letter-spacing:0.04em}
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
-.sys-readout{margin-top:.5em;font-size:.72em;color:var(--muted)}
-.sys-readout p{margin:.25em 0}
-.sys-graphs{margin-top:.6em}
-.sys-graphs h3{font-size:.68em;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin:.7em 0 .2em}
+.sys-graphs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr));gap:0.6em 1.4em}
+.sys-graph{min-width:0}
+.sys-graphs h3{font-size:.68em;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);margin:.4em 0 .2em}
 .sys-graphs .uplot{width:100%}
 .sys-graphs .u-legend{font-size:.68em;color:var(--muted);background:transparent;border:none;padding-left:0}
 .sys-graphs .u-legend th{font-weight:normal}
@@ -2385,7 +2408,7 @@ main.app-main{display:contents}
     single column. The OLED, encoder, and transport keep shrinking with the
     viewport so the single-row deck never overflows. */
 @media (max-width: 800px) {
-  body{padding:0 0.4em 200px}
+  body{padding:0 0.4em 4em}
   header.deck{flex-wrap:wrap}
   /* In-flow on narrow screens: the absolute corner position overlays the
      centered logo once the deck wraps. */
@@ -2400,10 +2423,9 @@ main.app-main{display:contents}
   .transport-deck{padding:0}
   .meter-title{font-size:0.6em}
   .meter-badge{display:none}
-  .meter-body{padding:0.6em 0.5em}
+  .meter-band{height:auto;flex-direction:column;--meter-h:110px}
+  .meter-bar{flex-direction:row;align-items:center}
 }
-
-body.meters-collapsed{padding-bottom:4em}
 
 @media (prefers-reduced-motion: reduce) {
   .r2r .reel-g.spinning .reel-spin,
@@ -2458,26 +2480,25 @@ html[data-theme] body{background:transparent}
 
 <aside class="app-rail" aria-hidden="true"></aside>
 
-<main class="app-main">
-<div class="grid">
 
-  <div class="panel left panel">
-    <h2>System</h2>
-    <div class="sys-graphs">
-      <h3>CPU %</h3>
-      <div id="cpuChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <h3 title="pi9696's own CPU, % of one core, by subsystem (thread names; see threadcpu.go)">App CPU by subsystem</h3>
-      <div id="subChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <h3>RAM MB</h3>
-      <div id="ramChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <h3>Temp &deg;C</h3>
-      <div id="tempChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <h3>Disk free GB</h3>
-      <div id="diskChart"><span class="sys-wait">collecting&hellip;</span></div>
-      <pre id="teleHist" hidden></pre>
+<main class="app-main">
+<section class="meter-band" id="meterFooter" aria-label="Level meters">
+  <div class="meter-bar">
+    <span class="meter-title">Level meters</span>
+    <span class="meter-badge" id="meterBadge">--</span>
+    <button class="icon-btn meter-caret" id="meterToggle" type="button" title="Collapse/expand meters" aria-label="Collapse or expand level meters" aria-controls="meterBody" aria-expanded="true">
+      <svg class="icon" id="meterCaretSvg" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
+    </button>
+  </div>
+  <div class="meter-body" id="meterBody">
+    <div class="meter-bridge">
+      <div class="db-scale" id="dbScale"></div>
+      <div class="ch-meters" id="chMeters"></div>
     </div>
   </div>
+</section>
 
+<div class="grid">
   <div class="panel center panel">
     <h2>Transport Status</h2>
     <div class="transport-deck">
@@ -2564,7 +2585,7 @@ html[data-theme] body{background:transparent}
 
         <g class="hud">
           <path class="hud-band" d="M40 249 H780"/>
-          <circle class="hud-lamp" id="sysLamp" cx="54" cy="255" r="2.5"/>
+          <circle class="hud-lamp" id="sysLamp" cx="54" cy="255" r="5"/>
           <text class="hud-text" x="66" y="258">SYS</text>
           <text class="hud-text" x="352" y="258">TRANSPORT</text>
           <text class="hud-text" x="620" y="258">INFERNO-LINK</text>
@@ -2579,35 +2600,34 @@ html[data-theme] body{background:transparent}
     </div>
     <div id="status">Loading...</div>
     <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#status" hx-swap="innerHTML" hidden></div>
+    <div id="config" class="deck-status" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
   </div>
 
-  <div class="panel right panel">
-    <h2>Status</h2>
-    <div id="config" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
-  </div>
 
-</div>
-
-<div class="recordings-section">
+<div class="panel recordings-section">
   <h2>Recordings <a class="dl-all" href="/download-all" title="Download every recording as one ZIP archive (with a manifest.txt listing each file)"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-download"/></svg> Download ALL (.zip)</a></h2>
   <div id="recordings" class="scroll" hx-get="/api/recordings" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
 </div>
+</div>
 </main>
 
-<footer class="meter-footer app-status" id="meterFooter">
-  <div class="meter-bar">
-    <span class="meter-title">Level meters</span>
-    <span class="meter-badge" id="meterBadge">--</span>
-    <button class="icon-btn meter-caret" id="meterToggle" type="button" title="Collapse/expand meters" aria-label="Collapse or expand level meters" aria-controls="meterBody" aria-expanded="true">
-      <svg class="icon" id="meterCaretSvg" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
-    </button>
-  </div>
-  <div class="meter-body" id="meterBody">
-    <div class="meter-bridge">
-      <div class="db-scale" id="dbScale"></div>
-      <div class="ch-meters" id="chMeters"></div>
+<section class="sys-pane" id="sysPane" aria-label="System" hidden>
+  <h2>System</h2>
+    <div class="sys-graphs">
+      <div class="sys-graph"><h3>CPU %</h3><div id="cpuChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <div class="sys-graph"><h3 title="pi9696's own CPU, % of one core, by subsystem (thread names; see threadcpu.go)">App CPU by subsystem</h3><div id="subChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <div class="sys-graph"><h3>RAM MB</h3><div id="ramChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <div class="sys-graph"><h3>Temp &deg;C</h3><div id="tempChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <div class="sys-graph"><h3>Disk free GB</h3><div id="diskChart"><span class="sys-wait">collecting&hellip;</span></div></div>
+      <pre id="teleHist" hidden></pre>
     </div>
-  </div>
+</section>
+
+<footer class="app-footer app-status" id="appFooter">
+  <span id="diskInfo" class="footer-disk">Disk /rec &hellip;</span>
+  <button class="sys-toggle btn btn-secondary" id="sysToggle" type="button" aria-controls="sysPane" aria-expanded="false" title="Show or hide the System graphs">
+    <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg><span>System</span>
+  </button>
 </footer>
 
 <div class="modal-backdrop modal-overlay" id="settingsModal">
@@ -2742,11 +2762,9 @@ document.body.addEventListener('htmx:after:swap', function(e) {
 });
 
 // Touch screens: stopping a take can be a fat-finger accident, so the STOP
-// transport and the status-panel Stop button first open a confirmation modal
-// instead of tearing the recording down immediately. Desktop (non-touch)
-// keeps the one-tap behaviour. The transport STOP is a plain button handled
-// here; the status-panel Stop (data-record-stop, an hx-post button) is only
-// intercepted on touch devices.
+// transport key first opens a confirmation modal instead of tearing the
+// recording down immediately. Desktop (non-touch) keeps the one-tap
+// behaviour. (The status panel's own Stop button is gone: owner layout.)
 var isTouch = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
 var stopModal = document.getElementById('stopModal');
 var stopPending = null;
@@ -2762,20 +2780,12 @@ document.getElementById('stopConfirm').addEventListener('click', function() {
 document.getElementById('stopCancel').addEventListener('click', function() { stopModal.classList.remove('open'); stopPending = null; });
 document.getElementById('stopModalClose').addEventListener('click', function() { stopModal.classList.remove('open'); stopPending = null; });
 stopModal.addEventListener('click', function(e) { if (e.target === stopModal) { stopModal.classList.remove('open'); stopPending = null; } });
-// Capture this before htmx sees the status-panel stop button. Otherwise its
-// hx-post listener can submit the stop request before the touch confirmation
-// handler at the document bubble phase gets a chance to cancel it.
 document.addEventListener('click', function(e) {
   var stopBtn = e.target.closest ? e.target.closest('[data-stop]') : null;
-  var recStopBtn = e.target.closest ? e.target.closest('[data-record-stop]') : null;
   if (stopBtn) {
     e.preventDefault();
     e.stopPropagation();
     confirmStop(function(){ fetch('/api/input/button/stop', { method: 'POST' }); });
-  } else if (recStopBtn && isTouch) {
-    e.preventDefault();
-    e.stopPropagation();
-    confirmStop(function(){ fetch('/api/record/stop', { method: 'POST' }); });
   }
 }, true);
 
@@ -2928,7 +2938,6 @@ if (meterToggle && meterFooter && meterBody && meterCaret) {
   var collapsed = localStorage.getItem('pi9696_meterCollapsed') === '1';
   function applyCollapse() {
     meterFooter.classList.toggle('collapsed', collapsed);
-    document.body.classList.toggle('meters-collapsed', collapsed);
     meterCaret.style.transform = collapsed ? 'rotate(-90deg)' : '';
     meterToggle.setAttribute('aria-expanded', !collapsed);
   }
@@ -2939,6 +2948,47 @@ if (meterToggle && meterFooter && meterBody && meterCaret) {
     applyCollapse();
   });
 }
+
+// The meter band is as tall as the header (owner layout): measure the
+// header and the footer and expose them as --deck-h / --footer-h.
+(function() {
+  var deck = document.querySelector('header.deck');
+  var foot = document.getElementById('appFooter');
+  function measure() {
+    var root = document.documentElement.style;
+    if (deck) root.setProperty('--deck-h', deck.offsetHeight + 'px');
+    if (foot) root.setProperty('--footer-h', foot.offsetHeight + 'px');
+  }
+  measure();
+  if (window.ResizeObserver) {
+    var ro = new ResizeObserver(measure);
+    if (deck) ro.observe(deck);
+    if (foot) ro.observe(foot);
+  } else {
+    window.addEventListener('resize', measure);
+  }
+})();
+
+// System pane: pops up above the footer. Hidden charts measure 0 wide, so
+// opening it re-runs the charts' resize.
+(function() {
+  var btn = document.getElementById('sysToggle');
+  var pane = document.getElementById('sysPane');
+  if (!btn || !pane) return;
+  var open = false;
+  try { open = localStorage.getItem('pi9696_sysOpen') === '1'; } catch (e) {}
+  function apply() {
+    pane.hidden = !open;
+    btn.setAttribute('aria-expanded', open);
+    if (open) window.dispatchEvent(new Event('resize'));
+  }
+  apply();
+  btn.addEventListener('click', function() {
+    open = !open;
+    try { localStorage.setItem('pi9696_sysOpen', open ? '1' : '0'); } catch (e) {}
+    apply();
+  });
+})();
 
 // Update meter badge (stereo/dual-mono indicator)
 var meterBadge = document.getElementById('meterBadge');
@@ -2969,8 +3019,8 @@ function applyMeter(m) {
 
   // inferno TX state rides the same tick: clock loss shows without refresh.
   var txEl = document.getElementById('txstatus');
-  if (txEl && typeof m.txStatus === 'string' && txEl.textContent !== m.txStatus) {
-    txEl.textContent = m.txStatus;
+  if (txEl && typeof m.txShort === 'string' && txEl.textContent !== m.txShort) {
+    txEl.textContent = m.txShort;
   }
 
   var paused = !!m.paused;
@@ -3077,11 +3127,14 @@ function teleTimeValues(self, ticks) {
     return p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
   });
 }
+// Graph heights, ~25% taller than the old side column (90/56 px) now that
+// the System pane spans the page width.
+var TELE_H = 112, TELE_H_SMALL = 70;
 function teleOpts(extraSeries, ymin, ymax, h) {
   var dim = teleCSS('--dim', '#5b8aa8');
   var font = '9px ' + teleCSS('--font', 'Consolas,monospace');
   var o = {
-    width: 300, height: h || 90,
+    width: 300, height: h || TELE_H,
     series: [{}].concat(extraSeries),
     cursor: {show: false},
     legend: {show: true},
@@ -3115,7 +3168,7 @@ function initTeleCharts(ncores, subNames) {
   }
   var dummy = [[0, 1]];
   for (var i = 0; i < ncores; i++) dummy.push([0, 0]);
-  teleCPU = new uPlot(teleOpts(cpuSeries, 0, 100, 90), dummy, cpuEl);
+  teleCPU = new uPlot(teleOpts(cpuSeries, 0, 100, TELE_H), dummy, cpuEl);
   if (subEl) {
     subEl.innerHTML = '';
     var subSeries = [], subDummy = [[0, 1]];
@@ -3123,27 +3176,27 @@ function initTeleCharts(ncores, subNames) {
       subSeries.push({label: n, stroke: pal[i % pal.length], width: 1.5, dash: i >= pal.length ? [4, 3] : undefined});
       subDummy.push([0, 0]);
     });
-    teleSub = new uPlot(teleOpts(subSeries, 0, null, 90), subDummy, subEl);
-    teleSize(teleSub, subEl, 90);
+    teleSub = new uPlot(teleOpts(subSeries, 0, null, TELE_H), subDummy, subEl);
+    teleSize(teleSub, subEl, TELE_H);
   }
   teleRAM = new uPlot(teleOpts([
     {label: 'App MB', stroke: pal[0], width: 1.5, fill: 'rgba(0,217,255,0.10)'},
     {label: 'Sys MB', stroke: pal[2], width: 1.5}
-  ], null, null, 90), [[0, 1], [0, 0], [0, 0]], ramEl);
-  teleTemp = new uPlot(teleOpts([{label: 'Temp C', stroke: pal[2], width: 1.5}], null, null, 56), [[0, 1], [0, 0]], tempEl);
-  teleDisk = new uPlot(teleOpts([{label: 'Free GB', stroke: pal[1], width: 1.5}], 0, null, 56), [[0, 1], [0, 0]], diskEl);
-  teleSize(teleCPU, cpuEl, 90); teleSize(teleRAM, ramEl, 90);
-  teleSize(teleTemp, tempEl, 56); teleSize(teleDisk, diskEl, 56);
+  ], null, null, TELE_H), [[0, 1], [0, 0], [0, 0]], ramEl);
+  teleTemp = new uPlot(teleOpts([{label: 'Temp C', stroke: pal[2], width: 1.5}], null, null, TELE_H_SMALL), [[0, 1], [0, 0]], tempEl);
+  teleDisk = new uPlot(teleOpts([{label: 'Free GB', stroke: pal[1], width: 1.5}], 0, null, TELE_H_SMALL), [[0, 1], [0, 0]], diskEl);
+  teleSize(teleCPU, cpuEl, TELE_H); teleSize(teleRAM, ramEl, TELE_H);
+  teleSize(teleTemp, tempEl, TELE_H_SMALL); teleSize(teleDisk, diskEl, TELE_H_SMALL);
   // Armed once: every re-init (core-count change, theme switch) would
   // otherwise stack another resize listener and run setSize N times.
   if (!window.teleResizeArmed) {
     window.teleResizeArmed = true;
     window.addEventListener('resize', function() {
-      teleSize(teleCPU, document.getElementById('cpuChart'), 90);
-      teleSize(teleSub, document.getElementById('subChart'), 90);
-      teleSize(teleRAM, document.getElementById('ramChart'), 90);
-      teleSize(teleTemp, document.getElementById('tempChart'), 56);
-      teleSize(teleDisk, document.getElementById('diskChart'), 56);
+      teleSize(teleCPU, document.getElementById('cpuChart'), TELE_H);
+      teleSize(teleSub, document.getElementById('subChart'), TELE_H);
+      teleSize(teleRAM, document.getElementById('ramChart'), TELE_H);
+      teleSize(teleTemp, document.getElementById('tempChart'), TELE_H_SMALL);
+      teleSize(teleDisk, document.getElementById('diskChart'), TELE_H_SMALL);
     });
   }
   return true;
@@ -3561,8 +3614,11 @@ var configTmpl = template.Must(template.New("config").Parse(`
 <tr><td>Format</td><td>{{.Format}}</td></tr>
 <tr><td>Tag</td><td>{{.Tag}}</td></tr>
 <tr><td>Inferno</td><td>{{.Inferno}}</td></tr>
+<tr><td>Inferno TX</td><td id="txstatus">{{.TXShort}}</td></tr>
 <tr><td>Clock</td><td>{{.Clock}}</td></tr>
 <tr><td>Network</td><td>{{.Network}}</td></tr>
+<tr><td>Uptime</td><td>{{.Uptime}}</td></tr>
+<tr><td>Version</td><td>v{{.Version}}</td></tr>
 </table>
 `))
 
@@ -3574,6 +3630,23 @@ type configView struct {
 	Inferno    string
 	Clock      string
 	Network    string
+	TXShort    string // inferno TX state, kept live by the meter tick
+	Uptime     string // to the minute, so the push only changes once a minute
+	Version    string
+}
+
+// formatUptime renders an uptime to the minute ("3d 4h 12m", "7m"), so
+// the Status table (pushed only when it changes) changes once a minute.
+func formatUptime(d time.Duration) string {
+	m := int(d / time.Minute)
+	days, hours, mins := m/(24*60), m/60%24, m%60
+	switch {
+	case days > 0:
+		return fmt.Sprintf("%dd %dh %dm", days, hours, mins)
+	case hours > 0:
+		return fmt.Sprintf("%dh %dm", hours, mins)
+	}
+	return fmt.Sprintf("%dm", mins)
 }
 
 // handleAPIConfig is read-only by design: mutating settings goes through
@@ -3600,7 +3673,10 @@ func renderConfigHTML() (string, error) {
 		Tag:        tagStatusText(),
 		Inferno:    getInfernoStatusText(),
 		Clock:      clockSyncTextLocked(time.Now()),
+		Uptime:     formatUptime(time.Since(bootTime)),
+		Version:    appVersion,
 	}
+	v.TXShort, _ = txStatusLocked()
 	mutex.Unlock()
 
 	_, v.Network = hwManager.Network.GetNetworkStatus()
@@ -3612,10 +3688,14 @@ func renderConfigHTML() (string, error) {
 	return buf.String(), nil
 }
 
+// statusTmpl is the Transport Status state line, pushed over the telemetry
+// socket. Owner layout (2026-10-05): no Stop button (the deck keys stop),
+// no TX line (the Status table carries it), no Peak/RMS (the meters show
+// them), no temperature (the System pane graphs it); uptime lives in the
+// Status table and disk space in the page footer, swapped out-of-band from
+// this same push.
 var statusTmpl = template.Must(template.New("status").Parse(`
 {{if .Recording}}<p class="rec">&#9679; RECORDING - {{.Elapsed}}</p>
-<p>{{.Meter}}</p>
-<button hx-post="/api/record/stop" hx-target="#status" hx-swap="innerHTML" data-record-stop>Stop</button>
  {{else if .Playing}}<p>&#9654; Playing back - {{.Elapsed}}</p>
  {{else if .Paused}}<p>&#10074;&#10074; Paused - {{.Elapsed}}</p>
  {{else if .MonOutput}}<p class="idle">&#9654; Monitoring output - playing {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch {{.Elapsed}}</p>
@@ -3625,12 +3705,7 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 {{if not .InfernoUp}}<p>(Inferno not running &mdash; build the Inferno binary and restart)</p>{{end}}
 {{if .DemoMode}}<p>(Demo mode &mdash; simulated audio)</p>{{end}}
 {{end}}
-<p id="txstatus">{{.TXStatus}}</p>
-<div class="sys-readout">
-<p>Uptime {{.Uptime}} &middot; v{{.AppVersion}}</p>
-<p>Temp {{if ge .CPUTemp 0.0}}{{printf "%.0f" .CPUTemp}}&deg;{{else}}&mdash;{{end}}</p>
-<p>Disk /rec: {{printf "%.0f" .DiskTotal}}GB / {{printf "%.0f" .DiskFree}}GB free &middot; record: {{.RecordTime}}</p>
-</div>`))
+<span id="diskInfo" class="footer-disk" hx-swap-oob="true">Disk /rec <b>{{printf "%.0f" .DiskFree}} GB</b> free of {{printf "%.0f" .DiskTotal}} GB &middot; record time left <b>{{.RecordTime}}</b></span>`))
 
 // webNotice/webNoticeUntil is the dashboard counterpart of sysNotice: a
 // one-shot error line rendered into the status panel. startPlayback uses it
@@ -3956,6 +4031,8 @@ type meterResponse struct {
 	// TXStatus is the inferno transmit state (see txholder.go), pushed live
 	// so the dashboard tracks clock loss without a status refresh.
 	TXStatus string `json:"txStatus"`
+	// TXShort is the same state in the Status table's short form.
+	TXShort string `json:"txShort"`
 }
 
 // jsonSafeDB coerces a dB level to a JSON-encodable value. encoding/json will
@@ -3992,7 +4069,7 @@ func currentMeterResponse() meterResponse {
 		FloorDB:    vuRangeOptions[vuRangeIdx],
 		DisplaySeq: displaySeq,
 	}
-	_, resp.TXStatus = txStatusLocked() // Always size the meter bank to the configured channel count. During
+	resp.TXShort, resp.TXStatus = txStatusLocked() // Always size the meter bank to the configured channel count. During
 	// recording, the peak/RMS arrays are exactly channelCount (startRecording
 	// sizes them to it), and at idle/monitoring they follow it too, so this
 	// is normally a no-op - but while a channel change is still in flight

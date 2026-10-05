@@ -868,7 +868,7 @@ func TestTelemetryWSRoundtrip(t *testing.T) {
 	if err := websocket.JSON.Receive(ws, &histMsg); err != nil {
 		t.Fatalf("history message: %v", err)
 	}
-	if statusMsg.Target != "#status" || !strings.Contains(statusMsg.Content, "sys-readout") {
+	if statusMsg.Target != "#status" || !strings.Contains(statusMsg.Content, `id="diskInfo"`) {
 		t.Fatalf("bad status message target/content: %+v", statusMsg)
 	}
 	if histMsg.Target != "#teleHist" {
@@ -5297,34 +5297,30 @@ func TestAudioMenuTxRowClick(t *testing.T) {
 	}
 }
 
-// Template wiring: statusTmpl must render the TX line (a missing struct
-// field errors only at execution), and the dashboard must carry both the
-// element the meter tick updates and the JS that updates it.
+// Template wiring: the TX state lives in the Status table (not the
+// Transport Status line, owner layout 2026-10-05), and the dashboard must
+// carry both the element the meter tick updates and the JS that updates it.
 func TestTxStatusDashboardWiring(t *testing.T) {
 	var buf bytes.Buffer
-	v := statusView{Format: "WAV", SampleRate: 48, Channels: 2, TXStatus: "Inferno TX ready (PI9696-TX)"}
-	if err := statusTmpl.Execute(&buf, v); err != nil {
+	if err := configTmpl.Execute(&buf, configView{TXShort: "ready"}); err != nil {
+		t.Fatalf("status table render: %v", err)
+	}
+	if !strings.Contains(buf.String(), `<td id="txstatus">ready</td>`) {
+		t.Errorf("status table missing the TX row: %q", buf.String())
+	}
+	buf.Reset()
+	if err := statusTmpl.Execute(&buf, statusView{Format: "WAV", SampleRate: 48, Channels: 2, Monitoring: true, TXStatus: "Inferno TX ready (PI9696)"}); err != nil {
 		t.Fatalf("status render: %v", err)
 	}
-	if !strings.Contains(buf.String(), `id="txstatus"`) || !strings.Contains(buf.String(), v.TXStatus) {
-		t.Errorf("status fragment missing TX line: %q", buf.String())
-	}
-	// The TX line must render in every transport state, not just Idle: it
-	// once sat inside the Idle else-branch and vanished while monitoring.
-	buf.Reset()
-	v.Monitoring = true
-	if err := statusTmpl.Execute(&buf, v); err != nil {
-		t.Fatalf("status render (monitoring): %v", err)
-	}
-	if !strings.Contains(buf.String(), `id="txstatus"`) {
-		t.Errorf("monitoring status missing TX line: %q", buf.String())
+	if strings.Contains(buf.String(), "txstatus") || strings.Contains(buf.String(), "Inferno TX") {
+		t.Errorf("Transport Status still carries the TX line: %q", buf.String())
 	}
 
 	buf.Reset()
 	if err := dashboardTmpl.Execute(&buf, dashboardData{}); err != nil {
 		t.Fatalf("dashboard render: %v", err)
 	}
-	for _, want := range []string{`getElementById('txstatus')`, `m.txStatus`} {
+	for _, want := range []string{`getElementById('txstatus')`, `m.txShort`} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("dashboard missing TX live-update hook %q", want)
 		}
