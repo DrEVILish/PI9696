@@ -1234,7 +1234,7 @@ func handleAPISettingsTheme(w http.ResponseWriter, r *http.Request) {
 		// executing in-swapped scripts, which multi-node responses don't
 		// guarantee. The sprite rewrite keeps every .icon <use> pointed
 		// at the new theme's icon set (same ids, theme-authored shapes).
-		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);%s;%sSPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=telePalette=null;document.querySelectorAll('.icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, variantCarrier(currentThemeVariant()), tintCarrier(), iconSpriteHref(active))
+		fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">document.documentElement.setAttribute(\"data-theme\",%q);%s;%sSPRITE=%q;teleCPU=teleRAM=teleTemp=teleDisk=teleSub=telePalette=null;document.querySelectorAll('.icon use').forEach(function(u){u.setAttribute('href',SPRITE)})</script>", active, variantCarrier(currentThemeVariant()), tintCarrier(), iconSpriteHref(active))
 	}
 }
 
@@ -2463,6 +2463,8 @@ html[data-theme] body{background:transparent}
     <div class="sys-graphs">
       <h3>CPU %</h3>
       <div id="cpuChart"><span class="sys-wait">collecting&hellip;</span></div>
+      <h3 title="pi9696's own CPU, % of one core, by subsystem (thread names; see threadcpu.go)">App CPU by subsystem</h3>
+      <div id="subChart"><span class="sys-wait">collecting&hellip;</span></div>
       <h3>RAM MB</h3>
       <div id="ramChart"><span class="sys-wait">collecting&hellip;</span></div>
       <h3>Temp &deg;C</h3>
@@ -3035,7 +3037,7 @@ function connectMeterSocket() {
 // history JSON swap every 2s, and applyTeleHist redraws from the swap.
 // Charts appear once 2+ samples exist. Missing uPlot file degrades to the
 // collecting placeholder.
-var teleCPU = null, teleRAM = null, teleTemp = null, teleDisk = null;
+var teleCPU = null, teleRAM = null, teleTemp = null, teleDisk = null, teleSub = null;
 // teleCSS reads a bridge token's resolved value so charts follow the active
 // theme (none-case: the :root literal; themed: the theme's value through the
 // bridge). Falls back to the literal when tokens are unavailable.
@@ -3088,8 +3090,9 @@ function teleWidth(el) {
 function teleSize(chart, el, h) {
   if (chart) chart.setSize({width: teleWidth(el), height: h});
 }
-function initTeleCharts(ncores) {
+function initTeleCharts(ncores, subNames) {
   var cpuEl = document.getElementById('cpuChart');
+  var subEl = document.getElementById('subChart');
   var ramEl = document.getElementById('ramChart');
   var tempEl = document.getElementById('tempChart');
   var diskEl = document.getElementById('diskChart');
@@ -3103,6 +3106,16 @@ function initTeleCharts(ncores) {
   var dummy = [[0, 1]];
   for (var i = 0; i < ncores; i++) dummy.push([0, 0]);
   teleCPU = new uPlot(teleOpts(cpuSeries, 0, 100, 90), dummy, cpuEl);
+  if (subEl) {
+    subEl.innerHTML = '';
+    var subSeries = [], subDummy = [[0, 1]];
+    (subNames || []).forEach(function(n, i) {
+      subSeries.push({label: n, stroke: pal[i % pal.length], width: 1.5, dash: i >= pal.length ? [4, 3] : undefined});
+      subDummy.push([0, 0]);
+    });
+    teleSub = new uPlot(teleOpts(subSeries, 0, null, 90), subDummy, subEl);
+    teleSize(teleSub, subEl, 90);
+  }
   teleRAM = new uPlot(teleOpts([
     {label: 'App MB', stroke: pal[0], width: 1.5, fill: 'rgba(0,217,255,0.10)'},
     {label: 'Sys MB', stroke: pal[2], width: 1.5}
@@ -3117,6 +3130,7 @@ function initTeleCharts(ncores) {
     window.teleResizeArmed = true;
     window.addEventListener('resize', function() {
       teleSize(teleCPU, document.getElementById('cpuChart'), 90);
+      teleSize(teleSub, document.getElementById('subChart'), 90);
       teleSize(teleRAM, document.getElementById('ramChart'), 90);
       teleSize(teleTemp, document.getElementById('tempChart'), 56);
       teleSize(teleDisk, document.getElementById('diskChart'), 56);
@@ -3135,16 +3149,24 @@ function applyTeleHist(h) {
   if (!window.uPlot || !h || !h.t || h.t.length < 2) return;
   var ncores = (h.cores && h.cores.length > 0 && h.cores[0]) ? h.cores[0].length : 0;
   // Core count can only change across reboots; rebuild charts if it did.
-  if (!teleCPU && !initTeleCharts(ncores)) return;
-  if (teleCPU && teleCPU.series.length - 1 !== ncores) {
-    teleCPU = null; teleRAM = null; teleTemp = null; teleDisk = null;
-    if (!initTeleCharts(ncores)) return;
+  var subNames = h.subNames || [];
+  if (!teleCPU && !initTeleCharts(ncores, subNames)) return;
+  if (teleCPU && (teleCPU.series.length - 1 !== ncores || (teleSub && teleSub.series.length - 1 !== subNames.length))) {
+    teleCPU = null; teleRAM = null; teleTemp = null; teleDisk = null; teleSub = null;
+    if (!initTeleCharts(ncores, subNames)) return;
   }
   var cols = [h.t];
   for (var i = 0; i < ncores; i++) {
     cols.push(h.cores.map(function(row) { return (row && i < row.length) ? row[i] : null; }));
   }
   teleCPU.setData(cols);
+  if (teleSub && h.sub) {
+    var scols = [h.t];
+    for (var j = 0; j < subNames.length; j++) {
+      scols.push(h.sub.map(function(row) { return (row && j < row.length) ? Math.round(row[j] * 10) / 10 : null; }));
+    }
+    teleSub.setData(scols);
+  }
   teleRAM.setData([h.t, h.ramApp, h.ramSys]);
   if (h.temp) teleTemp.setData([h.t, h.temp]);
   if (h.disk) teleDisk.setData([h.t, h.disk]);
@@ -3715,19 +3737,25 @@ type telemetryHistView struct {
 	RAMSys []float64   `json:"ramSys"`
 	Temp   []float64   `json:"temp"`
 	Disk   []float64   `json:"disk"`
+	// SubNames labels the columns of Sub, the app's CPU by subsystem in %
+	// of one core (see threadcpu.go).
+	SubNames []string    `json:"subNames"`
+	Sub      [][]float64 `json:"sub"`
 }
 
 func currentTelemetryHist() telemetryHistView {
 	mutex.Lock()
 	defer mutex.Unlock()
 	return telemetryHistView{
-		T:      append([]int64(nil), teleHistT...),
-		CPU:    append([]float64(nil), teleHistCPU...),
-		Cores:  append([][]float64(nil), teleHistCores...),
-		RAMApp: append([]float64(nil), teleHistRAMApp...),
-		RAMSys: append([]float64(nil), teleHistRAMSys...),
-		Temp:   append([]float64(nil), teleHistTemp...),
-		Disk:   append([]float64(nil), teleHistDisk...),
+		T:        append([]int64(nil), teleHistT...),
+		CPU:      append([]float64(nil), teleHistCPU...),
+		Cores:    append([][]float64(nil), teleHistCores...),
+		RAMApp:   append([]float64(nil), teleHistRAMApp...),
+		RAMSys:   append([]float64(nil), teleHistRAMSys...),
+		Temp:     append([]float64(nil), teleHistTemp...),
+		Disk:     append([]float64(nil), teleHistDisk...),
+		SubNames: cpuSubsystems,
+		Sub:      append([][]float64(nil), teleHistSub...),
 	}
 }
 

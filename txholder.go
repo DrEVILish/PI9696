@@ -188,6 +188,7 @@ var inProcCloseWait = 3 * time.Second
 // EAGAIN keeps every iteration responsive. O_RDWR holds a read end so a write
 // with no ffmpeg attached yet gets EAGAIN rather than SIGPIPE.
 func infernoRxLoop(dev *alsapcm.Device, path string, quit <-chan struct{}, done chan struct{}, gen uint64, channels int) {
+	nameThread(threadRxCapture)
 	defer close(done)
 	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
 	if err != nil {
@@ -649,6 +650,7 @@ func startTxIdleFeeder(holder txFrameWriter, channels, rate int) {
 		return
 	}
 	go func() {
+		nameThread(threadTxIdle)
 		defer txIdleFeeders.Delete(holder)
 		zeros := make([]int32, txPumpFrames*channels)
 		chunk := time.Duration(txPumpFrames) * time.Second / time.Duration(rate)
@@ -833,6 +835,7 @@ func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int) {
 // playhead machinery is untouched. A dead sink kills the decoder so the
 // existing reaper drives the deck back to idle instead of stranding it.
 func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channels int) {
+	nameThread(threadTxPump)
 	// The pump takes over from the idle feeder only once it has something
 	// to write: counted at its first decoded chunk (or first paused
 	// silence), not at start. Counting at start stopped the feeder while

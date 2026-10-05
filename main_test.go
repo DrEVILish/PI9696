@@ -757,6 +757,9 @@ func TestRemoteLoginWrongTokenThenCorrectToken(t *testing.T) {
 
 func TestTelemetryHistAppendCap(t *testing.T) {
 	origT, origCPU, origApp, origSys, origCores, origTemp, origDisk := teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores, teleHistTemp, teleHistDisk
+	origSub := teleHistSub
+	defer func() { teleHistSub = origSub }()
+	teleHistSub = nil
 	origPct := cpuPct
 	t.Cleanup(func() {
 		teleHistT, teleHistCPU, teleHistRAMApp, teleHistRAMSys, teleHistCores, teleHistTemp, teleHistDisk = origT, origCPU, origApp, origSys, origCores, origTemp, origDisk
@@ -768,7 +771,7 @@ func TestTelemetryHistAppendCap(t *testing.T) {
 	cpuPct = []float64{10, 30}
 	appendTelemetryHist()
 	appendTelemetryHist()
-	for name, n := range map[string]int{"t": len(teleHistT), "cpu": len(teleHistCPU), "cores": len(teleHistCores), "ramApp": len(teleHistRAMApp), "ramSys": len(teleHistRAMSys), "temp": len(teleHistTemp), "disk": len(teleHistDisk)} {
+	for name, n := range map[string]int{"t": len(teleHistT), "cpu": len(teleHistCPU), "cores": len(teleHistCores), "ramApp": len(teleHistRAMApp), "ramSys": len(teleHistRAMSys), "temp": len(teleHistTemp), "disk": len(teleHistDisk), "sub": len(teleHistSub)} {
 		if n != 2 {
 			t.Fatalf("history slice %s drifted: len %d", name, n)
 		}
@@ -784,7 +787,7 @@ func TestTelemetryHistAppendCap(t *testing.T) {
 	for i := 0; i < teleHistN+10; i++ {
 		appendTelemetryHist()
 	}
-	for name, n := range map[string]int{"t": len(teleHistT), "cpu": len(teleHistCPU), "cores": len(teleHistCores), "ramApp": len(teleHistRAMApp), "ramSys": len(teleHistRAMSys), "temp": len(teleHistTemp), "disk": len(teleHistDisk)} {
+	for name, n := range map[string]int{"t": len(teleHistT), "cpu": len(teleHistCPU), "cores": len(teleHistCores), "ramApp": len(teleHistRAMApp), "ramSys": len(teleHistRAMSys), "temp": len(teleHistTemp), "disk": len(teleHistDisk), "sub": len(teleHistSub)} {
 		if n != teleHistN {
 			t.Fatalf("expected cap %d on slice %s, got %d", teleHistN, name, n)
 		}

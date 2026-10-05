@@ -4781,6 +4781,7 @@ func getUSBSize() string {
 }
 
 func updateLoop() {
+	nameThread(threadRender)
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -6596,6 +6597,11 @@ var teleHistT []int64
 var teleHistCPU, teleHistRAMApp, teleHistRAMSys []float64
 var teleHistTemp, teleHistDisk []float64
 
+// teleHistSub mirrors teleHistT row-for-row: the app's CPU per subsystem
+// (cpuSubsystems order, % of one core) over the preceding step.
+var teleHistSub [][]float64
+var teleSubSampler cpuSubsysSampler
+
 // teleHistCores mirrors teleHistT row-for-row: one per-core snapshot each.
 // Empty cpuPct repeats the previous row so columns never go ragged.
 var teleHistCores [][]float64
@@ -6627,9 +6633,15 @@ func appendTelemetryHist() {
 		diskFree = float64(stat.Bavail*uint64(stat.Bsize)) / 1e9
 	}
 	ramApp := ramMB(os.Getpid(), "VmRSS")
+	// Only this loop calls the sampler, so it needs no lock of its own.
+	sub := teleSubSampler.sample("/proc", time.Now())
+	if sub == nil {
+		sub = make([]float64, len(cpuSubsystems))
+	}
 
 	mutex.Lock()
 	defer mutex.Unlock()
+	teleHistSub = append(teleHistSub, sub)
 	teleHistCores = append(teleHistCores, cores)
 	teleHistT = append(teleHistT, time.Now().Unix())
 	teleHistCPU = append(teleHistCPU, avg)
@@ -6644,6 +6656,7 @@ func appendTelemetryHist() {
 		teleHistRAMApp = append([]float64(nil), teleHistRAMApp[cut:]...)
 		teleHistRAMSys = append([]float64(nil), teleHistRAMSys[cut:]...)
 		teleHistCores = append([][]float64(nil), teleHistCores[cut:]...)
+		teleHistSub = append([][]float64(nil), teleHistSub[cut:]...)
 		teleHistTemp = append([]float64(nil), teleHistTemp[cut:]...)
 		teleHistDisk = append([]float64(nil), teleHistDisk[cut:]...)
 	}
