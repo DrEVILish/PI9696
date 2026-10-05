@@ -89,6 +89,9 @@ func applyUnifiedInfernoEnv(name string, rate, channels int) {
 	// A controller's rename request is handed to the app here (see
 	// devicename.go; needs the fork's NAME_REQUEST_PATH, a67a337).
 	os.Setenv("INFERNO_NAME_REQUEST_PATH", infernoNameRequestPath)
+	// Saved state (channel names, subscriptions) in one fixed place, read by
+	// the per-recording channel names (channelnames.go; fork 0501a56).
+	os.Setenv("INFERNO_STATE_DIR", infernoStateDir)
 	// The plugin's logger defaults to debug, which floods the journal (it
 	// once rotated the WebUI access code away). It reads RUST_LOG once, at
 	// the first open; an explicit setting in the service env still wins.

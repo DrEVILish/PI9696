@@ -1177,6 +1177,8 @@ func main() {
 	var err error
 	openLogFileSink()
 	loadPersistedConfig()
+	// Before inferno first opens: pin its saved state to the app's own dir.
+	migrateInfernoState()
 	startProfiler()
 
 	hwManager, err = hardware.NewHardwareManager()
@@ -3157,6 +3159,9 @@ func startRecording() {
 	ffmpegCmd = cmd
 	isRecording = true
 	currentState = StateRecording
+	// The take's channel names: inferno's names as they are now (see
+	// channelnames.go). A small file, written once per take.
+	snapshotRecordingChannels(recordingFile, channelCount)
 	meterPeakDB = meterSilence
 	meterRMSDB = meterSilence
 	meterGen++
@@ -4193,6 +4198,12 @@ func startCopyOperation() {
 			if err != nil {
 				logErrorf("Failed to copy %s: %v", file, err)
 				failed++
+			} else if _, serr := os.Stat(channelsSidecar(src)); serr == nil {
+				// The take's channel names travel with it (small: no
+				// progress or cancel handling needed).
+				if err := copyFile(channelsSidecar(src), channelsSidecar(dst), func() bool { return false }); err != nil {
+					logWarnf("Failed to copy channel names of %s: %v", file, err)
+				}
 			}
 			mutex.Lock()
 			copyProgress = int(float64(i+1) / float64(len(selectedFiles)) * 100)
@@ -4311,6 +4322,11 @@ func deleteAllRecordings() (failed int) {
 		if err := os.Remove(file); err != nil && !os.IsNotExist(err) {
 			logErrorf("delete recording %s: %v", file, err)
 			failed++
+			continue
+		}
+		// The take's channel names go with it.
+		if err := os.Remove(channelsSidecar(file)); err != nil && !os.IsNotExist(err) {
+			logWarnf("delete channel names of %s: %v", file, err)
 		}
 	}
 	if failed > 0 {

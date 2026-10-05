@@ -2177,6 +2177,11 @@ main.app-main{display:contents}
 /* One line per take: the table scrolls sideways in its own wrapper rather
    than wrapping dates onto three lines or widening the page. */
 .recordings-wrap .table td,.recordings-wrap .table th{white-space:nowrap}
+/* Channel names: the summary stays one line; the rename form opens below. */
+.recs-chans summary{cursor:pointer;max-width:16em;overflow:hidden;text-overflow:ellipsis;color:var(--accent)}
+.chan-form{display:grid;gap:0.3em;margin:0.4em 0;white-space:normal}
+.chan-row{display:grid;grid-template-columns:2.2em minmax(8em,14em) auto;align-items:center;gap:0.5em;font-size:0.85em}
+.chan-row small{color:var(--muted)}
 .recs-note{font-size:0.75em;color:var(--muted);margin:0.6em 0 0}
 
 /* Scrollable table wrapper for narrow viewports */
@@ -4220,13 +4225,17 @@ func handleAPIMonitorStop(w http.ResponseWriter, r *http.Request) {
 var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <div class="recordings-wrap scroll">
 <table class="table is-sticky">
-<thead><tr><th></th><th>File</th><th>Tracks</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
+<thead><tr><th></th><th>File</th><th>Tracks</th><th>Channels</th><th>Format</th><th>Start</th><th>End</th><th>Duration</th><th></th></tr></thead>
 <tbody>
-{{if not .Rows}}<tr><td colspan="8"><div class="empty-state"><span class="empty-state-icon">&#8709;</span><span class="empty-state-title">None yet.</span><span class="empty-state-hint">Takes appear here as they finalize.</span></div></td></tr>{{else}}
+{{if not .Rows}}<tr><td colspan="9"><div class="empty-state"><span class="empty-state-icon">&#8709;</span><span class="empty-state-title">None yet.</span><span class="empty-state-hint">Takes appear here as they finalize.</span></div></td></tr>{{else}}
 {{range .Rows}}<tr{{if .Selected}} class="is-selected" aria-selected="true"{{end}}>
 <td class="recs-play"><form hx-post="/api/playback/select" hx-target="#recordings" hx-swap="innerHTML"><input type="hidden" name="file" value="{{.RelPath}}"><button class="btn btn-sm btn-secondary" type="submit" name="play" value="1" title="Play this take" aria-label="Play {{.Name}}"><svg class="icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-play"/></svg></button></form></td>
 <td>{{.Name}}{{if .Selected}} <span class="badge">selected</span>{{end}}</td>
 <td>{{.Channels}}</td>
+<td class="recs-chans"><details><summary title="Channel names of this take (from the unit's inferno channel names when it started; rename here - the unit itself is not changed)">{{.ChanSummary}}</summary>
+<form hx-post="/api/recordings/channels" hx-target="#recordings" hx-swap="innerHTML" class="chan-form"><input type="hidden" name="file" value="{{.RelPath}}">
+{{range .ChanNames}}<label class="chan-row"><span>{{.Number}}</span><input class="input" name="name_{{.Number}}" value="{{.Name}}" maxlength="32" required>{{if .Source}}<small title="Source when the take started">&larr; {{.Source}}</small>{{end}}</label>
+{{end}}<button class="btn btn-sm" type="submit">Save names</button></form></details></td>
 <td>{{.Format}} {{.SampleRate}}kHz</td>
 <td>{{.StartStr}}</td>
 <td>{{.EndStr}}</td>
@@ -4251,6 +4260,8 @@ type recordingRow struct {
 	Name        string
 	RelPath     string
 	Selected    bool // the take Play starts (see playselect.go)
+	ChanNames   []recChannel
+	ChanSummary string
 	Channels    int
 	Format      string
 	SampleRate  int
@@ -4384,6 +4395,8 @@ func buildRecordingRow(path string) recordingRow {
 	format := strings.ToUpper(m[7])
 
 	row.Channels = channels
+	row.ChanNames = recordingChannels(path)
+	row.ChanSummary = channelSummary(row.ChanNames)
 	row.SampleRate = sampleRate
 	row.Format = format
 	row.StartStr = start.Format("2006-01-02 15:04:05")
@@ -4588,6 +4601,23 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 		row := buildRecordingRow(f)
 		fmt.Fprintf(&manifest, "%-60s %12d %8d %6d %8s %10s  %s\n",
 			entry, info.Size(), row.Channels, row.SampleRate, row.Format, row.DurationStr, row.StartStr)
+		// The take's channel names: listed in the manifest, and the
+		// sidecar itself goes in the bundle next to the take.
+		chans := recordingChannels(f)
+		for _, c := range chans {
+			src := ""
+			if c.Source != "" {
+				src = "  <- " + c.Source
+			}
+			fmt.Fprintf(&manifest, "    ch%-3d %s%s\n", c.Number, c.Name, src)
+		}
+		if side, err := os.ReadFile(channelsSidecar(f)); err == nil {
+			hdr := &zip.FileHeader{Name: strings.TrimSuffix(entry, filepath.Ext(entry)) + ".channels.json", Method: zip.Deflate}
+			hdr.SetModTime(info.ModTime())
+			if w, err := zw.CreateHeader(hdr); err == nil {
+				w.Write(side)
+			}
+		}
 	}
 
 	mw, err := zw.Create("manifest.txt")
@@ -4674,6 +4704,8 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/monitor/stop", requireAuth(handleAPIMonitorStop))
 	mux.HandleFunc("GET /api/recordings", requireAuth(handleAPIRecordings))
 	mux.HandleFunc("POST /api/playback/select", requireAuth(handleAPIPlaybackSelect))
+	mux.HandleFunc("GET /api/recordings/channels", requireAuth(handleAPIRecordingChannels))
+	mux.HandleFunc("POST /api/recordings/channels", requireAuth(handleAPIRecordingChannels))
 	mux.HandleFunc("GET /download-all", requireAuth(handleDownloadAll))
 	mux.HandleFunc("GET /download/{filepath...}", requireAuth(handleDownload))
 
