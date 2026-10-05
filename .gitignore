@@ -57,3 +57,6 @@ web/uPlot.min.css
 
 # Locally built test binaries
 /pi9696-test
+
+# Python bytecode from the interop scripts
+__pycache__/
