@@ -2,6 +2,9 @@ package main
 
 import (
 	"errors"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -133,5 +136,33 @@ func waitFor(t *testing.T, within time.Duration, what string, cond func() bool) 
 			t.Fatalf("timed out after %v waiting for %s", within, what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// The capture loop's FIFO descriptor must not leak into children: an
+// inherited write end kept every later ffmpeg from seeing EOF when Inferno
+// stopped, so each one sat out the stop grace and was SIGKILLed.
+func TestInfernoFifoNotInheritedByChildren(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	useFakeInferno(t)
+	mutex.Lock()
+	demoMode = false
+	mutex.Unlock()
+	t.Cleanup(doStopInferno)
+	doStartInferno()
+	mutex.Lock()
+	path := fifoPath
+	mutex.Unlock()
+	if path == "" {
+		t.Fatal("setup: Inferno did not start")
+	}
+	time.Sleep(50 * time.Millisecond) // the capture loop opens the FIFO
+	out, err := exec.Command("sh", "-c", `for f in /proc/$$/fd/*; do readlink "$f"; done; true`).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), filepath.Base(path)) {
+		t.Fatalf("a child inherited the FIFO:\n%s", out)
 	}
 }

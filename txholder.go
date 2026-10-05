@@ -195,7 +195,10 @@ var inProcCloseWait = 3 * time.Second
 func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done chan struct{}, gen uint64, channels int) {
 	nameThread(threadRxCapture)
 	defer close(done)
-	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
+	// O_CLOEXEC: without it every ffmpeg started later inherits a write end
+	// of the FIFO, so a monitor or take never sees EOF when this writer
+	// stops and has to be SIGKILLed after the stop grace.
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		logErrorf("in-process inferno: open FIFO %s: %v", path, err)
 		return

@@ -2650,7 +2650,10 @@ func demoGenLoop(path string, quit <-chan struct{}, keeper *os.File, gen uint64)
 			keeper.Close()
 		}
 	}()
-	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
+	// O_CLOEXEC: without it every ffmpeg started later inherits a write end
+	// of the FIFO, so a monitor or take never sees EOF when this writer
+	// stops and has to be SIGKILLed after the stop grace.
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 	if err != nil {
 		logErrorf("demo: failed to open FIFO %s: %v", path, err)
 		mutex.Lock()
