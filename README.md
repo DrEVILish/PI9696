@@ -203,11 +203,11 @@ Full install record, including the clock service and the kernel limits, is in
 # 1. SPI must be enabled or the app exits at startup (display init opens SPI)
 sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' /boot/firmware/config.txt && sudo reboot
 
-# 2. Inferno (pinned to fork dev df4d79f; note the submodules). The app runs inferno
+# 2. Inferno (pinned to fork dev 190685e; note the submodules). The app runs inferno
 #    in-process through its ALSA plugin, so the plugin is what gets installed
 sudo apt install -y build-essential pkg-config libasound2-dev libudev-dev
 git clone https://github.com/DrEVILish/inferno inferno
-cd inferno && git checkout df4d79f && git submodule update --init --recursive
+cd inferno && git checkout 190685e && git submodule update --init --recursive
 cargo build --release && cd ..
 
 # 3. A clock source must be exporting the usrvclock overlay, or Inferno starts

@@ -1,7 +1,7 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `df4d79f` on the `DrEVILish/inferno` fork's `dev`)
+AoIP stack, pinned at `190685e` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
@@ -41,6 +41,7 @@ and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
 | U26 | inferno info | Clock status kept the captured leader's sync-state word (2) while reporting a follower | controller device view: Sync Status "Error" | **fixed in the fork** (`76e4edd`; locked follower = 3) |
 | U27 | inferno info | Sample rate / encoding status sent requested = 0, a fixed update mode and unchangeable encodings 16/32 | netaudio: requested rate/encoding 0 (a pending change to nothing) | **fixed in the fork** (`892806e`) |
 | U28 | inferno info | Board info capability word lacked the sample rate / encoding configuration bits | controller device config: Sample Rate and Encoding blank, "does not support sample rate configuration" | **fixed in the fork** (`df4d79f`) |
+| U29 | inferno info | Sample rate / encoding status only sent when probed | a rate changed on the unit stayed old in an open controller until it re-probed | **fixed in the fork** (`190685e`; announced at every device start, and pi9696 restarts the device on a rate change) |
 
 ---
 
@@ -478,3 +479,9 @@ latency monitor were already correct.
 Verified on the test unit with netaudio: sample rate / encoding
 configuration supported, requested 48000 / 24 = current, supported
 [48000] / [24], Clock Role Follower of the leader, audio unaffected.
+
+Rate changes made on the unit (U29, `190685e`): pi9696 changes the rate by
+restarting the device, and the device now multicasts its sample rate and
+encoding status at every start. Seen from another Pi on the LAN while the
+unit switched 48 -> 96 -> 48 kHz: 96000, then 48000, each within a second
+of the restart.
