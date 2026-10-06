@@ -2344,6 +2344,13 @@ header.deck .meter-open{position:absolute;left:clamp(0.5em,2vw,1.5em);top:50%;tr
 .meter-group{--strip-width:2.6rem;--mixer-gap:2px;--meter-thickness:1rem;--fader-length:calc(var(--deck-h,150px) - 5.4rem);flex:none;max-width:100%;overflow-x:visible}
 .meter-group .strip{padding:0.25rem 0.1rem;gap:0.2rem}
 .meter-group .strip-fader{margin-top:0}
+/* Peak hold (WebUI, as on the OLED): a 3px bar at the held peak in the
+   colour of its zone, glowing; hidden at the floor. The theme's thin
+   .meter-peak line follows the instantaneous peak. */
+.meter-group .meter-hold{position:absolute;left:0;right:0;bottom:var(--meter-hold,0%);height:3px;transform:translateY(50%);background:var(--meter-low,var(--success));box-shadow:0 0 4px currentColor;color:var(--meter-low,var(--success));pointer-events:none;z-index:2}
+.meter-group .meter[data-hold="mid"] .meter-hold{background:var(--meter-mid,var(--warning));color:var(--meter-mid,var(--warning))}
+.meter-group .meter[data-hold="high"] .meter-hold{background:var(--meter-high,var(--danger));color:var(--meter-high,var(--danger))}
+.meter-group .meter[data-hold="off"] .meter-hold{display:none}
 .meter-group .strip-num{font-size:0.62rem;line-height:1;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
 .meter-group .strip-legend{--strip-width:2.3rem}
 .meter-group .scribble{text-align:center;padding:0.12rem 0.1rem}
@@ -3002,7 +3009,7 @@ function ensureChannels(n, names) {
     var strip = document.createElement('section');
     strip.className = 'strip';
     strip.innerHTML = '<span class="strip-num"></span>' +
-      '<div class="strip-fader"><div class="meter meter-v is-segmented" role="meter" aria-valuemin="' + FLOOR + '" aria-valuemax="0" aria-valuenow="' + FLOOR + '"><div class="meter-fill" data-i="' + i + '"></div><div class="meter-peak"></div></div></div>' +
+      '<div class="strip-fader"><div class="meter meter-v is-segmented" role="meter" aria-valuemin="' + FLOOR + '" aria-valuemax="0" aria-valuenow="' + FLOOR + '"><div class="meter-fill" data-i="' + i + '"></div><div class="meter-peak"></div><div class="meter-hold"></div></div></div>' +
       '<div class="scribble"><span class="scribble-name"></span></div>';
     strip.querySelector('.meter').setAttribute('aria-label', 'Channel ' + i + ' ' + name + ' level, dBFS');
     strip.querySelector('.strip-num').textContent = i;
@@ -3127,6 +3134,10 @@ function applyMeter(m) {
     if (track) {
       track.style.setProperty('--meter-level', vuPct(c.rmsDB) + '%');
       track.style.setProperty('--meter-peak', vuPct(c.peakDB) + '%');
+      // Peak hold: its own bar, coloured by the zone it sits in.
+      var hold = typeof c.holdDB === 'number' ? c.holdDB : c.peakDB;
+      track.style.setProperty('--meter-hold', vuPct(hold) + '%');
+      track.dataset.hold = hold > -6 ? 'high' : (hold > -18 ? 'mid' : (hold > FLOOR ? 'low' : 'off'));
       var now = String(Math.round(Math.max(c.rmsDB, FLOOR)));
       if (track.getAttribute('aria-valuenow') !== now) track.setAttribute('aria-valuenow', now);
     }
@@ -4064,8 +4075,12 @@ func telemetryWSLoop() {
 // dashboard. meterPeakDB/meterRMSDB fall back to meterSilence whenever nothing is
 // recording (see main.go's stopRecording/meterReader), so the hologram
 // correctly goes quiet rather than showing a stale level.
+// channelLevel is one meter: PeakDB the instantaneous peak, HoldDB the
+// held peak (the OLED's ballistics, decayPeakHold: held for the Peak Hold
+// setting, then falling at 20 dB/s), RMSDB the level.
 type channelLevel struct {
 	PeakDB float64 `json:"peakDB"`
+	HoldDB float64 `json:"holdDB"`
 	RMSDB  float64 `json:"rmsDB"`
 }
 
@@ -4150,11 +4165,15 @@ func buildMeterLevels() meterResponse {
 	count := channelCount
 	resp.Channels = make([]channelLevel, count)
 	for i := range resp.Channels {
+		c := channelLevel{PeakDB: meterSilence, HoldDB: meterSilence, RMSDB: meterSilence}
 		if i < len(meterChannelPeakHeld) && i < len(meterChannelRMS) {
-			resp.Channels[i] = channelLevel{PeakDB: jsonSafeDB(meterChannelPeakHeld[i]), RMSDB: jsonSafeDB(meterChannelRMS[i])}
-		} else {
-			resp.Channels[i] = channelLevel{PeakDB: meterSilence, RMSDB: meterSilence}
+			c.HoldDB, c.RMSDB = jsonSafeDB(meterChannelPeakHeld[i]), jsonSafeDB(meterChannelRMS[i])
+			c.PeakDB = c.HoldDB
+			if i < len(meterChannelPeak) {
+				c.PeakDB = jsonSafeDB(meterChannelPeak[i])
+			}
 		}
+		resp.Channels[i] = c
 	}
 	switch {
 	case resp.Recording:

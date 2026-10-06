@@ -906,3 +906,32 @@ func TestDashboardUsesFTLIndicators(t *testing.T) {
 		}
 	}
 }
+
+// The WebUI meters carry a peak hold as well as the live peak: the feed
+// sends both (holdDB from the OLED's ballistics) and each meter draws a
+// zone-coloured hold bar.
+func TestMeterFeedCarriesPeakHold(t *testing.T) {
+	mutex.Lock()
+	origCount, origPeak, origHeld, origRMS := channelCount, meterChannelPeak, meterChannelPeakHeld, meterChannelRMS
+	channelCount = 2
+	meterChannelPeak = []float64{-20, -40}
+	meterChannelPeakHeld = []float64{-6.5, -40}
+	meterChannelRMS = []float64{-23, -43}
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		channelCount, meterChannelPeak, meterChannelPeakHeld, meterChannelRMS = origCount, origPeak, origHeld, origRMS
+		mutex.Unlock()
+	})
+	resp := buildMeterLevels()
+	if c := resp.Channels[0]; c.PeakDB != -20 || c.HoldDB != -6.5 || c.RMSDB != -23 {
+		t.Errorf("channel 1 = %+v, want peak -20, hold -6.5, rms -23", c)
+	}
+	mux := newRemoteMux()
+	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
+	for _, want := range []string{`<div class="meter-hold"></div>`, `track.style.setProperty('--meter-hold'`, `.meter-group .meter-hold{`, `.meter-group .meter[data-hold="high"] .meter-hold{`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard lacks %q", want)
+		}
+	}
+}
