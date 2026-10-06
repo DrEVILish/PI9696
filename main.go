@@ -5181,6 +5181,20 @@ var infoCache struct {
 
 const infoCacheTTL = 5 * time.Second
 
+// accessQRURLLocked is the access QR's link: by mDNS name (owner rule:
+// <device>.local, see mdnsaddr.go) while that name resolves, else by ip.
+// The token rides in the fragment. Caller holds the mutex.
+func accessQRURLLocked(ip string) string {
+	host := mdnsURLHostLocked()
+	if host == "" {
+		host = ip
+	}
+	if p := remoteControlPort(); p != "80" { // the default needs no port (and a smaller QR)
+		host += ":" + p
+	}
+	return "http://" + host + "/#t=" + remoteToken
+}
+
 func renderIdleInfoPage() {
 	now := time.Now()
 	if now.Sub(infoCache.at) > infoCacheTTL {
@@ -5200,7 +5214,7 @@ func renderIdleInfoPage() {
 	}
 	ip := infoCache.ip
 	if ip != "" {
-		key := "http://" + ip + ":" + remoteControlPort() + "/#t=" + remoteToken
+		key := accessQRURLLocked(ip)
 		if infoCache.qrFor != key {
 			infoCache.qr = qrBitmap(key)
 			infoCache.qrFor = key

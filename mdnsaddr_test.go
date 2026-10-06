@@ -104,3 +104,50 @@ func TestMDNSAddrSystemHostAndFallback(t *testing.T) {
 		t.Errorf("QR host = %q without avahi, want the IP fallback", host)
 	}
 }
+
+// Owner rule: the connection QR links by mDNS name, by IP only while the
+// name does not resolve.
+func TestAccessQRUsesTheMDNSName(t *testing.T) {
+	useFakeAvahiPublish(t)
+	mutex.Lock()
+	deviceName = "PI9696-test"
+	origTok := remoteToken
+	remoteToken = "ABCD2345"
+	mutex.Unlock()
+	t.Cleanup(func() { mutex.Lock(); remoteToken = origTok; mutex.Unlock() })
+	t.Setenv("PI9696_REMOTE_PORT", "8080")
+	port := remoteControlPort()
+
+	mutex.Lock()
+	before := accessQRURLLocked("192.0.2.69")
+	mutex.Unlock()
+	if before != "http://192.0.2.69:"+port+"/#t=ABCD2345" {
+		t.Errorf("unpublished name: QR = %q, want the IP", before)
+	}
+	mdnsAddrTick("192.0.2.69")
+	mutex.Lock()
+	after := accessQRURLLocked("192.0.2.69")
+	mutex.Unlock()
+	if after != "http://pi9696-test.local:"+port+"/#t=ABCD2345" {
+		t.Errorf("QR = %q, want the mDNS name", after)
+	}
+}
+
+// On the standard HTTP port the link carries no port.
+func TestAccessQROmitsPort80(t *testing.T) {
+	useFakeAvahiPublish(t)
+	t.Setenv("PI9696_REMOTE_PORT", "80")
+	mutex.Lock()
+	deviceName = "PI9696-test"
+	origTok := remoteToken
+	remoteToken = "ABCD2345"
+	mutex.Unlock()
+	t.Cleanup(func() { mutex.Lock(); remoteToken = origTok; mutex.Unlock() })
+	mdnsAddrTick("192.0.2.69")
+	mutex.Lock()
+	got := accessQRURLLocked("192.0.2.69")
+	mutex.Unlock()
+	if got != "http://pi9696-test.local/#t=ABCD2345" {
+		t.Errorf("QR = %q", got)
+	}
+}
