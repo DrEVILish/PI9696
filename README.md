@@ -145,7 +145,7 @@ Playback path:
 - INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
 - The Status table shows the clock state (`Synced (PTP slave, 8µs)` / `Locking` / `Not synced (…)`) and the TX state in inferno terms (`ready` / `no clock` / `off`)
 - Sample rate must be visible to an inferno controller (netaudio) for both TX and RX (owner requirement). inferno now answers the rate probe (INFERNO-UPSTREAM.md U2, in the pinned fork commit: `netaudio device show` reports it); RX+TX as one instance (U8): the app always runs exactly one inferno instance, in-process, with equal RX and TX
-- Theming: ftl-themes bundles (34 themes, `third_party/ftl-themes` submodule @ `b417e94`, v4.1.0 + unreleased — always track latest upstream; `html[data-theme]` slugs unchanged) —
+- Theming: ftl-themes bundles (46 themes, `third_party/ftl-themes` submodule @ `68b5dde`, v5.2.0 + unreleased — always track latest upstream; `html[data-theme]` slugs unchanged) —
   one linked stylesheet + `html[data-theme]`; the `third_party/ftl-themes/CONTRACT.md`
   is the integration spec. Markup uses the library's own components (`.btn`, `.table`, `.modal`, `.meter`, `.scroll` — v4 dropped the `ftl-` prefix everywhere),
   the shared icon sprite (`/static/themes/icons/<slug>.svg`, per-theme art with a

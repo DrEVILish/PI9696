@@ -2113,7 +2113,8 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
    110px rendered height (see .oled-frame img above). Both dimensions shrink
    with the viewport so the row always fits. Icons come from the theme's
    ftl-themes sprite: stroke inherits each key's color via currentColor. */
-.transport-row{--icon-size:clamp(14px,2.2vw,30px);display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
+.transport-row{display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
+.transport-row .icon{width:clamp(14px,2.2vw,30px);height:clamp(14px,2.2vw,30px);min-width:clamp(14px,2.2vw,30px)}
 .transport-row button{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;display:flex;align-items:center;justify-content:center}
 /* The keys mirror the front panel's lamps (owner, 2026-10-05): each key
    always shows its colour, dim while its LED is off, and glows strongly
@@ -2139,7 +2140,8 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
    - the base button{} rule above only targets <button>, so colors/border
    are repeated here rather than relied on from that selector. Icons are
    .icon strokes inheriting currentColor; the lamp colors the span. */
-.icon-btn{--icon-size:clamp(14px,1.8vw,18px);width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);cursor:pointer;text-decoration:none}
+.icon-btn{width:clamp(1.8em,2.6vw,2.2em);height:clamp(1.8em,2.6vw,2.2em);border-radius:50%;padding:0;display:flex;align-items:center;justify-content:center;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);cursor:pointer;text-decoration:none}
+.icon-btn .icon{width:clamp(14px,1.8vw,18px);height:clamp(14px,1.8vw,18px);min-width:clamp(14px,1.8vw,18px)}
 .icon-btn:hover{border-color:var(--warning);color:var(--warning)}
 /* Conn lamp: broadcast glyph showing the telemetry socket state - glow blue
    while the server pushes, error red while disconnected. A span, not a
@@ -2151,7 +2153,8 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 .icon-btn.conn.off{color:var(--danger)}
 /* Download ALL: a small labeled action in the Recordings heading - text,
    not just an icon, so its function reads at a glance. */
-.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--accent);background:var(--surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em;--icon-size:1em}
+.dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--accent);background:var(--surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em}
+.dl-all .icon{width:1em;height:1em;min-width:1em}
 .dl-all:hover{border-color:var(--accent)}
 
 .grid{display:grid;grid-template-columns:var(--pi-columns,minmax(0,1fr));gap:var(--pi-gap,1.2em)}
@@ -2356,14 +2359,16 @@ main.app-main{display:contents}
 .meter-bar{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0.5em;flex:none;min-width:7.5em}
 .meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--muted);text-transform:uppercase}
 .meter-badge{font-size:0.62em;letter-spacing:0.12em;color:var(--accent);border:1px solid var(--border);border-radius:10px;padding:0.05em 0.6em}
-.meter-caret{--icon-size:1.6em;width:2.9em;height:2.9em;border-radius:50%}
+.meter-caret{width:2.9em;height:2.9em;border-radius:50%}
+.meter-caret .icon{width:1.6em;height:1.6em;min-width:1.6em}
 .meter-body{flex:1;min-width:0;display:flex;align-items:center;overflow:hidden;transition:opacity 0.25s ease}
 .meter-body{justify-content:center}
 .meter-body .meter-bridge{flex:0 1 auto;min-width:0;max-width:100%}
 /* Collapsed, the band disappears entirely: the header's large Meters
    button brings it back. */
 .meter-band.collapsed{display:none}
-.meter-open{display:inline-flex;align-items:center;gap:0.45em;--icon-size:1.4em;height:2.6em;padding:0 0.9em;font-size:0.95em;letter-spacing:0.08em;text-transform:uppercase}
+.meter-open{display:inline-flex;align-items:center;gap:0.45em;height:2.6em;padding:0 0.9em;font-size:0.95em;letter-spacing:0.08em;text-transform:uppercase}
+.meter-open .icon{width:1.4em;height:1.4em;min-width:1.4em}
 .meter-open[hidden]{display:none}
 /* In the header's bottom-right corner, clear of the transport keys. */
 header.deck .meter-open{position:absolute;right:clamp(0.5em,2vw,1.5em);bottom:0.7em}
@@ -2371,7 +2376,8 @@ header.deck .meter-open{position:absolute;right:clamp(0.5em,2vw,1.5em);bottom:0.
 /* Footer: disk space and record time, plus the System pane toggle. */
 .app-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;display:flex;align-items:center;gap:var(--space-m,1em);padding:0.45em 1.5em;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);font-size:0.85em;color:var(--muted)}
 .footer-disk b{color:var(--text);font-weight:normal}
-.sys-toggle{margin-left:auto;display:inline-flex;align-items:center;gap:0.5em;--icon-size:1.3em;padding:0.35em 1em;font-size:0.95em}
+.sys-toggle{margin-left:auto;display:inline-flex;align-items:center;gap:0.5em;padding:0.35em 1em;font-size:0.95em}
+.sys-toggle .icon{width:1.3em;height:1.3em;min-width:1.3em}
 .sys-toggle svg{transform:rotate(180deg);transition:transform 0.2s ease}
 .sys-toggle[aria-expanded="true"] svg{transform:none}
 /* System: a full-width pane that pops up above the footer; graphs flow
