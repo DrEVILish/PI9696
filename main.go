@@ -3646,11 +3646,47 @@ func validatePlaybackFile(file string) error {
 		return nil
 	}
 	wantRate := sampleRates[sampleRateIdx]
-	if row.SampleRate*1000 != wantRate || row.Channels != channelCount {
-		return fmt.Errorf("take is %dkHz/%dch but the device is set to %dkHz/%dch - match the sample rate and channel count to play it",
-			row.SampleRate, row.Channels, wantRate/1000, channelCount)
+	m := &playbackMismatch{
+		rate:  row.SampleRate*1000 != wantRate,
+		chans: row.Channels != channelCount,
 	}
-	return nil
+	switch {
+	case m.rate && m.chans:
+		m.detail = fmt.Sprintf("take is %dkHz/%dch but the device is set to %dkHz/%dch - match the sample rate and channel count to play it",
+			row.SampleRate, row.Channels, wantRate/1000, channelCount)
+	case m.rate:
+		m.detail = fmt.Sprintf("take is %dkHz but the device is set to %dkHz - match the sample rate to play it",
+			row.SampleRate, wantRate/1000)
+	case m.chans:
+		m.detail = fmt.Sprintf("take is %dch but the device is set to %dch - match the channel count to play it",
+			row.Channels, channelCount)
+	default:
+		return nil
+	}
+	return m
+}
+
+// playbackMismatch is validatePlaybackFile's refusal: which of the take's
+// sample rate and channel count differ from the device's, with the detail
+// for the log and the dashboard.
+type playbackMismatch struct {
+	rate, chans bool
+	detail      string
+}
+
+func (m *playbackMismatch) Error() string { return m.detail }
+
+// panelNotice is the OLED's short form (one 256px line). Owner wording:
+// SAMPLE RATE MISMATCH / CHANNEL COUNT MISMATCH, naming the actual cause.
+func (m *playbackMismatch) panelNotice() string {
+	switch {
+	case m.rate && m.chans:
+		return "RATE + CHANNEL MISMATCH"
+	case m.rate:
+		return "SAMPLE RATE MISMATCH"
+	default:
+		return "CHANNEL COUNT MISMATCH"
+	}
 }
 
 // abortPlaybackStart unwinds a playback start that failed after standing the
@@ -3683,7 +3719,11 @@ func startPlayback() {
 		logErrorf("startPlayback refused: %v", err)
 		// OLED lines are 256px wide and overflow silently, so the panel gets
 		// the short form while the log and the dashboard get the detail.
-		showSysNotice("Rate mismatch")
+		notice := "FORMAT MISMATCH"
+		if m, ok := err.(*playbackMismatch); ok {
+			notice = m.panelNotice()
+		}
+		showSysNotice(notice)
 		showWebNotice(err.Error())
 		return
 	}

@@ -197,3 +197,39 @@ func TestPlaybackTableButtonLoadsOnly(t *testing.T) {
 	onButtonPress(hardware.StopButton)
 	waitForPlaybackIdle(t)
 }
+
+// Owner wording: a refused take names the cause - SAMPLE RATE MISMATCH or
+// CHANNEL COUNT MISMATCH (both when both differ), not a generic rate error.
+func TestPlaybackMismatchNamesTheCause(t *testing.T) {
+	mutex.Lock()
+	origRate, origCh := sampleRateIdx, channelCount
+	sampleRateIdx, channelCount = 1, 2 // 48 kHz, 2 ch
+	mutex.Unlock()
+	t.Cleanup(func() { mutex.Lock(); sampleRateIdx, channelCount = origRate, origCh; mutex.Unlock() })
+	dir := t.TempDir()
+	for name, want := range map[string]string{
+		"recording_20260101_000000_ch2_44kHz.wav": "SAMPLE RATE MISMATCH",
+		"recording_20260101_000000_ch8_48kHz.wav": "CHANNEL COUNT MISMATCH",
+		"recording_20260101_000000_ch8_96kHz.wav": "RATE + CHANNEL MISMATCH",
+		"recording_20260101_000000_ch2_48kHz.wav": "",
+	} {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, make([]byte, 44), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := validatePlaybackFile(p)
+		if want == "" {
+			if err != nil {
+				t.Errorf("%s refused: %v", name, err)
+			}
+			continue
+		}
+		m, ok := err.(*playbackMismatch)
+		if !ok {
+			t.Fatalf("%s: err = %v, want a mismatch", name, err)
+		}
+		if got := m.panelNotice(); got != want {
+			t.Errorf("%s: panel shows %q, want %q", name, got, want)
+		}
+	}
+}

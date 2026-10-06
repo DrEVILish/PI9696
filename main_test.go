@@ -5782,6 +5782,10 @@ func TestSysNoticesFitOneOLEDLine(t *testing.T) {
 		"REBOOT FAILED - SEE LOG",
 		fmt.Sprintf("COPY FAILED: %d FILES", 99999),
 		"COPY COMPLETE",
+		"SAMPLE RATE MISMATCH",
+		"CHANNEL COUNT MISMATCH",
+		"RATE + CHANNEL MISMATCH",
+		"FORMAT MISMATCH",
 	} {
 		if w := hwManager.GetTextWidth(msg); w > 256 {
 			t.Errorf("notice %q is %dpx, wider than the 256px panel", msg, w)
