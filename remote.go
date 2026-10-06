@@ -2311,12 +2311,12 @@ main.app-main{display:contents}
 /* Collapsed, the band disappears entirely: the header's large Meters
    button brings it back. */
 .meter-band.collapsed{display:none}
-.meter-open{display:inline-flex;align-items:center;gap:0.45em;height:2.6em;padding:0 0.9em;font-size:0.95em;letter-spacing:0.08em;text-transform:uppercase}
-.meter-open .icon{width:1.4em;height:1.4em;min-width:1.4em}
+/* Collapsed meters: the band's own label + caret, at the header's left
+   edge, so opening matches the collapse control. */
 .meter-open[hidden]{display:none}
 /* In the header's bottom-right corner, clear of the transport keys. */
-header.deck .meter-open{position:absolute;right:clamp(0.5em,2vw,1.5em);bottom:0.7em}
-@media (max-width:800px){header.deck .meter-open{position:static;margin-left:auto}}
+header.deck .meter-open{position:absolute;left:clamp(0.5em,2vw,1.5em);top:50%;transform:translateY(-50%);min-width:0}
+@media (max-width:800px){header.deck .meter-open{position:static;transform:none;flex-direction:row;align-items:center}}
 /* Footer: disk space and record time, plus the System pane toggle. */
 .app-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;display:flex;align-items:center;gap:var(--space-m,1em);padding:0.45em 1.5em;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);font-size:0.85em;color:var(--muted)}
 .footer-disk{display:inline-flex;align-items:center;gap:0.45em;flex-wrap:wrap}
@@ -2411,9 +2411,12 @@ html[data-theme] body{background:transparent}
     <button hx-post="/api/input/encoder/right" aria-label="Encoder right" title="Encoder right"><svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-right"/></svg></button>
   </div>
   <div class="transport-row" id="transportRow"></div>
-  <button class="meter-open btn btn-secondary" id="meterOpen" type="button" title="Show the level meters" aria-controls="meterFooter" aria-expanded="false" hidden>
-    <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-volume"/></svg><span>Meters</span>
-  </button>
+  <div class="meter-open meter-bar" id="meterOpen" hidden>
+    <span class="meter-title">Level meters</span>
+    <button class="icon-btn meter-caret" id="meterOpenBtn" type="button" title="Show the level meters" aria-label="Show the level meters" aria-controls="meterFooter" aria-expanded="false">
+      <svg class="icon" aria-hidden="true" style="transform:rotate(-90deg)"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
+    </button>
+  </div>
   <div class="header-actions">
     <span class="conn" id="connLamp" role="status" title="Server disconnected" aria-label="Server disconnected">
       <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-broadcast"/></svg><span class="lamp is-error" aria-hidden="true"></span>
@@ -2904,9 +2907,11 @@ if (meterToggle && meterFooter && meterBody && meterCaret) {
   var collapsed = false;
   try { collapsed = localStorage.getItem('pi9696_meterCollapsed') === '1'; } catch (e) {}
   var meterOpen = document.getElementById('meterOpen');
+  var meterOpenBtn = document.getElementById('meterOpenBtn');
   function applyCollapse() {
     meterFooter.classList.toggle('collapsed', collapsed);
-    if (meterOpen) { meterOpen.hidden = !collapsed; meterOpen.setAttribute('aria-expanded', !collapsed); }
+    if (meterOpen) meterOpen.hidden = !collapsed;
+    if (meterOpenBtn) meterOpenBtn.setAttribute('aria-expanded', !collapsed);
     meterCaret.style.transform = collapsed ? 'rotate(-90deg)' : '';
     meterToggle.setAttribute('aria-expanded', !collapsed);
   }
@@ -2917,7 +2922,7 @@ if (meterToggle && meterFooter && meterBody && meterCaret) {
     applyCollapse();
   }
   meterToggle.addEventListener('click', toggleMeters);
-  if (meterOpen) meterOpen.addEventListener('click', toggleMeters);
+  if (meterOpenBtn) meterOpenBtn.addEventListener('click', toggleMeters);
 }
 
 // The meter band is as tall as the header (owner layout): measure the

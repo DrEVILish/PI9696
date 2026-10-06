@@ -774,7 +774,7 @@ func TestDashboardOwnerLayout(t *testing.T) {
 			t.Errorf("dashboard still has %q", gone)
 		}
 	}
-	for _, want := range []string{`id="meterToggle"`, `.meter-caret{width:2.9em;height:2.9em`, `.meter-caret .icon{width:1.6em`, `id="meterOpen"`, `.meter-band.collapsed{display:none}`, `id="sysToggle"`, `class="sys-graph"`, `repeat(auto-fill,minmax(`, `var TELE_H = 112, TELE_H_SMALL = 70;`, `id="sysLamp" cx="54" cy="255" r="5"`, `class="transport-deck media-deck"`} {
+	for _, want := range []string{`id="meterToggle"`, `.meter-caret{width:2.9em;height:2.9em`, `.meter-caret .icon{width:1.6em`, `<div class="meter-open meter-bar" id="meterOpen" hidden>`, `<button class="icon-btn meter-caret" id="meterOpenBtn"`, `header.deck .meter-open{position:absolute;left:`, `.meter-band.collapsed{display:none}`, `id="sysToggle"`, `class="sys-graph"`, `repeat(auto-fill,minmax(`, `var TELE_H = 112, TELE_H_SMALL = 70;`, `id="sysLamp" cx="54" cy="255" r="5"`, `class="transport-deck media-deck"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lacks %q", want)
 		}
