@@ -2345,7 +2345,10 @@ header.deck .meter-open{position:absolute;left:clamp(0.5em,2vw,1.5em);top:50%;tr
 .meter-row .strip-num{font-size:0.62rem;line-height:1;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
 .meter-row .strip-legend{--strip-width:2.3rem}
 .meter-row .scribble{text-align:center;padding:0.12rem 0.1rem}
-.meter-row .scribble-name{font-size:0.56rem;letter-spacing:0;white-space:nowrap;text-overflow:ellipsis}
+.meter-row .scribble-name{font-size:0.56rem;letter-spacing:0;white-space:nowrap;text-overflow:ellipsis;cursor:text}
+/* Renaming: the input pops out wider than the strip, over its neighbours. */
+.meter-row .scribble{position:relative}
+.meter-row .chan-label-input{position:absolute;left:50%;bottom:0;transform:translateX(-50%);z-index:5;width:9rem;font-size:0.75rem;padding:0.15em 0.35em;text-transform:none}
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
 .sys-graphs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr));gap:0.6em 1.4em}
@@ -3001,14 +3004,70 @@ function ensureChannels(n, names) {
       '<div class="scribble"><span class="scribble-name"></span></div>';
     strip.querySelector('.meter').setAttribute('aria-label', 'Channel ' + i + ' ' + name + ' level, dBFS');
     strip.querySelector('.strip-num').textContent = i;
-    strip.querySelector('.scribble-name').textContent = name;
-    strip.querySelector('.scribble-name').title = name;
+    var nameEl = strip.querySelector('.scribble-name');
+    nameEl.textContent = name;
+    nameEl.title = name + ' - double-click to rename';
+    nameEl.tabIndex = 0;
+    nameEl.dataset.ch = i;
     row.appendChild(strip);
   }
   chCount = n;
   chNames = key;
   scaleFloor = null; // the new rows' legends are empty
 }
+
+// Double-click a channel's name to relabel it (Enter or F2 from the
+// keyboard): Enter saves, Escape cancels, an empty name goes back to
+// inferno's name. Owner rule: this is the unit's own label (POST
+// /api/channels/label) - inferno's channel names are never changed.
+function editChannelLabel(nameEl) {
+  if (!nameEl || nameEl.parentNode.querySelector('input')) return;
+  var ch = nameEl.dataset.ch;
+  var old = nameEl.textContent;
+  var input = document.createElement('input');
+  input.className = 'input chan-label-input';
+  input.value = old;
+  input.maxLength = 32;
+  input.setAttribute('aria-label', 'Name for channel ' + ch + ' (empty: the inferno name)');
+  // On the .scribble, not in the name: the name clips its overflow.
+  nameEl.style.visibility = 'hidden';
+  nameEl.parentNode.appendChild(input);
+  input.focus();
+  input.select();
+  var done = false;
+  function finish(save) {
+    if (done) return;
+    done = true;
+    var v = input.value.trim();
+    input.remove();
+    nameEl.style.visibility = '';
+    nameEl.focus();
+    if (!save || v === old) return;
+    nameEl.textContent = v || old;
+    fetch('/api/channels/label', { method: 'POST', body: new URLSearchParams({ channel: ch, name: v }) })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(j) {
+        nameEl.textContent = j ? j.name : old;
+        if (j) chNames = ''; // rebuild the strips with the new names on the next tick
+      })
+      .catch(function() { nameEl.textContent = old; });
+  }
+  input.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+    else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', function() { finish(true); });
+}
+chMeters.addEventListener('dblclick', function(ev) {
+  editChannelLabel(ev.target.closest('.strip:not(.strip-legend) .scribble-name'));
+});
+chMeters.addEventListener('keydown', function(ev) {
+  if ((ev.key === 'Enter' || ev.key === 'F2') && ev.target.matches('.scribble-name')) {
+    ev.preventDefault();
+    editChannelLabel(ev.target);
+  }
+});
 
 function applyMeter(m) {
   FLOOR = m.floorDB;
@@ -4055,7 +4114,7 @@ func jsonSafeDB(v float64) float64 {
 // names, which are read (cached) without the app mutex.
 func currentMeterResponse() meterResponse {
 	resp := buildMeterLevels()
-	resp.ChannelNames = liveRxChannelNames(len(resp.Channels))
+	resp.ChannelNames = displayChannelNames(len(resp.Channels))
 	return resp
 }
 
@@ -4709,6 +4768,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("POST /api/playback/select", requireAuth(handleAPIPlaybackSelect))
 	mux.HandleFunc("GET /api/recordings/channels", requireAuth(handleAPIRecordingChannels))
 	mux.HandleFunc("POST /api/recordings/channels", requireAuth(handleAPIRecordingChannels))
+	mux.HandleFunc("POST /api/channels/label", requireAuth(handleAPIChannelLabel))
 	mux.HandleFunc("GET /download-all", requireAuth(handleDownloadAll))
 	mux.HandleFunc("GET /download/{filepath...}", requireAuth(handleDownload))
 

@@ -112,7 +112,15 @@ func infernoRxChannels(n int) []recChannel {
 // current channel names. A failure only costs the names (logged): the
 // take itself must never depend on it.
 func snapshotRecordingChannels(wav string, channels int) {
-	if err := writeRecordingChannels(wav, infernoRxChannels(channels)); err != nil {
+	chans := infernoRxChannels(channels)
+	// The WebUI's channel labels name the take's channels (Device keeps
+	// inferno's name). Called from startRecording under the app mutex.
+	for i := range chans {
+		if l, ok := channelLabels[chans[i].Number]; ok {
+			chans[i].Name = l
+		}
+	}
+	if err := writeRecordingChannels(wav, chans); err != nil {
 		logWarnf("channel names for %s: %v", filepath.Base(wav), err)
 	}
 }

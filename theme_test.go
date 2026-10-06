@@ -840,6 +840,8 @@ func TestDashboardMetersUseConsoleComponents(t *testing.T) {
 		`class="strip strip-legend"`, `class="scale is-meter"`,
 		// number above the meter, name below it
 		`'<span class="strip-num"></span>' +`,
+		// double-click a name to relabel the channel (not inferno's name)
+		`chMeters.addEventListener('dblclick'`, `fetch('/api/channels/label'`,
 		`meter meter-v is-segmented`, `role=`, `aria-valuemax=`,
 		`scribble-name`, `m.channelNames`, `setAttribute('aria-valuenow', now)`,
 	} {

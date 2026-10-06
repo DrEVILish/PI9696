@@ -162,6 +162,7 @@ func applyConfigSettings(c *PersistedConfig) {
 	if c.SampleRateIdx >= 0 && c.SampleRateIdx < len(sampleRates) {
 		sampleRateIdx = c.SampleRateIdx
 	}
+	channelLabels = validChannelLabels(c.ChannelLabels)
 	if c.ChannelCount >= 1 && c.ChannelCount <= MaxChannelCount {
 		channelCount = c.ChannelCount
 	}
@@ -219,6 +220,7 @@ func applyConfigSettings(c *PersistedConfig) {
 func currentConfig() PersistedConfig {
 	return PersistedConfig{
 		DeviceName:        deviceName,
+		ChannelLabels:     copyChannelLabels(channelLabels),
 		SampleRateIdx:     sampleRateIdx,
 		ChannelCount:      channelCount,
 		TagPresetIdx:      tagPresetIdx,
@@ -1167,6 +1169,9 @@ type PersistedConfig struct {
 	WifiEnabled  bool   `json:"wifiEnabled"`
 	WifiSSID     string `json:"wifiSSID"`
 	WifiPassword string `json:"wifiPassword"`
+	// ChannelLabels are the WebUI's names for input channels (number ->
+	// label, see channellabels.go); absent means inferno's names.
+	ChannelLabels map[int]string `json:"channelLabels,omitempty"`
 }
 
 // wifiInited tracks whether applyWifiConfig has been run at least once so the
