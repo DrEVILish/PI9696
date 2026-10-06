@@ -836,7 +836,7 @@ func TestDashboardMetersUseConsoleComponents(t *testing.T) {
 	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
 	for _, want := range []string{
 		`class="meter-rows" id="chMeters" role="group"`,
-		`row.className = 'mixer meter-row'`, `var METERS_PER_ROW = 16;`,
+		`row.className = 'mixer meter-group'`, `var METERS_PER_BANK = 8;`, `.meter-rows{display:flex;flex-wrap:wrap;`,
 		`class="strip strip-legend"`, `class="scale is-meter"`,
 		// number above the meter, name below it
 		`'<span class="strip-num"></span>' +`,

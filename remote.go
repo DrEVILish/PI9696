@@ -2330,25 +2330,26 @@ header.deck .meter-open{position:absolute;left:clamp(0.5em,2vw,1.5em);top:50%;tr
 .sys-pane{position:fixed;left:0;right:0;bottom:var(--footer-h,2.6em);z-index:149;max-height:72vh;overflow-y:auto;padding:0.6em 1.5em 1em;background:rgba(3,8,15,0.96);border-top:1px solid var(--border);box-shadow:0 -10px 40px rgba(0,180,255,0.14)}
 .sys-pane[hidden]{display:none}
 .sys-pane h2{margin:0.2em 0 0.4em;font-size:0.8em;letter-spacing:0.25em;text-transform:uppercase;color:var(--muted)}
-/* The meter bank is ftl-themes' console (v5): rows of up to 16 .strip
-   channels (owner layout 2026-10-06: 16 per row, more rows instead of
-   scrolling), each row a .mixer led by its own .scale.is-meter legend.
+/* The meter bank is ftl-themes' console (v5): banks of 8 .strip channels
+   (owner layout 2026-10-06: more rows instead of scrolling, broken only
+   between banks of 8 so no display width wastes space), each bank a
+   .mixer led by its own .scale.is-meter legend; the banks wrap.
    A strip is the channel number, a segmented .meter.meter-v in a
    .strip-fader, then a .scribble with the channel's name. The app sets
    only sizes: strips barely wider than the meter (no gaps between
    meters), and a fader length that keeps one row as tall as the header.
    Levels, peaks and the dB ticks are placed with the same taper (vuPct). */
-.meter-rows{display:flex;flex-direction:column;align-items:center;gap:4px;max-width:100%}
-.meter-row{--strip-width:2.6rem;--mixer-gap:2px;--meter-thickness:1rem;--fader-length:calc(var(--deck-h,150px) - 5.4rem);flex:none;max-width:100%;overflow-x:visible}
-.meter-row .strip{padding:0.25rem 0.1rem;gap:0.2rem}
-.meter-row .strip-fader{margin-top:0}
-.meter-row .strip-num{font-size:0.62rem;line-height:1;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
-.meter-row .strip-legend{--strip-width:2.3rem}
-.meter-row .scribble{text-align:center;padding:0.12rem 0.1rem}
-.meter-row .scribble-name{font-size:0.56rem;letter-spacing:0;white-space:nowrap;text-overflow:ellipsis;cursor:text}
+.meter-rows{display:flex;flex-wrap:wrap;justify-content:center;align-items:flex-start;gap:4px;max-width:100%}
+.meter-group{--strip-width:2.6rem;--mixer-gap:2px;--meter-thickness:1rem;--fader-length:calc(var(--deck-h,150px) - 5.4rem);flex:none;max-width:100%;overflow-x:visible}
+.meter-group .strip{padding:0.25rem 0.1rem;gap:0.2rem}
+.meter-group .strip-fader{margin-top:0}
+.meter-group .strip-num{font-size:0.62rem;line-height:1;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
+.meter-group .strip-legend{--strip-width:2.3rem}
+.meter-group .scribble{text-align:center;padding:0.12rem 0.1rem}
+.meter-group .scribble-name{font-size:0.56rem;letter-spacing:0;white-space:nowrap;text-overflow:ellipsis;cursor:text}
 /* Renaming: the input pops out wider than the strip, over its neighbours. */
-.meter-row .scribble{position:relative}
-.meter-row .chan-label-input{position:absolute;left:50%;bottom:0;transform:translateX(-50%);z-index:5;width:9rem;font-size:0.75rem;padding:0.15em 0.35em;text-transform:none}
+.meter-group .scribble{position:relative}
+.meter-group .chan-label-input{position:absolute;left:50%;bottom:0;transform:translateX(-50%);z-index:5;width:9rem;font-size:0.75rem;padding:0.15em 0.35em;text-transform:none}
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
 .sys-graphs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr));gap:0.6em 1.4em}
@@ -2386,7 +2387,7 @@ header.deck .meter-open{position:absolute;left:clamp(0.5em,2vw,1.5em);top:50%;tr
   .meter-title{font-size:0.6em}
   .meter-badge{display:none}
   .meter-band{height:auto;flex-direction:column}
-  .meter-row{--fader-length:7rem}
+  .meter-group{--fader-length:7rem}
   .meter-bar{flex-direction:row;align-items:center}
 }
 
@@ -2977,11 +2978,11 @@ var meterBadge = document.getElementById('meterBadge');
 
 var chMeters = document.getElementById('chMeters');
 var chCount = -1, chNames = '';
-// ensureChannels builds the meter rows: up to METERS_PER_ROW console strips
-// per row (ftl-themes .strip: channel number, segmented .meter.meter-v,
-// .scribble with the name), each row led by its own legend strip. Rebuilt
+// ensureChannels builds the meter banks: up to METERS_PER_BANK console
+// strips per bank (ftl-themes .strip: channel number, segmented .meter.meter-v,
+// .scribble with the name), each bank led by its own legend strip. Rebuilt
 // only when the count or the names change.
-var METERS_PER_ROW = 16;
+var METERS_PER_BANK = 8;
 var LEGEND_STRIP = '<section class="strip strip-legend" aria-hidden="true"><span class="strip-num">&nbsp;</span>' +
   '<div class="strip-fader"><div class="scale is-meter"></div></div><div class="scribble"><span class="scribble-name">dBFS</span></div></section>';
 function ensureChannels(n, names) {
@@ -2990,9 +2991,9 @@ function ensureChannels(n, names) {
   chMeters.innerHTML = '';
   var row = null;
   for (var i = 1; i <= n; i++) {
-    if ((i - 1) % METERS_PER_ROW === 0) {
+    if ((i - 1) % METERS_PER_BANK === 0) {
       row = document.createElement('div');
-      row.className = 'mixer meter-row';
+      row.className = 'mixer meter-group';
       row.innerHTML = LEGEND_STRIP;
       chMeters.appendChild(row);
     }
