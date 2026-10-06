@@ -17,8 +17,11 @@ func TestControllerRenameAdoptsRequestedName(t *testing.T) {
 	orig := infernoNameRequestPath
 	infernoNameRequestPath = filepath.Join(t.TempDir(), "name-request")
 	t.Cleanup(func() {
+		// Quiesce first: the restart the rename queued reads
+		// infernoNameRequestPath (applyUnifiedInfernoEnv) on the worker, so
+		// restoring it before the worker is idle was a data race (-race).
+		quiesceInfernoWorker(t)
 		infernoNameRequestPath = orig
-		quiesceInfernoWorker(t) // the restart the rename queued
 	})
 	request := func(content string) string {
 		t.Helper()
