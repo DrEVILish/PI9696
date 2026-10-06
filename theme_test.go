@@ -728,15 +728,19 @@ func TestDashboardTransportLampsFollowState(t *testing.T) {
 	mux := newRemoteMux()
 	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
 	for _, want := range []string{
-		// dim in their own colour while the LED is off...
-		`.transport-row .record,.transport-row .stop,.transport-row .play{color:color-mix(in srgb,var(--key-c) 42%,transparent)`,
-		// ...and a strong glow when it is on
-		`.transport-row.is-rec .record,.transport-row.is-play .play,.transport-row.is-pause .play,.transport-row.is-stop .stop{color:var(--key-c)`,
-		`.transport-row.is-pause .play{animation:pi-lamp-flash`,
-		`@media (prefers-reduced-motion:reduce){.transport-row.is-pause .play{animation:none`,
+		// ftl-themes .key, lit through aria-pressed
+		`function transportKey(cls, post, title, label, lit)`,
+		`aria-pressed="' + (lit ? 'true' : 'false')`,
+		`transportKey('key-mute record'`, `transportKey('key-sel stop'`, `'key-on play'`,
+		// dim in the key's own colour while off, strong glow when on
+		`--key-fg:color-mix(in srgb,var(--key-lit) 45%,transparent)`,
+		`--key-glow:0 0 0.9em 0.15em color-mix(in srgb,var(--key-lit) 75%,transparent)`,
+		`.transport-row .key.is-flashing{animation:pi-lamp-flash`,
+		`@media (prefers-reduced-motion:reduce){.transport-row .key.is-flashing{animation:none`,
 		`rec: !!m.recording`,
-		`(transportState.rec ? ' is-rec' : '')`,
-		`(stopped ? ' is-stop' : '')`,
+		// the theme is in @layer ui: an unlayered app button rule would
+		// override every .key style, so the generic rules must skip .key
+		`:where(button:not(.key)){`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lacks %q", want)

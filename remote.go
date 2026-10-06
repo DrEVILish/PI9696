@@ -2070,10 +2070,10 @@ body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,
 h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 var(--space-s,0.8em)}
 a{color:var(--accent)}
 input{font-family:inherit;background:var(--input-bg,#08192b);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
-button{font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
-button:hover{border-color:var(--accent);box-shadow:0 0 8px var(--accent)}
-button:active{background:var(--surface-2,#0f2a44)}
-button:disabled{opacity:0.35;cursor:default;box-shadow:none}
+:where(button:not(.key)){font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
+:where(button:not(.key)):hover{border-color:var(--accent);box-shadow:0 0 8px var(--accent)}
+:where(button:not(.key)):active{background:var(--surface-2,#0f2a44)}
+:where(button:not(.key)):disabled{opacity:0.35;cursor:default;box-shadow:none}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
 .ok{color:var(--success)}
 .err{color:var(--danger)}
@@ -2116,24 +2116,25 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 .transport-row{display:flex;gap:clamp(0.2em,0.5vw,0.6em)}
 .transport-row .icon{width:clamp(14px,2.2vw,30px);height:clamp(14px,2.2vw,30px);min-width:clamp(14px,2.2vw,30px)}
 .transport-row button{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;display:flex;align-items:center;justify-content:center}
-/* The keys mirror the front panel's lamps (owner, 2026-10-05): each key
-   always shows its colour, dim while its LED is off, and glows strongly
-   when it is on - REC while a take records, PLAY while playing (flashing
-   while paused, the panel lamp's ~2 Hz), STOP while the transport is
-   stopped. The row carries the state (is-rec / is-play / is-pause /
-   is-stop, set by renderTransportRow). */
-.transport-row .record{--key-c:var(--danger)}
-.transport-row .stop{--key-c:var(--accent)}
-.transport-row .play{--key-c:var(--success)}
-.transport-row .record,.transport-row .stop,.transport-row .play{color:color-mix(in srgb,var(--key-c) 42%,transparent);border-color:color-mix(in srgb,var(--key-c) 30%,var(--border));background:color-mix(in srgb,var(--key-c) 5%,transparent);box-shadow:none;transition:box-shadow .15s,color .15s,background .15s}
-.transport-row.is-rec .record,.transport-row.is-play .play,.transport-row.is-pause .play,.transport-row.is-stop .stop{color:var(--key-c);border-color:var(--key-c);background:color-mix(in srgb,var(--key-c) 24%,transparent);box-shadow:0 0 0.9em 0.15em color-mix(in srgb,var(--key-c) 75%,transparent),0 0 2.4em 0.3em color-mix(in srgb,var(--key-c) 35%,transparent),inset 0 0 0.8em color-mix(in srgb,var(--key-c) 45%,transparent)}
-.transport-row.is-rec .record svg,.transport-row.is-play .play svg,.transport-row.is-pause .play svg,.transport-row.is-stop .stop svg{filter:drop-shadow(0 0 0.35em var(--key-c))}
-.transport-row.is-pause .play{animation:pi-lamp-flash 0.5s steps(1,end) infinite alternate}
-@keyframes pi-lamp-flash{to{color:color-mix(in srgb,var(--key-c) 42%,transparent);border-color:color-mix(in srgb,var(--key-c) 30%,var(--border));background:color-mix(in srgb,var(--key-c) 5%,transparent);box-shadow:none}}
-@media (prefers-reduced-motion:reduce){.transport-row.is-pause .play{animation:none;border-style:dashed}}
+/* The deck keys are ftl-themes' .key (v5): .key-mute (REC, red),
+   .key-sel (STOP, accent) and .key-on (PLAY, green), lit through
+   aria-pressed - REC while a take records, PLAY while playing (flashing
+   while paused, the panel lamp's ~2 Hz), STOP while stopped. Owner rule:
+   a key always shows its colour, dim while its LED is off, and glows
+   strongly when on - so the off look and the glow are set through the
+   component's own tokens, mixed from each key's --key-lit. */
+.transport-row .key{width:clamp(30px,4.6vw,66px);height:clamp(30px,4.6vw,66px);padding:0;font-size:inherit;cursor:pointer;
+  --key-fg:color-mix(in srgb,var(--key-lit) 45%,transparent);
+  --key-border:color-mix(in srgb,var(--key-lit) 32%,var(--border));
+  --key-bg:color-mix(in srgb,var(--key-lit) 6%,var(--surface-2));
+  --key-glow:0 0 0.9em 0.15em color-mix(in srgb,var(--key-lit) 75%,transparent),0 0 2.4em 0.3em color-mix(in srgb,var(--key-lit) 35%,transparent)}
+.transport-row .key[aria-pressed="true"] svg{filter:drop-shadow(0 0 0.3em var(--key-lit-fg))}
+.transport-row .key.is-flashing{animation:pi-lamp-flash 0.5s steps(1,end) infinite alternate}
+@keyframes pi-lamp-flash{to{background:var(--key-bg);color:var(--key-fg);border-color:var(--key-border);box-shadow:none}}
+@media (prefers-reduced-motion:reduce){.transport-row .key.is-flashing{animation:none;border-style:dashed}}
 /* Text mode: the same transport keys but labelled instead of icon glyphs.
    Buttons stretch to fit and the label takes the accent colour the icon had. */
-.transport-row.text button{width:auto;min-width:clamp(2em,3.2vw,3.4em);font-size:clamp(0.55em,0.95vw,0.85em);letter-spacing:0.08em;padding:0 0.3em}
+.transport-row.text .key{width:auto;min-width:clamp(2em,3.2vw,3.4em);font-size:clamp(0.55em,0.95vw,0.85em);letter-spacing:0.08em;padding:0 0.3em}
 
 .header-actions{position:absolute;top:0.8em;right:clamp(0.5em,2vw,1.5em);display:flex;gap:0.5em}
 /* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
@@ -2671,8 +2672,13 @@ var transportState = { playing: false, paused: false, rec: false };
 // row's per-key colors apply to the stroke with no fill overrides.
 var SPRITE = {{.IconSprite}};
 function iconGlyph(name) { return '<svg class="icon" aria-hidden="true"><use href="' + SPRITE + '#' + name + '"/></svg>'; }
-function transportBtn(cls, post, title, label) {
-  return '<button class="btn ' + cls + '" hx-post="' + post + '" title="' + title + '">' + label + '</button>';
+// transportKey renders one deck key as ftl-themes' .key (a backlit
+// console key): lit via aria-pressed, which also tells assistive tech the
+// lamp state. post is the hx-post target, or '' for the Stop key (handled
+// by the stop-confirm listener via data-stop).
+function transportKey(cls, post, title, label, lit) {
+  return '<button class="key ' + cls + '"' + (post ? ' hx-post="' + post + '"' : ' data-stop') +
+    ' title="' + title + '" aria-pressed="' + (lit ? 'true' : 'false') + '">' + label + '</button>';
 }
 function renderTransportRow() {
   var row = document.getElementById('transportRow');
@@ -2680,17 +2686,18 @@ function renderTransportRow() {
   // (paused: resume). Its lamp shows the state (see .transport-row CSS).
   var pause = transportState.playing && !transportState.paused;
   var title = transportState.paused ? 'Resume' : (transportState.playing ? 'Pause' : 'Play');
+  var stopped = !transportState.rec && !transportState.playing && !transportState.paused;
+  var playCls = 'key-on play' + (pause ? ' pause' : '') + (transportState.paused ? ' is-flashing' : '');
   var html = '';
   if (ICON_MODE) {
-    html += transportBtn('record', '/api/input/button/record', 'Record', iconGlyph('icon-player-record'));
-    html += '<button class="btn stop" data-stop title="Stop">' + iconGlyph('icon-player-stop') + '</button>';
-    html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, iconGlyph(pause ? 'icon-player-pause' : 'icon-player-play'));
+    html += transportKey('key-mute record', '/api/input/button/record', 'Record', iconGlyph('icon-player-record'), transportState.rec);
+    html += transportKey('key-sel stop', '', 'Stop', iconGlyph('icon-player-stop'), stopped);
+    html += transportKey(playCls, '/api/input/button/play', title, iconGlyph(pause ? 'icon-player-pause' : 'icon-player-play'), transportState.playing || transportState.paused);
   } else {
-    html += transportBtn('record', '/api/input/button/record', 'Record', 'REC');
-    html += '<button class="btn stop" data-stop title="Stop">STOP</button>';
-    html += transportBtn(pause ? 'play pause' : 'play', '/api/input/button/play', title, pause ? 'II' : '>');
+    html += transportKey('key-mute record', '/api/input/button/record', 'Record', 'REC', transportState.rec);
+    html += transportKey('key-sel stop', '', 'Stop', 'STOP', stopped);
+    html += transportKey(playCls, '/api/input/button/play', title, pause ? 'II' : '>', transportState.playing || transportState.paused);
   }
-  var stopped = !transportState.rec && !transportState.playing && !transportState.paused;
   row.className = 'transport-row transport' + (ICON_MODE ? '' : ' text') + (transportState.rec ? ' is-rec' : '') +
     (transportState.paused ? ' is-pause' : (transportState.playing ? ' is-play' : '')) + (stopped ? ' is-stop' : '');
   row.innerHTML = html;
