@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // Per-recording channel names.
@@ -324,4 +325,34 @@ func handleAPIRecordingChannels(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(recChannelsFile{Channels: recordingChannels(f)})
+}
+
+// rxNamesCache keeps the unit's RX channel names for the meter tick (10 Hz
+// per dashboard), re-read only when inferno's state files change.
+var rxNamesCache struct {
+	sync.Mutex
+	key   string
+	names []string
+}
+
+// liveRxChannelNames returns the first n RX channel names as inferno has
+// them now (as a controller named them; default "RX <n>").
+func liveRxChannelNames(n int) []string {
+	key := strconv.Itoa(n)
+	for _, f := range []string{"rx_channels.toml", "rx_subscriptions.toml"} {
+		if fi, err := os.Stat(filepath.Join(infernoStateDir, f)); err == nil {
+			key += "|" + strconv.FormatInt(fi.ModTime().UnixNano(), 10)
+		}
+	}
+	rxNamesCache.Lock()
+	defer rxNamesCache.Unlock()
+	if key != rxNamesCache.key {
+		chans := infernoRxChannels(n)
+		names := make([]string, len(chans))
+		for i, c := range chans {
+			names[i] = c.Device
+		}
+		rxNamesCache.key, rxNamesCache.names = key, names
+	}
+	return append([]string(nil), rxNamesCache.names...)
 }

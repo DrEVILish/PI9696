@@ -52,7 +52,6 @@ func TestDefaultThemeIsFTL(t *testing.T) {
 	// App-owned custom properties are the meter's geometry and its
 	// green/yellow/red bands. v4's .meter-fill consumes them.
 	for _, want := range []string{
-		"--meter-h:120px",
 		"--meter-low:var(--success,#0aff9d)",
 		"--meter-mid:var(--warning,#ffe400)",
 		"--meter-high:var(--danger,#ff2a2a)",
@@ -753,7 +752,7 @@ func TestDashboardTransportLampsFollowState(t *testing.T) {
 func TestDashboardOwnerLayout(t *testing.T) {
 	mux := newRemoteMux()
 	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
-	order := []string{`<header class="deck`, `<main class="app-main">`, `id="meterFooter"`, `<div class="panel center panel">`, `class="r2r"`, `<div id="status">`, `<div id="config" class="deck-status"`, `class="panel recordings-section"`, `</main>`, `id="sysPane"`, `id="appFooter"`}
+	order := []string{`<header class="deck`, `<main class="app-main">`, `id="meterFooter"`, `<div class="panel center panel">`, `class="media-deck-visual r2r"`, `<div id="status">`, `<div id="config" class="deck-status"`, `class="panel recordings-section"`, `</main>`, `id="sysPane"`, `id="appFooter"`}
 	last := -1
 	for _, w := range order {
 		i := strings.Index(body, w)
@@ -770,7 +769,7 @@ func TestDashboardOwnerLayout(t *testing.T) {
 			t.Errorf("dashboard still has %q", gone)
 		}
 	}
-	for _, want := range []string{`id="meterToggle"`, `.meter-caret{width:2.9em;height:2.9em`, `.meter-caret .icon{width:1.6em`, `id="meterOpen"`, `.meter-band.collapsed{display:none}`, `id="sysToggle"`, `class="sys-graph"`, `repeat(auto-fill,minmax(`, `var TELE_H = 112, TELE_H_SMALL = 70;`, `id="sysLamp" cx="54" cy="255" r="5"`} {
+	for _, want := range []string{`id="meterToggle"`, `.meter-caret{width:2.9em;height:2.9em`, `.meter-caret .icon{width:1.6em`, `id="meterOpen"`, `.meter-band.collapsed{display:none}`, `id="sysToggle"`, `class="sys-graph"`, `repeat(auto-fill,minmax(`, `var TELE_H = 112, TELE_H_SMALL = 70;`, `id="sysLamp" cx="54" cy="255" r="5"`, `class="transport-deck media-deck"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lacks %q", want)
 		}
@@ -811,10 +810,34 @@ func TestFormatUptime(t *testing.T) {
 func TestDashboardDbScaleUsesTheBarTaper(t *testing.T) {
 	mux := newRemoteMux()
 	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
-	if !strings.Contains(body, "span.style.bottom = vuPct(db) + '%';") {
+	if !strings.Contains(body, "span.style.setProperty('--at', vuPct(db) / 100);") {
 		t.Error("dB scale ticks are not placed with vuPct")
 	}
 	if strings.Contains(body, "span.style.bottom = (frac * 100) + '%';") {
 		t.Error("dB scale ticks still placed linearly")
+	}
+}
+
+// The meter bank is ftl-themes' console: a .mixer of .strip channels with
+// segmented vertical meters (role=meter) over scribble strips carrying the
+// channel names, behind one .scale.is-meter legend.
+func TestDashboardMetersUseConsoleComponents(t *testing.T) {
+	mux := newRemoteMux()
+	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
+	for _, want := range []string{
+		`class="mixer meter-bank" id="chMeters" role="group"`,
+		`class="strip strip-legend"`,
+		`class="scale is-meter" id="dbScale"`,
+		`meter meter-v is-segmented`, `role=`, `aria-valuemax=`,
+		`scribble-name`, `m.channelNames`, `setAttribute('aria-valuenow', now)`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard lacks %q", want)
+		}
+	}
+	for _, gone := range []string{"meter-bridge", "db-scale", "vu-track", "ch-label"} {
+		if strings.Contains(body, gone) {
+			t.Errorf("dashboard still has the app's own meter part %q", gone)
+		}
 	}
 }

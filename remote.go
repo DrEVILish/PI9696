@@ -2064,7 +2064,7 @@ var dashboardTmpl = template.Must(template.New("dashboard").Parse(`<!DOCTYPE htm
    declaring --accent/--surface/--muted/--danger/--success/--warning would
    do the same - the old --glow/--panel/--dim/--rec/--idle/--orange bridge
    is deliberately gone. See TestDefaultThemeIsFTL. */
-:root{--meter-h:120px;--meter-low:var(--success,#0aff9d);--meter-mid:var(--warning,#ffe400);--meter-high:var(--danger,#ff2a2a)}
+:root{--meter-low:var(--success,#0aff9d);--meter-mid:var(--warning,#ffe400);--meter-high:var(--danger,#ff2a2a)}
 *{box-sizing:border-box}
 body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,var(--surface,#0a1a2e),var(--bg,#020509) 70%);background-attachment:fixed;color:var(--text);margin:0;padding:0 1.5em 4em}
 h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 var(--space-s,0.8em)}
@@ -2265,80 +2265,20 @@ main.app-main{display:contents}
    (one row holds label + live % readout + slider) stays app-owned. */
 .slider{flex:1 1 auto;min-width:0}
 
-/* The rack-mount reel-to-reel transport lives in the normal document flow
-   right below the three-column grid and scrolls with the page. The level
-   meters are NOT here - they live in the pinned, collapsible footer (see
-   .meter-footer) so they stay in view while you drive the controls. */
-/* transport-deck lives INSIDE the "Transport Status" panel, so it's a plain
-   fluid container - the panel itself provides the HUD frame and corner
-   brackets, and the .r2r reel SVG below it is the live visual state of the
-   transport (reels spin when running, tape path glows, head shows time). */
-.transport-deck{width:100%;margin:0 0 0.6em;padding:0}
-/* Scale the SVG to fit the card in both dimensions: width:auto-driven by the
-   container (100%) and the intrinsic 820x265 aspect-ratio, capped with
-   max-width so on large screens (where the widened centre column can exceed
-   the deck's natural size) it shrinks *proportionally* instead of being
-   clamped by a separate max-height - a max-height alongside width:100% +
-   aspect-ratio would let the two constraints fight and distort the reels.
-   height:auto keeps width -> height from the aspect-ratio, never fighting it. */
-.r2r{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
-.r2r .plate{fill:url(#deckBg)}
-.r2r .plate-bezel{fill:none;stroke:rgba(0,217,255,0.28);stroke-width:1.5}
-.r2r .plate-screw{fill:var(--deck-well,#0d1c31);stroke:rgba(0,217,255,0.35);stroke-width:1}
-.r2r .deck-grid{fill:none;stroke:rgba(15,58,92,0.55);stroke-width:1}
-.r2r .deck-corner{fill:none;stroke:var(--accent);stroke-width:2;opacity:0.45}
-/* Reels: a near-black engineering-grade flange disc (gradient so the face
-   reads as machined metal rather than flat), with a thin trim ring that
-   lights up as the reel spins, faint tape windings and a bright hub. Only
-   the inner spindle group (.reel-spin) rotates so the winding looks like
-   it's turning while the plate and take-off point stay put. Flat fills go
-   through --deck-* (fallbacks = the reference values) so layout themes
-   can reskin the metalwork; glow accents stay on --glow. */
-.r2r .reel-disc{fill:var(--deck-face,#112842);stroke:var(--deck-trim,#1d5c8f);stroke-width:2}
-.r2r .reel-ring{fill:none;stroke:var(--deck-trim,#1d5c8f);stroke-width:1.5}
-.r2r .reel-g.spinning .reel-ring{stroke:rgba(0,217,255,0.5);filter:drop-shadow(0 0 4px rgba(0,217,255,0.6))}
-.r2r .reel-wind{fill:none;stroke:var(--accent);stroke-width:2;opacity:0.35}
-.r2r .reel-hub{fill:var(--deck-hub,#11304a);stroke:var(--accent);stroke-width:1.5;opacity:0.85}
-.r2r .reel-g.spinning .reel-hub{fill:var(--accent);filter:drop-shadow(0 0 5px rgba(0,217,255,0.6))}
-.r2r .reel-center{fill:var(--deck-well,#071729)}
-.r2r .reel-spoke{fill:var(--deck-spoke,#16345c);stroke:rgba(0,217,255,0.5);stroke-width:1.2}
-.r2r .reel-g.spinning .reel-spoke{stroke:rgba(0,217,255,0.75)}
-.r2r .reel-spin{transform-box:fill-box;transform-origin:center}
-.r2r .reel-g.spinning .reel-spin{animation:spin 2.2s linear infinite}
-.r2r .reel-g#reelL.spinning .reel-spin{animation-direction:reverse}
-@keyframes spin{to{transform:rotate(360deg)}}
-/* The tape path: angled runs from each reel down to the head block plus the
-   straight run across the head gap. A darker under-shadow gives the glowing
-   tape depth; one stroked path carries the travelling pulse (dash animation)
-   from supply reel, over the head, to the take-up reel exactly like real
-   tape. */
-.r2r .tape-shadow{fill:none;stroke:var(--deck-shadow,#04121f);stroke-width:6;stroke-linecap:round;stroke-linejoin:round;opacity:0.9}
-.r2r .tape{fill:none;stroke:var(--deck-tape,#14507e);stroke-width:3;stroke-linecap:round;stroke-linejoin:round;opacity:0.8}
-.r2r .tape.active{stroke:var(--accent);stroke-width:3;opacity:0.85;stroke-dasharray:22 14;animation:tapeflow 0.55s linear infinite;filter:drop-shadow(0 0 5px rgba(0,217,255,0.45))}
-@keyframes tapeflow{to{stroke-dashoffset:-36}}
-/* Guide idlers: lit rims so the tape path reads at a glance. */
-.r2r .guide{fill:var(--deck-well,#0a1830);stroke:rgba(0,217,255,0.55);stroke-width:1.5}
-/* The read/write head block: a chamfered angular castle rising out of the
-   tape gap, with glowing trim rails on its mounting cheeks, the red centre
-   gap line and the large 7-segment digital time counter in its display
-   window. The centre gap line turns recording-red while a take is running
-   (.r2r.rec). */
-.r2r .head-plate{fill:url(#headFace);stroke:var(--border);stroke-width:1.5}
-.r2r .head-edge{fill:none;stroke:rgba(0,217,255,0.25);stroke-width:1}
-.r2r .head-gap{fill:none;stroke:var(--accent);stroke-width:3;stroke-linecap:round;opacity:0.55}
-.r2r.run .head-gap{opacity:0.75}
-.r2r.rec .head-gap{stroke:var(--danger);opacity:0.95;filter:drop-shadow(0 0 5px rgba(255,51,85,0.8))}
-.r2r .head-window{fill:#050d1a;stroke:#16456e;stroke-width:1.5}
-.r2r .head-win-grid{fill:none;stroke:rgba(0,217,255,0.07);stroke-width:1}
-/* Bottom HUD band: a thin status rail with system lamps and micro labels,
-   matching the larger panel HUD motif (corner brackets + glow). */
-.r2r .hud-band{fill:none;stroke:var(--border);stroke-width:1}
-.r2r .hud-lamp{fill:#11304a}
-.r2r .hud-lamp.on{fill:var(--success);filter:drop-shadow(0 0 3px var(--success))}
-.r2r .hud-lamp.rec{fill:var(--danger);filter:drop-shadow(0 0 6px var(--danger))}
-.r2r #linkLamp{fill:#15324a}
-.r2r #linkLamp.on{fill:rgba(0,217,255,0.9);filter:drop-shadow(0 0 3px rgba(0,217,255,0.8))}
-.r2r .hud-text{fill:var(--muted);font-size:9px;letter-spacing:0.22em;font-family:"Consolas",monospace}
+/* Transport deck: ftl-themes' .media-deck (v5), whose reel-to-reel was
+   adapted from this very deck. It draws the plate, reels, tape, head and
+   transport lamp from theme tokens and owns the motion: the app only puts
+   is-recording / is-playing / is-paused on #deck (applyMeter). Reduced
+   motion (OS or data-motion) stops every animation. What the component
+   does not have yet stays here: the 7-segment counter, the corner
+   brackets and the INFERNO-LINK lamp (asked for upstream: ftl-themes#66). */
+.transport-deck.media-deck{width:100%;margin:0 0 0.6em;padding:0;background:none;border:0;box-shadow:none}
+.transport-deck .media-deck-visual{display:block;width:100%;max-width:760px;height:auto;margin:0 auto}
+.media-deck .deck-corner{fill:none;stroke:var(--accent);stroke-width:2;opacity:0.45}
+.media-deck.is-recording .device-lamp{filter:drop-shadow(0 0 6px var(--danger))}
+.media-deck.is-playing .device-lamp{filter:drop-shadow(0 0 4px var(--success))}
+.media-deck #linkLamp{fill:var(--deck-well,var(--surface))}
+.media-deck #linkLamp.on{fill:var(--accent);filter:drop-shadow(0 0 3px var(--accent))}
 /* The lit 7-segment time display. Every segment is an SVG line (see the
    buildSeg7 JS); the dim .s7 shows all segments faintly so the display
    reads as a proper 7-segment counter even for unlit digits. The whole display
@@ -2355,7 +2295,7 @@ main.app-main{display:contents}
 /* Level meters: a full-width band right under the header, as tall as the
    header (--deck-h is measured from it, see the script), collapsible to
    its bar with a large toggle. Owner layout 2026-10-05. */
-.meter-band{display:flex;align-items:stretch;gap:var(--space-m,1em);height:var(--deck-h,150px);margin:0 0 1.2em;background:rgba(3,8,15,0.6);border:1px solid var(--border);border-radius:10px;padding:0.4em 1em;box-sizing:border-box;--meter-h:calc(var(--deck-h,150px) - 3.4em)}
+.meter-band{display:flex;align-items:stretch;gap:var(--space-m,1em);height:var(--deck-h,150px);margin:0 0 1.2em;background:rgba(3,8,15,0.6);border:1px solid var(--border);border-radius:10px;padding:0.4em 1em;box-sizing:border-box}
 .meter-bar{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0.5em;flex:none;min-width:7.5em}
 .meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--muted);text-transform:uppercase}
 .meter-badge{font-size:0.62em;letter-spacing:0.12em;color:var(--accent);border:1px solid var(--border);border-radius:10px;padding:0.05em 0.6em}
@@ -2363,7 +2303,7 @@ main.app-main{display:contents}
 .meter-caret .icon{width:1.6em;height:1.6em;min-width:1.6em}
 .meter-body{flex:1;min-width:0;display:flex;align-items:center;overflow:hidden;transition:opacity 0.25s ease}
 .meter-body{justify-content:center}
-.meter-body .meter-bridge{flex:0 1 auto;min-width:0;max-width:100%}
+
 /* Collapsed, the band disappears entirely: the header's large Meters
    button brings it back. */
 .meter-band.collapsed{display:none}
@@ -2385,25 +2325,17 @@ header.deck .meter-open{position:absolute;right:clamp(0.5em,2vw,1.5em);bottom:0.
 .sys-pane{position:fixed;left:0;right:0;bottom:var(--footer-h,2.6em);z-index:149;max-height:72vh;overflow-y:auto;padding:0.6em 1.5em 1em;background:rgba(3,8,15,0.96);border-top:1px solid var(--border);box-shadow:0 -10px 40px rgba(0,180,255,0.14)}
 .sys-pane[hidden]{display:none}
 .sys-pane h2{margin:0.2em 0 0.4em;font-size:0.8em;letter-spacing:0.25em;text-transform:uppercase;color:var(--muted)}
-/* The meter bank itself - a shared dB-FS scale (standard audio-meter log
-   taper, see VU_CURVE/vuPct in the script) beside one meter per channel. */
-.meter-bridge{display:flex;align-items:stretch;justify-content:center;gap:var(--space-s,0.8em);max-width:1300px;margin:0 auto;background:#050c16;border:1px solid var(--border);border-radius:10px;padding:var(--space-s,0.7em) var(--space-m,1em);box-shadow:inset 0 0 24px rgba(0,180,255,0.06)}
-/* The dB scale column and every meter track share the exact same inner
-   height so a given dB reading lands on the same pixel row in each. The
-   scale uses a transparent 1px border (see below) so its content box equals
-   the tracks' full height. */
-.db-scale{position:relative;height:var(--meter-h);width:2.6em;flex:none;border:1px solid transparent}
-.db-scale span{position:absolute;left:0;right:0.3em;text-align:right;transform:translateY(50%);font-size:0.6em;color:var(--muted);font-weight:bold}
-.db-scale span::after{content:'';position:absolute;right:0;top:50%;width:100%;height:1px;background:rgba(0,217,255,0.25);transform:translateY(50%)}
-.ch-meters{display:flex;justify-content:center;gap:var(--space-xs,0.6em);overflow-x:auto;padding-bottom:2px}
-.ch-meter{display:flex;flex-direction:column;align-items:center;gap:0.25em;flex:none}
-/* Each strip is the shared .meter.meter-v; the app keeps only the
-   strip's geometry (14px wide, exactly --meter-h tall so the dB scale's
-   ticks line up row-for-row with the fill) and the darker well background.
-   Band colors come from the :root bridge (--meter-low/mid/high);
-   thresholds and levels are JS-set tokens (see buildDbScale/applyMeter). */
-.vu-track{width:14px;height:var(--meter-h);background:#020509;border-color:var(--border);border-radius:2px}
-.ch-label{font-size:0.6em;color:var(--muted);letter-spacing:0.04em}
+/* The meter bank is ftl-themes' console (v5): a .mixer of .strip
+   channels, each a segmented .meter.meter-v in a .strip-fader over a
+   .scribble with the channel's number and its inferno name, behind one
+   shared .scale.is-meter legend strip. The app sets only sizes: narrow
+   strips so a 64-channel unit still fits, and a fader length that fills
+   the band (as tall as the header). Levels, peaks and the dB ticks are
+   placed with the same taper (vuPct). */
+.meter-bank{--strip-width:3.3rem;--mixer-gap:3px;--meter-thickness:1.1rem;--fader-length:calc(var(--deck-h,150px) - 4.6rem);flex:0 1 auto;max-width:100%}
+.meter-bank .strip-legend{--strip-width:3rem}
+.meter-bank .scribble{text-align:center;padding:0.15rem 0.2rem}
+.meter-bank .scribble-name{font-size:0.62rem}
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
 .sys-graphs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr));gap:0.6em 1.4em}
@@ -2440,13 +2372,12 @@ header.deck .meter-open{position:absolute;right:clamp(0.5em,2vw,1.5em);bottom:0.
   .transport-deck{padding:0}
   .meter-title{font-size:0.6em}
   .meter-badge{display:none}
-  .meter-band{height:auto;flex-direction:column;--meter-h:110px}
+  .meter-band{height:auto;flex-direction:column}
+  .meter-bank{--fader-length:7rem}
   .meter-bar{flex-direction:row;align-items:center}
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .r2r .reel-g.spinning .reel-spin,
-  .r2r .tape.active,
   .meter-body{animation:none;transition:none}
   .switch-track,.switch-thumb{transition:none}
 }
@@ -2511,9 +2442,11 @@ html[data-theme] body{background:transparent}
     </button>
   </div>
   <div class="meter-body" id="meterBody">
-    <div class="meter-bridge">
-      <div class="db-scale" id="dbScale"></div>
-      <div class="ch-meters" id="chMeters"></div>
+    <div class="mixer meter-bank" id="chMeters" role="group" aria-label="Input levels">
+      <section class="strip strip-legend" aria-hidden="true">
+        <div class="strip-fader"><div class="scale is-meter" id="dbScale"></div></div>
+        <div class="scribble"><span class="scribble-num">dBFS</span><span class="scribble-name">&nbsp;</span></div>
+      </section>
     </div>
   </div>
 </section>
@@ -2521,23 +2454,23 @@ html[data-theme] body{background:transparent}
 <div class="grid">
   <div class="panel center panel">
     <h2>Transport Status</h2>
-    <div class="transport-deck">
-      <svg class="r2r" viewBox="0 0 820 265" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="transportTitle transportDesc">
+    <section class="transport-deck media-deck" id="deck" aria-label="Tape transport">
+      <svg class="media-deck-visual r2r" viewBox="0 0 820 265" preserveAspectRatio="xMidYMid meet" role="img" aria-labelledby="transportTitle transportDesc">
         <title id="transportTitle">Reel-to-reel transport</title>
         <desc id="transportDesc">Two tape reels connected by an angled tape path and a read/write head time display.</desc>
         <defs>
           <linearGradient id="deckBg" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#132947"/>
-            <stop offset="55%" stop-color="#0d1c31"/>
-            <stop offset="100%" stop-color="#0a1526"/>
+            <stop offset="0%" stop-color="var(--deck-face,#132947)"/>
+            <stop offset="55%" stop-color="var(--deck-well,#0d1c31)"/>
+            <stop offset="100%" stop-color="var(--bg,#0a1526)"/>
           </linearGradient>
           <linearGradient id="headFace" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#142f4d"/>
-            <stop offset="100%" stop-color="#0a1a30"/>
+            <stop offset="0%" stop-color="var(--deck-face,#142f4d)"/>
+            <stop offset="100%" stop-color="var(--deck-well,#0a1a30)"/>
           </linearGradient>
         </defs>
 
-        <rect class="plate" x="2" y="2" width="816" height="261" rx="10"/>
+        <rect class="plate" x="2" y="2" width="816" height="261" rx="10" fill="url(#deckBg)"/>
         <rect class="plate-bezel" x="2" y="2" width="816" height="261" rx="10"/>
 
         <g class="deck-grid">
@@ -2545,15 +2478,15 @@ html[data-theme] body{background:transparent}
           <path d="M90 26 V248 M730 26 V248" opacity="0.5"/>
         </g>
 
-        <circle class="plate-screw" cx="18" cy="18" r="4"/>
-        <circle class="plate-screw" cx="802" cy="18" r="4"/>
-        <circle class="plate-screw" cx="18" cy="247" r="4"/>
-        <circle class="plate-screw" cx="802" cy="247" r="4"/>
+        <circle class="deck-screw" cx="18" cy="18" r="4"/>
+        <circle class="deck-screw" cx="802" cy="18" r="4"/>
+        <circle class="deck-screw" cx="18" cy="247" r="4"/>
+        <circle class="deck-screw" cx="802" cy="247" r="4"/>
 
         <path class="tape-shadow" d="M211 161 L330 196 L490 196 L609 161"/>
-        <path class="tape" id="tapePath" d="M211 159 L330 194 L490 194 L609 159"/>
+        <path class="tape is-moving" id="tapePath" d="M211 159 L330 194 L490 194 L609 159"/>
 
-        <g class="reel-g" id="reelL" transform="translate(170,105) scale(1.25) translate(-170,-105)">
+        <g class="reel-g reel-supply" id="reelL" transform="translate(170,105) scale(1.25) translate(-170,-105)">
           <circle class="reel-ring" cx="170" cy="105" r="61"/>
           <circle class="reel-disc" cx="170" cy="105" r="58"/>
           <g class="reel-spin">
@@ -2584,32 +2517,32 @@ html[data-theme] body{background:transparent}
           </g>
         </g>
 
-        <text class="hud-text" x="410" y="122" text-anchor="middle">PI9696</text>
+        <text class="deck-text" x="410" y="122" text-anchor="middle">PI9696</text>
 
-        <circle class="guide" cx="221" cy="162" r="7"/>
-        <circle class="guide" cx="599" cy="162" r="7"/>
-        <circle class="guide" cx="330" cy="194" r="7"/>
-        <circle class="guide" cx="490" cy="194" r="7"/>
+        <circle class="device-guide" cx="221" cy="162" r="7"/>
+        <circle class="device-guide" cx="599" cy="162" r="7"/>
+        <circle class="device-guide" cx="330" cy="194" r="7"/>
+        <circle class="device-guide" cx="490" cy="194" r="7"/>
 
         <g class="head">
-          <polygon class="head-plate" points="272,252 272,198 288,184 532,184 548,198 548,252"/>
+          <polygon class="head-plate" points="272,252 272,198 288,184 532,184 548,198 548,252" fill="url(#headFace)"/>
           <path class="head-edge" d="M284 198 V246 M536 198 V246"/>
           <path class="head-gap" d="M402 190 L418 190"/>
           <rect class="head-window" x="300" y="198" width="220" height="48" rx="3"/>
-          <path class="head-win-grid" d="M304 210 H516 M304 222 H516 M304 234 H516 M304 246 H516 M324 198 V246 M348 198 V246 M372 198 V246 M396 198 V246 M420 198 V246 M444 198 V246 M468 198 V246 M492 198 V246"/>
+          <path class="head-grid" d="M304 210 H516 M304 222 H516 M304 234 H516 M304 246 H516 M324 198 V246 M348 198 V246 M372 198 V246 M396 198 V246 M420 198 V246 M444 198 V246 M468 198 V246 M492 198 V246"/>
           <g id="seg7" transform="translate(312,202) skewX(-10) scale(2.12)"></g>
         </g>
 
-        <text class="hud-text" x="146" y="24">SUPPLY</text>
-        <text class="hud-text" x="614" y="24">TAKE-UP</text>
+        <text class="deck-text" x="146" y="24">SUPPLY</text>
+        <text class="deck-text" x="614" y="24">TAKE-UP</text>
 
         <g class="hud">
-          <path class="hud-band" d="M40 249 H780"/>
-          <circle class="hud-lamp" id="sysLamp" cx="54" cy="255" r="5"/>
-          <text class="hud-text" x="66" y="258">SYS</text>
-          <text class="hud-text" x="352" y="258">TRANSPORT</text>
-          <text class="hud-text" x="620" y="258">INFERNO-LINK</text>
-          <circle class="hud-lamp" id="linkLamp" cx="706" cy="255" r="2.5"/>
+          <path class="plate-bezel" d="M40 249 H780"/>
+          <circle class="device-lamp" id="sysLamp" cx="54" cy="255" r="5"/>
+          <text class="deck-text" x="66" y="258">SYS</text>
+          <text class="deck-text" x="352" y="258">TRANSPORT</text>
+          <text class="deck-text" x="697" y="258" text-anchor="end">INFERNO-LINK</text>
+          <circle id="linkLamp" cx="706" cy="255" r="2.5"/>
         </g>
 
         <path class="deck-corner" d="M14 30 V14 H30"/>
@@ -2617,7 +2550,7 @@ html[data-theme] body{background:transparent}
         <path class="deck-corner" d="M14 235 V251 H30"/>
         <path class="deck-corner" d="M806 251 V235 H790"/>
       </svg>
-    </div>
+    </section>
     <div id="status">Loading...</div>
     <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#status" hx-swap="innerHTML" hidden></div>
     <div id="config" class="deck-status" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
@@ -2847,7 +2780,8 @@ function rebuildDbScale(floor) {
   dbScale.innerHTML = '';
   DB_TICKS.filter(function(db) { return db > floor + 6; }).concat([floor]).forEach(function(db) {
     var span = document.createElement('span');
-    span.style.bottom = vuPct(db) + '%';
+    span.style.setProperty('--at', vuPct(db) / 100); // .scale.is-meter places marks at --at (0-1)
+    if (db === 0) span.className = 'is-unity';
     span.textContent = Math.round(db);
     dbScale.appendChild(span);
   });
@@ -3021,17 +2955,28 @@ if (meterToggle && meterFooter && meterBody && meterCaret) {
 var meterBadge = document.getElementById('meterBadge');
 
 var chMeters = document.getElementById('chMeters');
-var chCount = -1;
-function ensureChannels(n) {
-  if (n === chCount) return;
-  chMeters.innerHTML = '';
+var chCount = -1, chNames = '';
+// ensureChannels builds one console strip per channel (ftl-themes .strip:
+// segmented .meter.meter-v + .scribble with number and name), keeping the
+// legend strip first. Rebuilt only when the count or the names change.
+function ensureChannels(n, names) {
+  var key = (names || []).join('\u0000');
+  if (n === chCount && key === chNames) return;
+  chMeters.querySelectorAll('.strip:not(.strip-legend)').forEach(function(el) { el.remove(); });
   for (var i = 1; i <= n; i++) {
-    var el = document.createElement('div');
-    el.className = 'ch-meter';
-    el.innerHTML = '<div class="meter meter-v vu-track"><div class="meter-peak" data-i="' + i + '"></div><div class="meter-fill" data-i="' + i + '"></div></div><div class="ch-label">' + i + '</div>';
-    chMeters.appendChild(el);
+    var name = (names && names[i - 1]) || ('RX ' + i);
+    var strip = document.createElement('section');
+    strip.className = 'strip';
+    strip.innerHTML = '<div class="strip-fader"><div class="meter meter-v is-segmented" role="meter" aria-valuemin="' + FLOOR + '" aria-valuemax="0" aria-valuenow="' + FLOOR + '"><div class="meter-fill" data-i="' + i + '"></div><div class="meter-peak"></div></div></div>' +
+      '<div class="scribble"><span class="scribble-num"></span><span class="scribble-name"></span></div>';
+    strip.querySelector('.meter').setAttribute('aria-label', 'Channel ' + i + ' ' + name + ' level, dBFS');
+    strip.querySelector('.scribble-num').textContent = i;
+    strip.querySelector('.scribble-name').textContent = name;
+    strip.querySelector('.scribble-name').title = name;
+    chMeters.appendChild(strip);
   }
   chCount = n;
+  chNames = key;
 }
 
 function applyMeter(m) {
@@ -3056,18 +3001,17 @@ function applyMeter(m) {
   // going blank.
   var moving = m.recording || m.playing;
   var showing = m.recording || m.playing || paused;
-  document.querySelectorAll('.reel-g').forEach(function(el) { el.classList.toggle('spinning', moving); });
-  document.getElementById('tapePath').classList.toggle('active', moving);
   setSeg7(showing ? m.elapsed : null);
 
-  // Deck-level recording state: the head gap line and lamps go red while a
-  // take is running, the sys lamp glows green whenever the unit is moving.
-  var deck = document.querySelector('.r2r');
-  if (deck) { deck.classList.toggle('rec', !!m.recording); deck.classList.toggle('run', moving); }
-  var sysLamp = document.getElementById('sysLamp');
-  if (sysLamp) {
-    sysLamp.classList.toggle('on', moving);
-    sysLamp.classList.toggle('rec', !!m.recording);
+  // The deck (ftl-themes .media-deck) takes one state class and draws the
+  // rest: reels and tape move while recording or playing, the head gap and
+  // transport lamp go red while recording, green while playing; paused
+  // holds still.
+  var deck = document.getElementById('deck');
+  if (deck) {
+    deck.classList.toggle('is-recording', !!m.recording);
+    deck.classList.toggle('is-playing', !!m.playing && !m.recording);
+    deck.classList.toggle('is-paused', paused);
   }
   var linkLamp = document.getElementById('linkLamp');
   if (linkLamp) linkLamp.classList.toggle('on', !!m.infernoUp);
@@ -3081,7 +3025,7 @@ function applyMeter(m) {
   }
 
   var channels = Array.isArray(m.channels) ? m.channels : [];
-  ensureChannels(channels.length);
+  ensureChannels(channels.length, m.channelNames);
   channels.forEach(function(c, idx) {
     var i = idx + 1;
     // ftl-themes' .meter contract: level and peak are custom properties
@@ -3091,6 +3035,8 @@ function applyMeter(m) {
     if (track) {
       track.style.setProperty('--meter-level', vuPct(c.rmsDB) + '%');
       track.style.setProperty('--meter-peak', vuPct(c.peakDB) + '%');
+      var now = String(Math.round(Math.max(c.rmsDB, FLOOR)));
+      if (track.getAttribute('aria-valuenow') !== now) track.setAttribute('aria-valuenow', now);
     }
   });
 
@@ -4060,6 +4006,9 @@ type meterResponse struct {
 	TXStatus string `json:"txStatus"`
 	// TXShort is the same state in the Status table's short form.
 	TXShort string `json:"txShort"`
+	// ChannelNames label the meter strips: the unit's RX channel names as
+	// a network controller named them (channelnames.go).
+	ChannelNames []string `json:"channelNames"`
 }
 
 // jsonSafeDB coerces a dB level to a JSON-encodable value. encoding/json will
@@ -4080,7 +4029,16 @@ func jsonSafeDB(v float64) float64 {
 // shared by the plain-HTTP /api/meter handler (kept for anything that wants
 // a one-shot read) and the /ws/meter push loop below, so there's exactly
 // one place that assembles this payload.
+// currentMeterResponse is the meter snapshot plus the strips' channel
+// names, which are read (cached) without the app mutex.
 func currentMeterResponse() meterResponse {
+	resp := buildMeterLevels()
+	resp.ChannelNames = liveRxChannelNames(len(resp.Channels))
+	return resp
+}
+
+// buildMeterLevels takes the app mutex for the levels and transport state.
+func buildMeterLevels() meterResponse {
 	mutex.Lock()
 	defer mutex.Unlock()
 
@@ -4096,7 +4054,8 @@ func currentMeterResponse() meterResponse {
 		FloorDB:    vuRangeOptions[vuRangeIdx],
 		DisplaySeq: displaySeq,
 	}
-	resp.TXShort, resp.TXStatus = txStatusLocked() // Always size the meter bank to the configured channel count. During
+	resp.TXShort, resp.TXStatus = txStatusLocked()
+	// Always size the meter bank to the configured channel count. During
 	// recording, the peak/RMS arrays are exactly channelCount (startRecording
 	// sizes them to it), and at idle/monitoring they follow it too, so this
 	// is normally a no-op - but while a channel change is still in flight

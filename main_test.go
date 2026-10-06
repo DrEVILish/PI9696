@@ -3126,9 +3126,18 @@ func TestMeterDeckFlagsDriveReelAnimation(t *testing.T) {
 		t.Fatalf("dashboard render: %v", err)
 	}
 	page := buf.String()
-	for _, want := range []string{`class="reel-g"`, `id="tapePath"`, `classList.toggle('spinning'`, `classList.toggle('active'`, `@keyframes spin`, `--deck-face`, `--deck-trim`} {
+	// The deck is ftl-themes' .media-deck: the component animates it from
+	// one state class, so the markup must carry its parts and the script
+	// must set the state.
+	for _, want := range []string{`class="transport-deck media-deck" id="deck"`, `class="media-deck-visual r2r"`, `class="reel-g reel-supply"`, `class="tape is-moving"`, `class="device-lamp" id="sysLamp"`,
+		`classList.toggle('is-recording'`, `classList.toggle('is-playing'`, `classList.toggle('is-paused'`, `var(--deck-face`} {
 		if !strings.Contains(page, want) {
-			t.Fatalf("dashboard missing deck-animation hook %q", want)
+			t.Fatalf("dashboard missing deck hook %q", want)
+		}
+	}
+	for _, gone := range []string{`@keyframes spin`, `classList.toggle('spinning'`, `.r2r .reel-disc`} {
+		if strings.Contains(page, gone) {
+			t.Errorf("dashboard still carries the app's own deck animation %q", gone)
 		}
 	}
 }
