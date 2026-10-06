@@ -868,7 +868,7 @@ func TestTelemetryWSRoundtrip(t *testing.T) {
 	if err := websocket.JSON.Receive(ws, &histMsg); err != nil {
 		t.Fatalf("history message: %v", err)
 	}
-	if statusMsg.Target != "#status" || !strings.Contains(statusMsg.Content, `id="diskInfo"`) {
+	if statusMsg.Target != "#diskInfo" || !strings.Contains(statusMsg.Content, "record time left") {
 		t.Fatalf("bad status message target/content: %+v", statusMsg)
 	}
 	if histMsg.Target != "#teleHist" {
@@ -928,7 +928,7 @@ func TestTelemetryWSPanelsPush(t *testing.T) {
 			t.Fatalf("connect message %d: %v", i, err)
 		}
 	}
-	if msgs[0].Target != "#status" || msgs[1].Target != "#teleHist" ||
+	if msgs[0].Target != "#diskInfo" || msgs[1].Target != "#teleHist" ||
 		msgs[2].Target != "#config" || msgs[3].Target != "#recordings" {
 		t.Fatalf("bad connect targets: %q %q %q %q",
 			msgs[0].Target, msgs[1].Target, msgs[2].Target, msgs[3].Target)
@@ -936,7 +936,7 @@ func TestTelemetryWSPanelsPush(t *testing.T) {
 
 	// Unchanged broadcast: only status + history go out, panels stay quiet.
 	broadcastTelemetry()
-	for _, want := range []string{"#status", "#teleHist"} {
+	for _, want := range []string{"#diskInfo", "#teleHist"} {
 		var m teleWSMessage
 		if err := websocket.JSON.Receive(ws, &m); err != nil {
 			t.Fatalf("broadcast %s: %v", want, err)

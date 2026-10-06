@@ -2199,7 +2199,7 @@ main.app-main{display:contents}
    reel-to-reel) and no pane scrolls - every pane is as tall as what it
    holds and the page scrolls instead. Only a recordings table wider than
    the screen scrolls sideways, inside its own wrapper. */
-.panel.center #status,.panel.center .deck-status{max-width:56rem;margin-left:auto;margin-right:auto}
+.panel.center .deck-status{max-width:56rem;margin-left:auto;margin-right:auto}
 
 /* Modals: the settings sheet and the stop-recording confirmation. The box,
    overlay and close button are the shared modal family; this app keeps
@@ -2556,8 +2556,7 @@ html[data-theme] body{background:transparent}
         <path class="deck-corner" d="M806 251 V235 H790"/>
       </svg>
     </section>
-    <div id="status">Loading...</div>
-    <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#status" hx-swap="innerHTML" hidden></div>
+    <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#diskInfo" hx-swap="innerHTML" hidden></div>
     <div id="config" class="deck-status" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
   </div>
 
@@ -3673,27 +3672,15 @@ func renderConfigHTML() (string, error) {
 	return buf.String(), nil
 }
 
-// statusTmpl is the Transport Status state line, pushed over the telemetry
-// socket. Owner layout (2026-10-05): no Stop button (the deck keys stop),
-// no TX line (the Status table carries it), no Peak/RMS (the meters show
-// them), no temperature (the System pane graphs it); uptime lives in the
-// Status table and disk space in the page footer, swapped out-of-band from
-// this same push.
-var statusTmpl = template.Must(template.New("status").Parse(`
-{{if .Recording}}<p class="rec">&#9679; RECORDING - {{.Elapsed}}</p>
- {{else if .Playing}}<p>&#9654; Playing back - {{.Elapsed}}</p>
- {{else if .Paused}}<p>&#10074;&#10074; Paused - {{.Elapsed}}</p>
- {{else if .MonOutput}}<p class="idle">&#9654; Monitoring output - playing {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch {{.Elapsed}}</p>
- {{else if .Monitoring}}<p class="idle">&#128266; Monitoring input - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
-{{else}}<p class="idle">Idle - {{.Format}} {{.SampleRate}}kHz {{.Channels}}ch</p>
-{{if .Notice}}<p class="err">{{.Notice}}</p>{{end}}
-{{if not .InfernoUp}}<p>(Inferno not running &mdash; build the Inferno binary and restart)</p>{{end}}
-{{if .DemoMode}}<p>(Demo mode &mdash; simulated audio)</p>{{end}}
-{{end}}
-<span id="diskInfo" class="footer-disk" hx-swap-oob="true">Disk /rec <progress class="progress" value="{{printf "%.0f" .DiskUsed}}" max="{{printf "%.0f" .DiskTotal}}" aria-label="Disk /rec used"></progress> <span class="readout readout-sm">{{printf "%.0f" .DiskFree}}<span class="readout-unit">GB</span></span> free of {{printf "%.0f" .DiskTotal}} GB &middot; record time left <span class="readout readout-sm">{{.RecordTime}}</span></span>`))
+// statusTmpl is the page footer's live line (#diskInfo), pushed over the
+// telemetry socket: disk space and record time left, plus a short-lived
+// dashboard notice (webNotice). Owner layout (2026-10-06): the Transport
+// Status state line (#status) is gone - the deck, its keys and lamps show
+// the transport state, the Status table carries Inferno, uptime and TX.
+var statusTmpl = template.Must(template.New("status").Parse(`Disk /rec <progress class="progress" value="{{printf "%.0f" .DiskUsed}}" max="{{printf "%.0f" .DiskTotal}}" aria-label="Disk /rec used"></progress> <span class="readout readout-sm">{{printf "%.0f" .DiskFree}}<span class="readout-unit">GB</span></span> free of {{printf "%.0f" .DiskTotal}} GB &middot; record time left <span class="readout readout-sm">{{.RecordTime}}</span>{{if .Notice}} <span class="badge badge-warning footer-notice" role="alert">{{.Notice}}</span>{{end}}`))
 
 // webNotice/webNoticeUntil is the dashboard counterpart of sysNotice: a
-// one-shot error line rendered into the status panel. startPlayback uses it
+// one-shot notice rendered into the page footer. startPlayback uses it
 // for the sample-rate/channel refusal, which previously only reached the log.
 var webNotice string
 var webNoticeUntil time.Time
@@ -3838,7 +3825,7 @@ var teleWSHub = map[*websocket.Conn]bool{}
 var teleWSMu sync.Mutex
 
 // teleWSMessage is the hx-ws wire shape: target selects the swap element,
-// content is HTML for #status or the history JSON for #teleHist.
+// content is HTML for #diskInfo (the footer) or the history JSON for #teleHist.
 type teleWSMessage struct {
 	Target  string `json:"target"`
 	Content string `json:"content"`
@@ -3887,7 +3874,7 @@ func broadcastTelemetry() {
 		alive := true
 		if !wsSessionLive(ws) {
 			alive = false // logged out or token rotated: stop streaming
-		} else if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
+		} else if !teleWSSend(ws, "#diskInfo", status) || !teleWSSend(ws, "#teleHist", hist) {
 			alive = false
 		} else if configChanged && !teleWSSend(ws, "#config", config) {
 			alive = false
@@ -3959,7 +3946,7 @@ func handleWSTelemetry(ws *websocket.Conn) {
 	// status + history plus both panels (a new socket hasn't seen anything,
 	// so send unconditionally - this also seeds the change cache).
 	if status, hist, err := buildTelemetryWSMessages(); err == nil {
-		if !teleWSSend(ws, "#status", status) || !teleWSSend(ws, "#teleHist", hist) {
+		if !teleWSSend(ws, "#diskInfo", status) || !teleWSSend(ws, "#teleHist", hist) {
 			return
 		}
 	}

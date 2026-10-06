@@ -757,7 +757,7 @@ func TestDashboardTransportLampsFollowState(t *testing.T) {
 func TestDashboardOwnerLayout(t *testing.T) {
 	mux := newRemoteMux()
 	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
-	order := []string{`<header class="deck`, `<main class="app-main">`, `id="meterFooter"`, `<div class="panel center panel">`, `class="media-deck-visual r2r"`, `<div id="status">`, `<div id="config" class="deck-status"`, `class="panel recordings-section"`, `</main>`, `id="sysPane"`, `id="appFooter"`}
+	order := []string{`<header class="deck`, `<main class="app-main">`, `id="meterFooter"`, `<div class="panel center panel">`, `class="media-deck-visual r2r"`, `<div id="config" class="deck-status"`, `class="panel recordings-section"`, `</main>`, `id="sysPane"`, `id="appFooter"`}
 	last := -1
 	for _, w := range order {
 		i := strings.Index(body, w)
@@ -769,7 +769,7 @@ func TestDashboardOwnerLayout(t *testing.T) {
 		}
 		last = i
 	}
-	for _, gone := range []string{`class="panel left panel"`, `class="panel right panel"`, `<h2>Status</h2>`, `data-record-stop`, `sys-readout`} {
+	for _, gone := range []string{`class="panel left panel"`, `class="panel right panel"`, `<h2>Status</h2>`, `data-record-stop`, `sys-readout`, `id="status"`} {
 		if strings.Contains(body, gone) {
 			t.Errorf("dashboard still has %q", gone)
 		}
@@ -783,13 +783,18 @@ func TestDashboardOwnerLayout(t *testing.T) {
 	var buf strings.Builder
 	statusTmpl.Execute(&buf, statusView{Recording: true, Elapsed: "00:00:05", Meter: "Peak: -6.0dB  RMS: -18.3dB", Uptime: "1h", CPUTemp: 50, DiskTotal: 62, DiskFree: 34, RecordTime: "32:21:21"})
 	st := buf.String()
-	for _, gone := range []string{"Peak:", "Temp", "Uptime", "<button"} {
+	// owner (2026-10-06): no Transport Status state line at all - the push
+	// is the footer's content only
+	for _, gone := range []string{"RECORDING", "Peak:", "Temp", "Uptime", "<button", "<p>", "<p ", "hx-swap-oob"} {
 		if strings.Contains(st, gone) {
-			t.Errorf("Transport Status line still shows %q: %s", gone, st)
+			t.Errorf("telemetry push still shows %q: %s", gone, st)
 		}
 	}
-	if !strings.Contains(st, `id="diskInfo"`) || !strings.Contains(st, `hx-swap-oob="true"`) || !strings.Contains(st, "32:21:21") {
-		t.Errorf("status push does not refresh the footer's disk line: %s", st)
+	if !strings.Contains(st, "record time left") || !strings.Contains(st, "32:21:21") {
+		t.Errorf("telemetry push does not carry the footer's disk line: %s", st)
+	}
+	if !strings.Contains(body, `hx-target="#diskInfo"`) {
+		t.Error("telemetry socket does not swap into the footer")
 	}
 	buf.Reset()
 	configTmpl.Execute(&buf, configView{Uptime: "3h 12m", Version: "1.20.0"})
