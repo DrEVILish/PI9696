@@ -1,7 +1,7 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `190685e` on the `DrEVILish/inferno` fork's `dev`)
+AoIP stack, pinned at `3a54d8e` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
@@ -42,6 +42,7 @@ and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
 | U27 | inferno info | Sample rate / encoding status sent requested = 0, a fixed update mode and unchangeable encodings 16/32 | netaudio: requested rate/encoding 0 (a pending change to nothing) | **fixed in the fork** (`892806e`) |
 | U28 | inferno info | Board info capability word lacked the sample rate / encoding configuration bits | controller device config: Sample Rate and Encoding blank, "does not support sample rate configuration" | **fixed in the fork** (`df4d79f`) |
 | U29 | inferno info | Sample rate / encoding status only sent when probed | a rate changed on the unit stayed old in an open controller until it re-probed | **fixed in the fork** (`190685e`; announced at every device start, and pi9696 restarts the device on a rate change) |
+| U30 | inferno ARC | A channel-list page cut at the size limit kept the rejected entry's strings (packed pages, `dbd9570`) | pages ended with bytes no entry referenced and could run past the 800-byte soft limit by one entry's data; controllers read by offset, so most likely harmless | **fixed in the fork** (`3a54d8e`) |
 
 ---
 
@@ -485,3 +486,24 @@ restarting the device, and the device now multicasts its sample rate and
 encoding status at every start. Seen from another Pi on the LAN while the
 unit switched 48 -> 96 -> 48 kHz: 96000, then 48000, each within a second
 of the restart.
+
+## U30 - Orphaned entry data in a cut channel-list page
+
+**Found** in review of the fork's packed channel-list pages (`dbd9570`,
+U13): `serialize_page` runs an entry's transform, which appends its strings
+and descriptors, before the size check. The entry that crosses
+`PACKET_SIZE_SOFT_LIMIT` (800 bytes) is moved to the next page, but its data
+stayed in this one. Reproduced with 32 transmit friendly names of 42
+characters: 43 trailing bytes after the last emitted entry's name.
+
+**Impact**: low. Controllers locate every string through the entry table's
+offsets, so the stray bytes were almost certainly ignored, and real names
+rarely fill a page to the limit. It was still a packet artefact, and the
+page exceeded the soft limit.
+
+**Fix** (`3a54d8e`): the page ends where the rejected entry's data began.
+Data shared with earlier entries (the common channels descriptor, written by
+the first entry) is kept, since the rejected entry is never the first, and
+no page transform writes data and then returns `None`. A test checks the
+page ends exactly at the last emitted entry's data. netaudio still reads
+the unit's 64 RX / 64 TX channels.

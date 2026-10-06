@@ -67,14 +67,14 @@ submodules, and they must be initialised too).
 cd /opt/pi9696
 git clone https://github.com/DrEVILish/inferno inferno
 cd inferno
-git checkout 190685e                     # fork dev: v0.5.4 + 13 dev commits + #49 + U13/U1/U2 + #8 + #41 + TX-restart + wakeup-rate + controller interop (U20-U24, U26-U29)
+git checkout 3a54d8e                     # fork dev: v0.5.4 + 13 dev commits + #49 + U13/U1/U2 + #8 + #41 + TX-restart + wakeup-rate + controller interop (U20-U24, U26-U29) + U30
 git submodule update --init --recursive  # searchfire, alsa-sys-all, usrvclock-rs
 cargo build --release                    # ~7 min on a Pi 4
 ```
 
 ### Why this commit
 
-The fork's `dev` at `190685e` is `v0.5.4` (`04c0efe`), the 13 later `dev`
+The fork's `dev` at `3a54d8e` is `v0.5.4` (`04c0efe`), the 13 later `dev`
 commits (tests, dependency bumps, configurable TX dither with the old 32-bit
 default), the malformed-packet fixes (INFERNO-UPSTREAM.md U15), the
 channel-list paging, bulk unsubscribe and rate-probe fixes (U13, U1, U2), the
