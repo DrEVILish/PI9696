@@ -804,3 +804,17 @@ func TestFormatUptime(t *testing.T) {
 		}
 	}
 }
+
+// The dB scale's ticks must sit where the bars put the same level: both
+// through vuPct. Placed linearly in dB, a -12 dBFS peak drew level with
+// the scale's "-20" region and a -15 dBFS RMS with "-27".
+func TestDashboardDbScaleUsesTheBarTaper(t *testing.T) {
+	mux := newRemoteMux()
+	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
+	if !strings.Contains(body, "span.style.bottom = vuPct(db) + '%';") {
+		t.Error("dB scale ticks are not placed with vuPct")
+	}
+	if strings.Contains(body, "span.style.bottom = (frac * 100) + '%';") {
+		t.Error("dB scale ticks still placed linearly")
+	}
+}

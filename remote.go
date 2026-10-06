@@ -2828,20 +2828,21 @@ function vuPct(db) {
 }
 
 // rebuildDbScale redraws the tick labels whenever the configured floor
-// changes (including on first load) - ticks sit at the same curve
-// fractions used for VU_CURVE's own breakpoints, so every tick lines up
-// exactly with where that dB value's fill reaches.
+// changes (including on first load). Each tick is placed with vuPct, the
+// same taper the bars use, so a tick sits exactly where that level's fill
+// reaches. (They used to be placed linearly in dB, so a -12 dBFS peak drew
+// level with the "-20" region of the scale and a -15 dBFS RMS with "-27".)
+var DB_TICKS = [0, -6, -12, -18, -24, -36, -48];
 var dbScale = document.getElementById('dbScale');
 var scaleFloor = null;
 function rebuildDbScale(floor) {
   if (floor === scaleFloor) return;
   scaleFloor = floor;
   dbScale.innerHTML = '';
-  [0, 0.1667, 0.3333, 0.5556, 0.8, 1].forEach(function(frac) {
-    var db = Math.round(floor + frac * (0 - floor));
+  DB_TICKS.filter(function(db) { return db > floor + 6; }).concat([floor]).forEach(function(db) {
     var span = document.createElement('span');
-    span.style.bottom = (frac * 100) + '%';
-    span.textContent = db;
+    span.style.bottom = vuPct(db) + '%';
+    span.textContent = Math.round(db);
     dbScale.appendChild(span);
   });
   // Position the green->yellow and yellow->red meter bands at the design's
