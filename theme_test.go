@@ -737,8 +737,19 @@ func TestDashboardTransportLampsFollowState(t *testing.T) {
 		`--key-fg:color-mix(in srgb,var(--key-lit) 45%,transparent)`,
 		`--key-glow:0 0 0.9em 0.15em color-mix(in srgb,var(--key-lit) 75%,transparent)`,
 		`.transport-row .key.is-flashing{animation:pi-lamp-flash`,
+		// text mode keeps the icon keys' size
+		`.transport-row.text .key{font-size:`,
 		`@media (prefers-reduced-motion:reduce){.transport-row .key.is-flashing{animation:none`,
 		`rec: !!m.recording`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard lacks %q", want)
+		}
+	}
+	if regexp.MustCompile(`\.transport-row\.text \.key\{[^}]*width:auto`).MatchString(body) {
+		t.Error("text-mode transport keys still stretch to their labels")
+	}
+	for _, want := range []string{
 		// the theme is in @layer ui: an unlayered app button rule would
 		// override every .key style, so the generic rules must skip .key
 		`:where(button:not(.key,.btn,.tab,.btn-close)){`,

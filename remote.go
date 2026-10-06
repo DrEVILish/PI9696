@@ -2132,9 +2132,10 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
 .transport-row .key.is-flashing{animation:pi-lamp-flash 0.5s steps(1,end) infinite alternate}
 @keyframes pi-lamp-flash{to{background:var(--key-bg);color:var(--key-fg);border-color:var(--key-border);box-shadow:none}}
 @media (prefers-reduced-motion:reduce){.transport-row .key.is-flashing{animation:none;border-style:dashed}}
-/* Text mode: the same transport keys but labelled instead of icon glyphs.
-   Buttons stretch to fit and the label takes the accent colour the icon had. */
-.transport-row.text .key{width:auto;min-width:clamp(2em,3.2vw,3.4em);font-size:clamp(0.55em,0.95vw,0.85em);letter-spacing:0.08em;padding:0 0.3em}
+/* Text mode: the same transport keys labelled instead of glyphs. Owner
+   rule: the keys keep the icon mode's size (the squares above); only the
+   label is sized to fit one inside them. */
+.transport-row.text .key{font-size:clamp(8px,0.95vw,14px);letter-spacing:0.04em;padding:0;overflow:hidden;white-space:nowrap}
 
 .header-actions{position:absolute;top:0.8em;right:clamp(0.5em,2vw,1.5em);display:flex;gap:0.5em}
 /* .icon-btn is applied to both a <button> (Settings) and an <a> (Log out)
