@@ -2279,6 +2279,11 @@ main.app-main{display:contents}
 .media-deck.is-playing .device-lamp{filter:drop-shadow(0 0 4px var(--success))}
 .media-deck #linkLamp{fill:var(--deck-well,var(--surface))}
 .media-deck #linkLamp.on{fill:var(--accent);filter:drop-shadow(0 0 3px var(--accent))}
+/* Both reels turn the same way, as on a real deck: the theme spins the
+   take-up reel clockwise and reverses only the supply reel, so reverse the
+   take-up (right) reel too. Only the direction changes; Reduce Motion
+   still stops the animation in the theme. */
+.media-deck:is(.is-playing,.is-recording) #reelR .reel-spin{animation-direction:reverse}
 /* The lit 7-segment time display. Every segment is an SVG line (see the
    buildSeg7 JS); the dim .s7 shows all segments faintly so the display
    reads as a proper 7-segment counter even for unlit digits. The whole display

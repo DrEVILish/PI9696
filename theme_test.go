@@ -857,6 +857,8 @@ func TestDashboardUsesFTLIndicators(t *testing.T) {
 		`bulb.classList.toggle('is-on', !!on)`,
 		`<div class="modal-header">`,
 		`class="meter-badge badge badge-accent"`,
+		// both reels spin the same way (the theme reverses only the supply reel)
+		`.media-deck:is(.is-playing,.is-recording) #reelR .reel-spin{animation-direction:reverse}`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lacks %q", want)
