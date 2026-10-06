@@ -2300,7 +2300,7 @@ main.app-main{display:contents}
 /* Level meters: a full-width band right under the header, as tall as the
    header (--deck-h is measured from it, see the script), collapsible to
    its bar with a large toggle. Owner layout 2026-10-05. */
-.meter-band{display:flex;align-items:stretch;gap:var(--space-m,1em);height:var(--deck-h,150px);margin:0 0 1.2em;background:rgba(3,8,15,0.6);border:1px solid var(--border);border-radius:10px;padding:0.4em 1em;box-sizing:border-box}
+.meter-band{display:flex;align-items:stretch;gap:var(--space-m,1em);min-height:var(--deck-h,150px);margin:0 0 1.2em;background:rgba(3,8,15,0.6);border:1px solid var(--border);border-radius:10px;padding:0.4em 1em;box-sizing:border-box}
 .meter-bar{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0.5em;flex:none;min-width:7.5em}
 .meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--muted);text-transform:uppercase}
 .meter-caret{width:2.9em;height:2.9em;border-radius:50%}
@@ -2330,17 +2330,22 @@ header.deck .meter-open{position:absolute;left:clamp(0.5em,2vw,1.5em);top:50%;tr
 .sys-pane{position:fixed;left:0;right:0;bottom:var(--footer-h,2.6em);z-index:149;max-height:72vh;overflow-y:auto;padding:0.6em 1.5em 1em;background:rgba(3,8,15,0.96);border-top:1px solid var(--border);box-shadow:0 -10px 40px rgba(0,180,255,0.14)}
 .sys-pane[hidden]{display:none}
 .sys-pane h2{margin:0.2em 0 0.4em;font-size:0.8em;letter-spacing:0.25em;text-transform:uppercase;color:var(--muted)}
-/* The meter bank is ftl-themes' console (v5): a .mixer of .strip
-   channels, each a segmented .meter.meter-v in a .strip-fader over a
-   .scribble with the channel's number and its inferno name, behind one
-   shared .scale.is-meter legend strip. The app sets only sizes: narrow
-   strips so a 64-channel unit still fits, and a fader length that fills
-   the band (as tall as the header). Levels, peaks and the dB ticks are
-   placed with the same taper (vuPct). */
-.meter-bank{--strip-width:3.3rem;--mixer-gap:3px;--meter-thickness:1.1rem;--fader-length:calc(var(--deck-h,150px) - 4.6rem);flex:0 1 auto;max-width:100%}
-.meter-bank .strip-legend{--strip-width:3rem}
-.meter-bank .scribble{text-align:center;padding:0.15rem 0.2rem}
-.meter-bank .scribble-name{font-size:0.62rem}
+/* The meter bank is ftl-themes' console (v5): rows of up to 16 .strip
+   channels (owner layout 2026-10-06: 16 per row, more rows instead of
+   scrolling), each row a .mixer led by its own .scale.is-meter legend.
+   A strip is the channel number, a segmented .meter.meter-v in a
+   .strip-fader, then a .scribble with the channel's name. The app sets
+   only sizes: strips barely wider than the meter (no gaps between
+   meters), and a fader length that keeps one row as tall as the header.
+   Levels, peaks and the dB ticks are placed with the same taper (vuPct). */
+.meter-rows{display:flex;flex-direction:column;align-items:center;gap:4px;max-width:100%}
+.meter-row{--strip-width:2.6rem;--mixer-gap:2px;--meter-thickness:1rem;--fader-length:calc(var(--deck-h,150px) - 5.4rem);flex:none;max-width:100%;overflow-x:visible}
+.meter-row .strip{padding:0.25rem 0.1rem;gap:0.2rem}
+.meter-row .strip-fader{margin-top:0}
+.meter-row .strip-num{font-size:0.62rem;line-height:1;text-align:center;color:var(--muted);font-variant-numeric:tabular-nums}
+.meter-row .strip-legend{--strip-width:2.3rem}
+.meter-row .scribble{text-align:center;padding:0.12rem 0.1rem}
+.meter-row .scribble-name{font-size:0.56rem;letter-spacing:0;white-space:nowrap;text-overflow:ellipsis}
 
 /* Telemetry panel: collapsible system stats with per-core mini graphs */
 .sys-graphs{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,22rem),1fr));gap:0.6em 1.4em}
@@ -2378,7 +2383,7 @@ header.deck .meter-open{position:absolute;left:clamp(0.5em,2vw,1.5em);top:50%;tr
   .meter-title{font-size:0.6em}
   .meter-badge{display:none}
   .meter-band{height:auto;flex-direction:column}
-  .meter-bank{--fader-length:7rem}
+  .meter-row{--fader-length:7rem}
   .meter-bar{flex-direction:row;align-items:center}
 }
 
@@ -2450,12 +2455,7 @@ html[data-theme] body{background:transparent}
     </button>
   </div>
   <div class="meter-body" id="meterBody">
-    <div class="mixer meter-bank" id="chMeters" role="group" aria-label="Input levels">
-      <section class="strip strip-legend" aria-hidden="true">
-        <div class="strip-fader"><div class="scale is-meter" id="dbScale"></div></div>
-        <div class="scribble"><span class="scribble-num">dBFS</span><span class="scribble-name">&nbsp;</span></div>
-      </section>
-    </div>
+    <div class="meter-rows" id="chMeters" role="group" aria-label="Input levels"></div>
   </div>
 </section>
 
@@ -2785,18 +2785,21 @@ function vuPct(db) {
 // reaches. (They used to be placed linearly in dB, so a -12 dBFS peak drew
 // level with the "-20" region of the scale and a -15 dBFS RMS with "-27".)
 var DB_TICKS = [0, -6, -12, -18, -24, -36, -48];
-var dbScale = document.getElementById('dbScale');
 var scaleFloor = null;
+// rebuildDbScale fills every row's legend (.scale.is-meter); ensureChannels
+// resets scaleFloor when it builds new, empty rows.
 function rebuildDbScale(floor) {
   if (floor === scaleFloor) return;
   scaleFloor = floor;
-  dbScale.innerHTML = '';
-  DB_TICKS.filter(function(db) { return db > floor + 6; }).concat([floor]).forEach(function(db) {
-    var span = document.createElement('span');
-    span.style.setProperty('--at', vuPct(db) / 100); // .scale.is-meter places marks at --at (0-1)
-    if (db === 0) span.className = 'is-unity';
-    span.textContent = Math.round(db);
-    dbScale.appendChild(span);
+  document.querySelectorAll('#chMeters .scale.is-meter').forEach(function(scale) {
+    scale.innerHTML = '';
+    DB_TICKS.filter(function(db) { return db > floor + 6; }).concat([floor]).forEach(function(db) {
+      var span = document.createElement('span');
+      span.style.setProperty('--at', vuPct(db) / 100); // .scale.is-meter places marks at --at (0-1)
+      if (db === 0) span.className = 'is-unity';
+      span.textContent = Math.round(db);
+      scale.appendChild(span);
+    });
   });
   // Position the green->yellow and yellow->red meter bands at the design's
   // absolute thresholds (-18 / -6 dBFS) mapped through the current floor.
@@ -2971,32 +2974,44 @@ var meterBadge = document.getElementById('meterBadge');
 
 var chMeters = document.getElementById('chMeters');
 var chCount = -1, chNames = '';
-// ensureChannels builds one console strip per channel (ftl-themes .strip:
-// segmented .meter.meter-v + .scribble with number and name), keeping the
-// legend strip first. Rebuilt only when the count or the names change.
+// ensureChannels builds the meter rows: up to METERS_PER_ROW console strips
+// per row (ftl-themes .strip: channel number, segmented .meter.meter-v,
+// .scribble with the name), each row led by its own legend strip. Rebuilt
+// only when the count or the names change.
+var METERS_PER_ROW = 16;
+var LEGEND_STRIP = '<section class="strip strip-legend" aria-hidden="true"><span class="strip-num">&nbsp;</span>' +
+  '<div class="strip-fader"><div class="scale is-meter"></div></div><div class="scribble"><span class="scribble-name">dBFS</span></div></section>';
 function ensureChannels(n, names) {
   var key = (names || []).join('\u0000');
   if (n === chCount && key === chNames) return;
-  chMeters.querySelectorAll('.strip:not(.strip-legend)').forEach(function(el) { el.remove(); });
+  chMeters.innerHTML = '';
+  var row = null;
   for (var i = 1; i <= n; i++) {
+    if ((i - 1) % METERS_PER_ROW === 0) {
+      row = document.createElement('div');
+      row.className = 'mixer meter-row';
+      row.innerHTML = LEGEND_STRIP;
+      chMeters.appendChild(row);
+    }
     var name = (names && names[i - 1]) || ('RX ' + i);
     var strip = document.createElement('section');
     strip.className = 'strip';
-    strip.innerHTML = '<div class="strip-fader"><div class="meter meter-v is-segmented" role="meter" aria-valuemin="' + FLOOR + '" aria-valuemax="0" aria-valuenow="' + FLOOR + '"><div class="meter-fill" data-i="' + i + '"></div><div class="meter-peak"></div></div></div>' +
-      '<div class="scribble"><span class="scribble-num"></span><span class="scribble-name"></span></div>';
+    strip.innerHTML = '<span class="strip-num"></span>' +
+      '<div class="strip-fader"><div class="meter meter-v is-segmented" role="meter" aria-valuemin="' + FLOOR + '" aria-valuemax="0" aria-valuenow="' + FLOOR + '"><div class="meter-fill" data-i="' + i + '"></div><div class="meter-peak"></div></div></div>' +
+      '<div class="scribble"><span class="scribble-name"></span></div>';
     strip.querySelector('.meter').setAttribute('aria-label', 'Channel ' + i + ' ' + name + ' level, dBFS');
-    strip.querySelector('.scribble-num').textContent = i;
+    strip.querySelector('.strip-num').textContent = i;
     strip.querySelector('.scribble-name').textContent = name;
     strip.querySelector('.scribble-name').title = name;
-    chMeters.appendChild(strip);
+    row.appendChild(strip);
   }
   chCount = n;
   chNames = key;
+  scaleFloor = null; // the new rows' legends are empty
 }
 
 function applyMeter(m) {
   FLOOR = m.floorDB;
-  rebuildDbScale(m.floorDB);
 
   // OLED mirror: reload only when the panel framebuffer actually changed.
   if (m.displaySeq !== oledSeq) {
@@ -3041,6 +3056,7 @@ function applyMeter(m) {
 
   var channels = Array.isArray(m.channels) ? m.channels : [];
   ensureChannels(channels.length, m.channelNames);
+  rebuildDbScale(m.floorDB);
   channels.forEach(function(c, idx) {
     var i = idx + 1;
     // ftl-themes' .meter contract: level and peak are custom properties

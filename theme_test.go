@@ -835,9 +835,11 @@ func TestDashboardMetersUseConsoleComponents(t *testing.T) {
 	mux := newRemoteMux()
 	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
 	for _, want := range []string{
-		`class="mixer meter-bank" id="chMeters" role="group"`,
-		`class="strip strip-legend"`,
-		`class="scale is-meter" id="dbScale"`,
+		`class="meter-rows" id="chMeters" role="group"`,
+		`row.className = 'mixer meter-row'`, `var METERS_PER_ROW = 16;`,
+		`class="strip strip-legend"`, `class="scale is-meter"`,
+		// number above the meter, name below it
+		`'<span class="strip-num"></span>' +`,
 		`meter meter-v is-segmented`, `role=`, `aria-valuemax=`,
 		`scribble-name`, `m.channelNames`, `setAttribute('aria-valuenow', now)`,
 	} {
@@ -845,7 +847,9 @@ func TestDashboardMetersUseConsoleComponents(t *testing.T) {
 			t.Errorf("dashboard lacks %q", want)
 		}
 	}
-	for _, gone := range []string{"meter-bridge", "db-scale", "vu-track", "ch-label"} {
+	// .meter-bank is ftl's own (gap 1rem, space-around, fixed height): a
+	// row carrying it spread the strips apart
+	for _, gone := range []string{"meter-bridge", "db-scale", "vu-track", "ch-label", "meter-bank"} {
 		if strings.Contains(body, gone) {
 			t.Errorf("dashboard still has the app's own meter part %q", gone)
 		}
