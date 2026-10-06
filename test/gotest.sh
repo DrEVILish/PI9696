@@ -4,7 +4,8 @@
 # deviceName read, the mDNS child reaping) only detect their bug under
 # -race, so a plain `go test` passes them vacuously.
 #
-# Dev server only - never on a unit (see DEPLOYMENT.md). Needs cgo and a
+# Dev machine only - never on a unit (it starts ffmpeg children and inferno
+# clients that do not belong on a live recorder). Needs cgo and a
 # race-capable platform (linux/amd64 or linux/arm64).
 set -e
 cd "$(dirname "$0")/.."

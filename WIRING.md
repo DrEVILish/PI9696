@@ -130,8 +130,9 @@ Playback currently goes to local ALSA (target: route out through Inferno — Kno
 5. Complete test: `sudo ./test-hardware all`
 
 > `test-hardware` is not yet implemented — this sequence is the spec for it.
-> Until it lands, the equivalents are `go run ./cmd/simcheck` (renders every
-> OLED screen to PNG) and `./inferno-loopback.sh` (proves the inferno path).
+> Until it lands, run the app with `PI9696_SIM=1` and watch the OLED mirror in
+> the WebUI (or `/api/display.png`), and check the inferno path with a
+> subscription as below.
 
 ### Audio Verification
 

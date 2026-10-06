@@ -31,7 +31,7 @@ go.work.sum
 fonts/
 
 # Inferno AoIP and its PTP clock daemon - pinned third-party checkouts built at
-# install time (see DEPLOYMENT.md), not part of this app's source.
+# install time (see docs/install.sh), not part of this app's source.
 /inferno/
 /statime/
 # usrvclock stub built from inferno's test sources, used where the LAN has no
@@ -47,7 +47,6 @@ web/uPlot.min.css
 # Built binaries
 /pi9696
 /font-converter
-/simcheck
 
 # Editor/IDE
 # .idea/

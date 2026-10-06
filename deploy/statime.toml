@@ -3,9 +3,8 @@
 # __PI9696_DIR__/deploy/statime.toml by deploy/statime.service.
 #
 # PTPv1 is what hardware inferno-network devices lead with. On a LAN with no
-# hardware leader, statime cannot be a PTPv1 master ("not implemented yet") -
-# see DEPLOYMENT.md "Two inferno hosts, no hardware device" for the PTPv2
-# master/slave recipe.
+# hardware leader, statime cannot be a PTPv1 master ("not implemented yet"):
+# run two hosts as PTPv2 master/slave (see README "Clock").
 loglevel = "info"
 sdo-id = 0
 domain = 0

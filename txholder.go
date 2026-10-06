@@ -116,7 +116,7 @@ func startInProcInferno(name string, rate, channels int, fifoPath string) bool {
 			// Not transient: the backoff retry would log this once a
 			// minute forever on a dev box or simulator. A link flap or an
 			// explicit restart still tries again.
-			logErrorf("in-process inferno: the inferno ALSA plugin is not installed (%v) - build and install alsa_pcm_inferno (DEPLOYMENT.md)", err)
+			logErrorf("in-process inferno: the inferno ALSA plugin is not installed (%v) - build and install alsa_pcm_inferno (docs/install.sh)", err)
 			mutex.Lock()
 			infernoNoRetry = true
 			mutex.Unlock()
@@ -361,7 +361,7 @@ func sanitizeDanteName(s string) string {
 // Takes are 24-bit PCM (OutputBitsPerSample), decoded into s32 with the low
 // byte zero; inferno's default (32) made it TPDF-dither them down to 24 on
 // the wire, so playback changed about a quarter of all samples by 1 LSB and
-// was never bit-transparent (e2e_bitperfect.py, INFERNO-UPSTREAM U3/U4).
+// was never bit-transparent (test/interop/e2e_bitperfect.py).
 // 24 sends them untouched.
 const txSourceBitDepth = "24"
 
@@ -550,7 +550,7 @@ func txSilenceFrames(rate int) int {
 // silence; before this it looped the take's last ~42 ms indefinitely. The
 // stream is deliberately not stopped: the plugin's stop path
 // (plugin_stop -> blocking_send under its own mutex) can block forever,
-// which hung the app (see INFERNO-UPSTREAM.md). A pump retired by a seek
+// which hung the app (the plugin's deadlock-prone stop path). A pump retired by a seek
 // leaves the device to its successor.
 func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int) {
 	// Same TryLock discipline as the pump: a blocked superseded check is a

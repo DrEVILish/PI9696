@@ -2504,7 +2504,7 @@ func closeFifoKeeperLocked() {
 // At 128ch/48kHz s32le the stream runs ~24MB/s, so 64KB holds ~2.6ms of audio
 // and any reader stall back-pressures the writer into a gap; 4MB holds ~160ms
 // (the kernel clamps to pipe-max-size, 1MB by default). Best-effort: if the
-// kernel refuses - see the CAP_SYS_RESOURCE note in DEPLOYMENT.md - the default
+// kernel refuses - see the CAP_SYS_RESOURCE note in README "Service" - the default
 // size is kept and the reason logged.
 func enlargeFifo(path string) *os.File {
 	f, err := os.OpenFile(path, os.O_RDWR, 0)

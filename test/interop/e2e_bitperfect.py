@@ -16,7 +16,7 @@ inferno ALSA plugin and ssh + HTTP access to Pi-A, which runs the pi9696 app).
      take.
 
 Both hosts must share one PTP clock (Pi-A's recording gate refuses takes
-otherwise; see DEPLOYMENT.md "Two inferno hosts"). With the same clock and
+otherwise; see README "Clock"). With the same clock and
 the same audio path the two recordings must be identical: every frame of the
 take present in Pi-B's recording with the same 24-bit value on every channel.
 Anything else is a bug, or a part of the path that is not bit-transparent.
