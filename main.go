@@ -4823,10 +4823,9 @@ func renderIdleScreen() {
 }
 
 // idleVUChannelsPerPage caps how many channels' worth of meters fit
-// legibly across the 256px-wide panel at once (see renderIdleVUPage) -
-// wider bars with room for a channel-number label read better on a small
-// OLED than cramming every channel into one page.
-const idleVUChannelsPerPage = 12
+// legibly across the 256px-wide panel at once (see renderIdleVUPage).
+// Owner layout 2026-10-06: 16 per page (a bank pair, as on the WebUI).
+const idleVUChannelsPerPage = 16
 
 // idleVUPageCount is how many VU-meter pages idle-browse needs to cover
 // every recording channel; onEncoderRotate's StateIdleBrowse case pages
@@ -5035,7 +5034,12 @@ func renderIdleVUPage(page int) {
 	// above it, and drawing any earlier overlaps its text.
 	hwManager.SwitchToContext("details")
 
-	const top, bottom = 30, 54
+	// Owner layout 2026-10-06: taller meters for more resolution, starting
+	// 4px under the status bar (its lowest lit row is 11 - measured from
+	// the framebuffer), and ending where the floor tick's label clears the
+	// channel-number line at y=58.
+	const statusBarBottom = 11
+	const top, bottom = statusBarBottom + 1 + 4, 47
 	const scaleW = 18
 	barAreaX := scaleW
 	barAreaW := DisplayWidth - barAreaX - 2
@@ -5045,7 +5049,9 @@ func renderIdleVUPage(page int) {
 	floor := vuRangeOptions[vuRangeIdx]
 	for _, db := range []float64{0, -12, floor / 2, floor} {
 		y := bottom - int(idleVUPct(db)/100*float64(bottom-top))
-		hwManager.DrawText(0, y+3, fmt.Sprintf("%d", int(db)))
+		// Baselines stay inside the meter area, so the 0 label does not
+		// reach into the gap under the status bar.
+		hwManager.DrawText(0, max(y+3, top+6), fmt.Sprintf("%d", int(db)))
 		hwManager.DrawBox(scaleW-4, y, 4, 1, 10)
 	}
 
@@ -5087,8 +5093,9 @@ func renderIdleVUPage(page int) {
 		tw := hwManager.GetTextWidth(label)
 		hwManager.DrawText(x+(w-tw)/2, 58, label)
 	}
+	// Under the scale: 16 bars fill the width, so the right edge is taken.
 	ind := fmt.Sprintf("%d/%d", page+1, pages)
-	hwManager.DrawText(DisplayWidth-hwManager.GetTextWidth(ind)-2, 58, ind)
+	hwManager.DrawText(0, 58, ind)
 }
 
 // renderIdleInfoPage is the page after the last VU meter: the same network

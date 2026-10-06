@@ -1857,7 +1857,7 @@ func TestIdleBrowseNavigatesPagesAndReturnsToIdle(t *testing.T) {
 
 	mutex.Lock()
 	currentState = StateIdle
-	channelCount = 8 // idleVUChannelsPerPage=12 -> 1 VU page + 1 waveform page + 1 info page = 3 stops
+	channelCount = 8 // idleVUChannelsPerPage=16 -> 1 VU page + 1 waveform page + 1 info page = 3 stops
 	mutex.Unlock()
 
 	// Any rotation from idle enters browse mode at page 0.

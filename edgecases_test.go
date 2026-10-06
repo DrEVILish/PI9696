@@ -690,3 +690,16 @@ func TestCopyFileCancelAndSubdir(t *testing.T) {
 		t.Error("missing source copied without error")
 	}
 }
+
+// Owner layout: 16 meters per OLED page.
+func TestIdleVUSixteenPerPage(t *testing.T) {
+	mutex.Lock()
+	orig := channelCount
+	defer func() { channelCount = orig; mutex.Unlock() }()
+	for count, want := range map[int]int{1: 1, 16: 1, 17: 2, 64: 4, 128: 8} {
+		channelCount = count
+		if got := idleVUPageCount(); got != want {
+			t.Errorf("%d channels: %d VU pages, want %d", count, got, want)
+		}
+	}
+}
