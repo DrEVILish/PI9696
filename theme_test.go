@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -740,7 +741,7 @@ func TestDashboardTransportLampsFollowState(t *testing.T) {
 		`rec: !!m.recording`,
 		// the theme is in @layer ui: an unlayered app button rule would
 		// override every .key style, so the generic rules must skip .key
-		`:where(button:not(.key)){`,
+		`:where(button:not(.key,.btn,.tab,.btn-close)){`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("dashboard lacks %q", want)
@@ -842,6 +843,42 @@ func TestDashboardMetersUseConsoleComponents(t *testing.T) {
 	for _, gone := range []string{"meter-bridge", "db-scale", "vu-track", "ch-label"} {
 		if strings.Contains(body, gone) {
 			t.Errorf("dashboard still has the app's own meter part %q", gone)
+		}
+	}
+}
+
+// The dashboard's small indicators are ftl-themes v5 components rather
+// than app-drawn look-alikes, so every theme restyles them.
+func TestDashboardUsesFTLIndicators(t *testing.T) {
+	mux := newRemoteMux()
+	body := dashboardHTML(t, mux, sessionCookie(t, mux), "/")
+	for _, want := range []string{
+		`<span class="lamp is-error" aria-hidden="true"></span>`, // server link
+		`bulb.classList.toggle('is-on', !!on)`,
+		`<div class="modal-header">`,
+		`class="meter-badge badge badge-accent"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("dashboard lacks %q", want)
+		}
+	}
+	for _, gone := range []string{`class="modal-head"`, `.icon-btn.conn`, `.footer-disk b{`} {
+		if strings.Contains(body, gone) {
+			t.Errorf("dashboard still has %q", gone)
+		}
+	}
+	// footer disk: a native <progress> of space used, values as readouts
+	var buf bytes.Buffer
+	v := statusView{DiskTotal: 62, DiskFree: 34, RecordTime: "32:21:21"}
+	v.DiskUsed = v.DiskTotal - v.DiskFree
+	statusTmpl.Execute(&buf, v)
+	for _, want := range []string{
+		`<progress class="progress" value="28" max="62" aria-label="Disk /rec used"></progress>`,
+		`<span class="readout readout-sm">34<span class="readout-unit">GB</span></span>`,
+		`record time left <span class="readout readout-sm">32:21:21</span>`,
+	} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("status footer lacks %q", want)
 		}
 	}
 }

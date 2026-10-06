@@ -2070,10 +2070,10 @@ body{font-family:"Consolas",monospace;background:radial-gradient(ellipse at top,
 h2{font-size:0.8em;letter-spacing:0.2em;text-transform:uppercase;color:var(--muted);border-bottom:1px solid var(--border);padding-bottom:0.4em;margin:0 0 var(--space-s,0.8em)}
 a{color:var(--accent)}
 input{font-family:inherit;background:var(--input-bg,#08192b);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0.4em}
-:where(button:not(.key)){font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
-:where(button:not(.key)):hover{border-color:var(--accent);box-shadow:0 0 8px var(--accent)}
-:where(button:not(.key)):active{background:var(--surface-2,#0f2a44)}
-:where(button:not(.key)):disabled{opacity:0.35;cursor:default;box-shadow:none}
+:where(button:not(.key,.btn,.tab,.btn-close)){font-family:inherit;font-size:0.95em;padding:0.5em 1em;background:var(--surface-2,#08192b);color:var(--accent);border:1px solid var(--border);border-radius:5px;cursor:pointer;letter-spacing:0.05em}
+:where(button:not(.key,.btn,.tab,.btn-close)):hover{border-color:var(--accent);box-shadow:0 0 8px var(--accent)}
+:where(button:not(.key,.btn,.tab,.btn-close)):active{background:var(--surface-2,#0f2a44)}
+:where(button:not(.key,.btn,.tab,.btn-close)):disabled{opacity:0.35;cursor:default;box-shadow:none}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:1px solid var(--accent);outline-offset:2px}
 .ok{color:var(--success)}
 .err{color:var(--danger)}
@@ -2148,10 +2148,10 @@ header.deck{position:relative;display:flex;flex-direction:var(--pi-deck-dir,row)
    while the server pushes, error red while disconnected. A span, not a
    button: no pointer affordance, and no hover recolor (it must never read
    as a control). The icon stroke inherits the span's color. */
-.icon-btn.conn{cursor:default}
-.icon-btn.conn:hover{border-color:var(--border);color:var(--accent)}
-.icon-btn.conn.on{filter:drop-shadow(var(--lamp-glow,0 0 3px rgba(0,217,255,0.8)))}
-.icon-btn.conn.off{color:var(--danger)}
+/* Server link: the broadcast glyph plus ftl-themes' .lamp - lit in the
+   accent while the telemetry socket pushes, .is-error while unreachable. */
+.conn{display:inline-flex;align-items:center;gap:0.4em;padding:0 0.3em;color:var(--muted);--lamp-on:var(--accent)}
+.conn .icon{width:1.1em;height:1.1em;min-width:1.1em}
 /* Download ALL: a small labeled action in the Recordings heading - text,
    not just an icon, so its function reads at a glance. */
 .dl-all{float:right;font-size:0.7em;letter-spacing:0.08em;color:var(--accent);background:var(--surface-2,#08192b);border:1px solid var(--border);border-radius:5px;padding:0.15em 0.5em;text-decoration:none;font-weight:normal;display:inline-flex;align-items:center;gap:0.35em}
@@ -2217,8 +2217,7 @@ main.app-main{display:contents}
    a long setting list never runs past the viewport edge. Setting families are
    grouped under section titles and laid out on a responsive 2-column grid. */
 .modal--settings{width:min(680px,94vw);max-height:88vh;display:flex;flex-direction:column;padding:0}
-.modal--settings .modal-head{display:flex;align-items:center;justify-content:space-between;gap:var(--space-m,1em);padding:var(--space-m,1.1em) var(--space-l,1.4em);border-bottom:1px solid var(--border)}
-.modal--settings .modal-head h2{margin:0;border:0;padding:0}
+.modal--settings .modal-header{padding:var(--space-m,1.1em) var(--space-l,1.4em);margin:0;border-bottom:1px solid var(--border)}
 /* Settings sheet: the library's vertical tab rail beside scrolling panes.
    The rail is fixed-width, the active pane fills the rest; panes are plain
    group grids, shown one at a time (see selectSettingsTab). */
@@ -2299,7 +2298,6 @@ main.app-main{display:contents}
 .meter-band{display:flex;align-items:stretch;gap:var(--space-m,1em);height:var(--deck-h,150px);margin:0 0 1.2em;background:rgba(3,8,15,0.6);border:1px solid var(--border);border-radius:10px;padding:0.4em 1em;box-sizing:border-box}
 .meter-bar{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:0.5em;flex:none;min-width:7.5em}
 .meter-title{font-size:0.7em;letter-spacing:0.25em;color:var(--muted);text-transform:uppercase}
-.meter-badge{font-size:0.62em;letter-spacing:0.12em;color:var(--accent);border:1px solid var(--border);border-radius:10px;padding:0.05em 0.6em}
 .meter-caret{width:2.9em;height:2.9em;border-radius:50%}
 .meter-caret .icon{width:1.6em;height:1.6em;min-width:1.6em}
 .meter-body{flex:1;min-width:0;display:flex;align-items:center;overflow:hidden;transition:opacity 0.25s ease}
@@ -2316,7 +2314,8 @@ header.deck .meter-open{position:absolute;right:clamp(0.5em,2vw,1.5em);bottom:0.
 @media (max-width:800px){header.deck .meter-open{position:static;margin-left:auto}}
 /* Footer: disk space and record time, plus the System pane toggle. */
 .app-footer{position:fixed;left:0;right:0;bottom:0;z-index:150;display:flex;align-items:center;gap:var(--space-m,1em);padding:0.45em 1.5em;background:rgba(3,8,15,0.94);border-top:1px solid var(--border);box-shadow:0 -8px 30px rgba(0,180,255,0.10);font-size:0.85em;color:var(--muted)}
-.footer-disk b{color:var(--text);font-weight:normal}
+.footer-disk{display:inline-flex;align-items:center;gap:0.45em;flex-wrap:wrap}
+.footer-disk .progress{width:6em}
 .sys-toggle{margin-left:auto;display:inline-flex;align-items:center;gap:0.5em;padding:0.35em 1em;font-size:0.95em}
 .sys-toggle .icon{width:1.3em;height:1.3em;min-width:1.3em}
 .sys-toggle svg{transform:rotate(180deg);transition:transform 0.2s ease}
@@ -2411,8 +2410,8 @@ html[data-theme] body{background:transparent}
     <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-volume"/></svg><span>Meters</span>
   </button>
   <div class="header-actions">
-    <span class="icon-btn conn off" id="connLamp" title="Server disconnected">
-      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-broadcast"/></svg>
+    <span class="conn" id="connLamp" role="status" title="Server disconnected" aria-label="Server disconnected">
+      <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-broadcast"/></svg><span class="lamp is-error" aria-hidden="true"></span>
     </span>
     <button class="icon-btn btn btn-icon" id="settingsBtn" type="button" title="Settings">
       <svg class="icon" aria-hidden="true"><use href="{{.IconSprite}}#icon-settings"/></svg>
@@ -2437,7 +2436,7 @@ html[data-theme] body{background:transparent}
 <section class="meter-band" id="meterFooter" aria-label="Level meters">
   <div class="meter-bar">
     <span class="meter-title">Level meters</span>
-    <span class="meter-badge" id="meterBadge">--</span>
+    <span class="meter-badge badge badge-accent" id="meterBadge">--</span>
     <button class="icon-btn meter-caret" id="meterToggle" type="button" title="Collapse/expand meters" aria-label="Collapse or expand level meters" aria-controls="meterBody" aria-expanded="true">
       <svg class="icon" id="meterCaretSvg" aria-hidden="true"><use href="{{.IconSprite}}#icon-chevron-down"/></svg>
     </button>
@@ -2586,7 +2585,7 @@ html[data-theme] body{background:transparent}
 
 <div class="modal-backdrop modal-overlay" id="settingsModal">
   <div class="modal modal-lg modal--settings">
-    <div class="modal-head">
+    <div class="modal-header">
       <h2>Unit Settings</h2>
       <button class="btn-close" id="settingsClose" type="button" aria-label="Close settings"></button>
     </div>
@@ -3232,9 +3231,10 @@ document.body.addEventListener('htmx:after:swap', function(e) {
 function setConnLamp(on) {
   var lamp = document.getElementById('connLamp');
   if (!lamp) return;
-  lamp.classList.toggle('on', !!on);
-  lamp.classList.toggle('off', !on);
+  var bulb = lamp.querySelector('.lamp');
+  if (bulb) { bulb.classList.toggle('is-on', !!on); bulb.classList.toggle('is-error', !on); }
   lamp.title = on ? 'Server connected' : 'Server disconnected';
+  lamp.setAttribute('aria-label', lamp.title);
 }
 function watchConnLamp(el) {
   if (!el || !el.addEventListener) return;
@@ -3685,7 +3685,7 @@ var statusTmpl = template.Must(template.New("status").Parse(`
 {{if not .InfernoUp}}<p>(Inferno not running &mdash; build the Inferno binary and restart)</p>{{end}}
 {{if .DemoMode}}<p>(Demo mode &mdash; simulated audio)</p>{{end}}
 {{end}}
-<span id="diskInfo" class="footer-disk" hx-swap-oob="true">Disk /rec <b>{{printf "%.0f" .DiskFree}} GB</b> free of {{printf "%.0f" .DiskTotal}} GB &middot; record time left <b>{{.RecordTime}}</b></span>`))
+<span id="diskInfo" class="footer-disk" hx-swap-oob="true">Disk /rec <progress class="progress" value="{{printf "%.0f" .DiskUsed}}" max="{{printf "%.0f" .DiskTotal}}" aria-label="Disk /rec used"></progress> <span class="readout readout-sm">{{printf "%.0f" .DiskFree}}<span class="readout-unit">GB</span></span> free of {{printf "%.0f" .DiskTotal}} GB &middot; record time left <span class="readout readout-sm">{{.RecordTime}}</span></span>`))
 
 // webNotice/webNoticeUntil is the dashboard counterpart of sysNotice: a
 // one-shot error line rendered into the status panel. startPlayback uses it
@@ -3722,6 +3722,7 @@ type statusView struct {
 	CPUTemp     float64
 	DiskTotal   float64
 	DiskFree    float64
+	DiskUsed    float64 // DiskTotal - DiskFree, for the footer's <progress>
 	RecordTime  string
 }
 
@@ -3756,6 +3757,7 @@ func currentStatusView() statusView {
 	v.Uptime, v.AppVersion, v.CPUPerCore = t.Uptime, t.AppVersion, t.CPUPerCore
 	v.RAMApp, v.RAMSysUsed, v.RAMSysTotal = t.RAMApp, t.RAMSysUsed, t.RAMSysTotal
 	v.CPUTemp, v.DiskTotal, v.DiskFree, v.RecordTime = t.CPUTemp, t.DiskTotal, t.DiskFree, t.RecordTime
+	v.DiskUsed = max(0, v.DiskTotal-v.DiskFree)
 	return v
 }
 
