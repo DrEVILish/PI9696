@@ -4211,8 +4211,8 @@ var recordingsTmpl = template.Must(template.New("recordings").Parse(`
 <tbody>
 {{if not .Rows}}<tr><td colspan="9"><div class="empty-state"><span class="empty-state-icon">&#8709;</span><span class="empty-state-title">None yet.</span><span class="empty-state-hint">Takes appear here as they finalize.</span></div></td></tr>{{else}}
 {{range .Rows}}<tr{{if .Selected}} class="is-selected" aria-selected="true"{{end}}>
-<td class="recs-play"><form hx-post="/api/playback/select" hx-target="#recordings" hx-swap="innerHTML"><input type="hidden" name="file" value="{{.RelPath}}"><button class="btn btn-sm btn-secondary" type="submit" name="play" value="1" title="Play this take" aria-label="Play {{.Name}}"><svg class="icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-play"/></svg></button></form></td>
-<td>{{.Name}}{{if .Selected}} <span class="badge">selected</span>{{end}}</td>
+<td class="recs-play"><form hx-post="/api/playback/select" hx-target="#recordings" hx-swap="innerHTML"><input type="hidden" name="file" value="{{.RelPath}}"><button class="btn btn-sm btn-secondary" type="submit" title="Load this take: PLAY starts it" aria-label="Load {{.Name}} for playback"><svg class="icon" aria-hidden="true"><use href="{{$.Sprite}}#icon-play"/></svg></button></form></td>
+<td>{{.Name}}{{if .Selected}} <span class="badge badge-accent">loaded</span>{{end}}</td>
 <td>{{.Channels}}</td>
 <td class="recs-chans"><details><summary title="Channel names of this take (from the unit's inferno channel names when it started; rename here - the unit itself is not changed)">{{.ChanSummary}}</summary>
 <form hx-post="/api/recordings/channels" hx-target="#recordings" hx-swap="innerHTML" class="chan-form"><input type="hidden" name="file" value="{{.RelPath}}">

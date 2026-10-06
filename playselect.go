@@ -50,7 +50,9 @@ func resolveRecording(rel string) (string, bool) {
 }
 
 // handleAPIPlaybackSelect chooses a take (form "file", the row's RelPath)
-// and, with play=1, starts it. A track already playing must be stopped
+// and, with play=1, starts it. The recordings table's play button only
+// loads (queues) the take - owner rule: PLAY on the deck or the panel
+// starts it - so play=1 is for API clients. A track already playing must be stopped
 // first: replacing it silently would be a surprise on a live output.
 // Answers with the re-rendered recordings table so the selected row shows.
 func handleAPIPlaybackSelect(w http.ResponseWriter, r *http.Request) {

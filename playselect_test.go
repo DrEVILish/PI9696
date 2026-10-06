@@ -134,3 +134,66 @@ func TestPlaybackSelectRejectsUnknownFiles(t *testing.T) {
 		}
 	}
 }
+
+// Owner rule: the table's play button loads (queues) a take without
+// starting it, even while another take plays; PLAY then starts it.
+func TestPlaybackTableButtonLoadsOnly(t *testing.T) {
+	initTestHardware(t)
+	fakeExecutable(t, "ffmpeg", fakeChildScript)
+	older, newer := stageTakes(t)
+	mutex.Lock()
+	currentState, isRecording = StateIdle, false
+	sampleRateIdx, channelCount = 1, 2
+	origSel := selectedPlayback
+	selectedPlayback = ""
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		selectedPlayback = origSel
+		mutex.Unlock()
+	})
+	mux := newRemoteMux()
+	cookie := sessionCookie(t, mux)
+	state := func() AppState {
+		mutex.Lock()
+		defer mutex.Unlock()
+		return currentState
+	}
+
+	rr := postSelect(t, mux, cookie, url.Values{"file": {older}})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("load = %d", rr.Code)
+	}
+	if s := state(); s == StatePlaying {
+		t.Fatal("loading a take started playback")
+	}
+	if !strings.Contains(rr.Body.String(), `>loaded</span>`) {
+		t.Error("the loaded take is not marked in the returned table")
+	}
+	if strings.Contains(rr.Body.String(), `name="play"`) {
+		t.Error("the table button still asks to start playback")
+	}
+
+	// While a take plays, loading another queues it without a swap.
+	onButtonPress(hardware.PlayButton)
+	if rr := postSelect(t, mux, cookie, url.Values{"file": {newer}}); rr.Code != http.StatusOK {
+		t.Fatalf("load while playing = %d", rr.Code)
+	}
+	mutex.Lock()
+	cur, _ := filepath.Rel(RecordPath, playbackFile)
+	mutex.Unlock()
+	if cur != older {
+		t.Fatalf("loading while playing swapped the take to %q", cur)
+	}
+	onButtonPress(hardware.StopButton)
+	waitForPlaybackIdle(t)
+	onButtonPress(hardware.PlayButton)
+	mutex.Lock()
+	cur, _ = filepath.Rel(RecordPath, playbackFile)
+	mutex.Unlock()
+	if cur != newer {
+		t.Fatalf("PLAY after a queued load played %q, want %q", cur, newer)
+	}
+	onButtonPress(hardware.StopButton)
+	waitForPlaybackIdle(t)
+}
