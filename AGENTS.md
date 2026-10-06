@@ -1,17 +1,15 @@
 # AGENTS.md
 
-Raspberry Pi digital audio recorder: records an Inferno (AES67) network stream via a FIFO into ffmpeg → WAV on `/rec/<date>/`, with an SSD1322 OLED + buttons/encoder front panel and a token-auth WebUI. No hardware is present dev environment.
+Raspberry Pi digital audio recorder: records an Inferno (AES67) network stream via a FIFO into ffmpeg → WAV on `/rec/<date>/`, with an SSD1322 OLED + buttons/encoder front panel and a token-auth WebUI. No hardware is present in the dev environment. Installed with `docs/install.sh` (Raspberry Pi OS Lite, Debian Trixie, Pi 4/5).
 
 After each Bug fix or feature request, each must be commited as seperate items with notes and information so that any mistakes or issues can be easily reverted.
 After each commit and build, restart the pi9696 service.
 
 ## Environments
 
-- `test-unit.example` is a reverse proxy to the pi9696 **test** server, `192.0.2.69`, serving on port 80. The test server runs on the target hardware.
-- `dev-server.example` is a reverse proxy to the pi9696 **dev** server, `192.0.2.162`, serving on port 8080.
-- Both machines are reachable via `ssh root@<ip-address>`. The repo is installed under `/opt` on each.
-- **Dev only:** you may install extra tooling (npm, Playwright/Chromium or other browsers, etc.) for screenshots and UI testing.
-- **Test:** never install extra applications or packages on the test server. It runs on the target hardware and must stay limited to what the recorder itself needs. Do screenshots and browser-driven testing from the dev server instead.
+- Two machines: a **test** unit (the target hardware, a Raspberry Pi) and a **dev** server. Their addresses and access live in the untracked `CLAUDE.local.md` (gitignored); never commit addresses, host names or proxy details.
+- **Dev only:** you may install extra tooling (npm, Playwright/Chromium or other browsers, etc.) for screenshots and UI testing, and run the Go test suite (`test/gotest.sh`).
+- **Test:** never install extra applications or packages on the test unit. It runs on the target hardware and must stay limited to what the recorder itself needs (what `docs/install.sh` installs). Do screenshots and browser-driven testing from the dev server instead.
 
 ## Conventions
 

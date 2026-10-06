@@ -59,3 +59,6 @@ web/uPlot.min.css
 
 # Python bytecode from the interop scripts
 __pycache__/
+
+# Private local environment notes (addresses, hosts) - never commit
+CLAUDE.local.md

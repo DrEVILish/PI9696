@@ -7059,16 +7059,16 @@ func setTrustedProxies(t *testing.T, s string) {
 // tokens from anyone locked everyone out. A trusted proxy's
 // X-Forwarded-For names the client; an untrusted peer's header is ignored.
 func TestClientIPTrustedProxy(t *testing.T) {
-	setTrustedProxies(t, "192.0.2.5, 10.0.0.0/8")
+	setTrustedProxies(t, "198.51.100.5, 10.0.0.0/8")
 	for _, tc := range []struct {
 		name, remote, xff, want string
 	}{
 		{"direct client ignores header", "198.51.100.9:5000", "203.0.113.1", "198.51.100.9"},
-		{"trusted proxy names client", "192.0.2.5:443", "203.0.113.1", "203.0.113.1"},
-		{"spoofed left entries ignored", "192.0.2.5:443", "6.6.6.6, 203.0.113.1", "203.0.113.1"},
-		{"chained trusted hops skipped", "192.0.2.5:443", "203.0.113.1, 10.1.2.3", "203.0.113.1"},
-		{"no header falls back to proxy", "192.0.2.5:443", "", "192.0.2.5"},
-		{"malformed header falls back", "192.0.2.5:443", "not-an-ip", "192.0.2.5"},
+		{"trusted proxy names client", "198.51.100.5:443", "203.0.113.1", "203.0.113.1"},
+		{"spoofed left entries ignored", "198.51.100.5:443", "6.6.6.6, 203.0.113.1", "203.0.113.1"},
+		{"chained trusted hops skipped", "198.51.100.5:443", "203.0.113.1, 10.1.2.3", "203.0.113.1"},
+		{"no header falls back to proxy", "198.51.100.5:443", "", "198.51.100.5"},
+		{"malformed header falls back", "198.51.100.5:443", "not-an-ip", "198.51.100.5"},
 	} {
 		r := httptest.NewRequest("POST", "/login", nil)
 		r.RemoteAddr = tc.remote
@@ -7085,9 +7085,9 @@ func TestClientIPTrustedProxy(t *testing.T) {
 func TestClientIPDefaultIgnoresForwardedFor(t *testing.T) {
 	setTrustedProxies(t, "")
 	r := httptest.NewRequest("POST", "/login", nil)
-	r.RemoteAddr = "192.0.2.5:443"
+	r.RemoteAddr = "198.51.100.5:443"
 	r.Header.Set("X-Forwarded-For", "203.0.113.1")
-	if got := clientIP(r); got != "192.0.2.5" {
+	if got := clientIP(r); got != "198.51.100.5" {
 		t.Fatalf("clientIP = %q, want the peer address", got)
 	}
 	if _, bad := parseTrustedProxies("10.0.0.1, nonsense, 10.0.0.0/33"); len(bad) != 2 {

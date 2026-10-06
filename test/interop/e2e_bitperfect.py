@@ -24,7 +24,7 @@ Anything else is a bug, or a part of the path that is not bit-transparent.
 Exit 0 = bit-perfect, 1 = differences found, 2 = setup failure.
 
 Usage (on Pi-B):
-  e2e_bitperfect.py --pia 192.0.2.69 --plugin /path/libasound_module_pcm_inferno.so
+  e2e_bitperfect.py --pia <unit-address> --plugin /path/libasound_module_pcm_inferno.so
 """
 import argparse, http.cookiejar, json, os, re, shlex, struct, subprocess, sys, time
 import urllib.parse, urllib.request
@@ -375,7 +375,7 @@ def unroute(rx_device, ch):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    p.add_argument("--pia", default="192.0.2.69", help="Pi-A address (pi9696 WebUI)")
+    p.add_argument("--pia", required=True, help="Pi-A address (pi9696 WebUI)")
     p.add_argument("--pia-ssh", default=None, help="ssh target for Pi-A (default root@<pia>)")
     p.add_argument("--pia-name", default="PI9696", help="Pi-A's inferno device name (as the WebUI shows it)")
     p.add_argument("--plugin", required=True, help="inferno ALSA plugin (.so) for Pi-B's instances")
