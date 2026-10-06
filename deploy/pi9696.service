@@ -1,6 +1,6 @@
 [Unit]
 Description=PI9696 Audio Recorder
-Documentation=https://github.com/user/PI9696
+Documentation=https://github.com/DrEVILish/pi9696
 # Don't start until eth0 (and thus Inferno, which requires the network) can
 # come up, but don't hard-fail the unit if network is slow to appear - the app
 # has its own networkMonitorLoop that starts Inferno once eth0 has an IP.
