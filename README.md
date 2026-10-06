@@ -1,83 +1,105 @@
-# PI9696 — Design Guide
+# PI9696
 
-A 1U rack-mounted multichannel audio recorder: AES67 over Ethernet via inferno, uncompressed
-WAV to SD card, operated from a 256×64 OLED front panel or a token-auth web dashboard.
+A 1U rack-mounted multichannel audio recorder for Raspberry Pi. It records an
+AES67 network stream (via [inferno](https://github.com/DrEVILish/inferno)) to
+uncompressed WAV, plays takes back out onto the network, and is operated from
+a 256×64 OLED front panel or a token-protected web dashboard.
 
-**Docs:** [WIRING.md](WIRING.md) · [AGENTS.md](AGENTS.md) · [DEPLOYMENT.md](DEPLOYMENT.md) · [REPORT.md](REPORT.md) (two-host inferno test, 2026-09-30)
+This README is the project's single design document: features, UI,
+architecture, decisions and status. [WIRING.md](WIRING.md) covers GPIO and
+power; [AGENTS.md](AGENTS.md) holds the working rules for contributors and
+coding agents.
 
 ---
 
-## Quick Start
+## Install
+
+On Raspberry Pi OS Lite **64-bit** (Debian 13 "trixie") on a **Raspberry Pi 4 or 5**:
 
 ```bash
-# Build and run
-go build -o pi9696 . && sudo ./pi9696
+curl -fsSL https://drevilish.github.io/pi9696/install.sh | bash
 ```
+
+The installer ([docs/install.sh](docs/install.sh)) installs every dependency
+(apt packages, Go, Rust), enables SPI, builds pi9696, the inferno ALSA plugin
+and the statime PTP clock from pinned sources, installs the services and
+starts them. It needs about 2 GB of free space and 15-30 minutes on a Pi 4
+(the Rust builds take most of it). Re-run it to update: it rebuilds in place
+and keeps settings (`/etc/pi9696`), recordings (`/rec`) and the access token.
+
+| Option (environment) | Default | Meaning |
+|---|---|---|
+| `PI9696_DIR` | `/opt/pi9696` | install location |
+| `PI9696_REF` | `main` | pi9696 branch, tag or commit |
+| `PI9696_CLOCK` | `statime` | `statime`: follow the network's PTP leader (required to record); `stub`: single-host clock for a LAN with no leader (monitor and playback only) |
+| `PI9696_PORT` | `80` | WebUI port (written to `$PI9696_DIR/.env` on first install) |
+| `PI9696_FORCE` | unset | `1` skips the OS and hardware checks |
+| `PI9696_NO_START` | unset | `1` installs without (re)starting services |
+
+e.g. `curl -fsSL https://drevilish.github.io/pi9696/install.sh | PI9696_CLOCK=stub bash`.
+
+After the first install, **reboot** if the installer says SPI was just
+enabled. Then open `http://<hostname>.local` and log in with the access code
+shown on the OLED (or `journalctl -u pi9696 -b | grep 'access code'`).
+
+What gets installed:
+
+| Piece | Where | Notes |
+|---|---|---|
+| pi9696 | `$PI9696_DIR/pi9696`, `pi9696.service` | the app (Go), runs as root |
+| inferno ALSA plugin | `/usr/lib/aarch64-linux-gnu/alsa-lib/libasound_module_pcm_inferno.so`, `/etc/asound.conf` | the app's one inferno instance, in-process; built from the DrEVILish fork at a pinned commit |
+| statime | `$PI9696_DIR/statime`, `statime.service` | PTP clock (teodly `inferno-dev`, pinned), config `deploy/statime.toml` |
+| clock stub | `$PI9696_DIR/fake_usrvclock_server`, `pi9696-clock.service` | alternative to statime when no PTP leader exists; the two conflict |
+| hostapd drop-in | `/etc/systemd/system/hostapd.service.d/pi9696.conf` | optional Wi-Fi AP, off until enabled in the app |
+| avahi | `avahi-daemon` | `<name>.local` |
+| logs | journald + `/var/log/pi9696/app.log` (logrotate) | install log: `/var/log/pi9696-install.log` |
 
 ---
 
 ## Specifications
 
 | Parameter | Value |
-|-----------|-------|
-| Target | Raspberry Pi 5 deployment (`/dev/ptp0` hardware timestamping); must also run error-free on Pi 4 (software-timestamping fallback) |
-| Input | AES67 via Inferno (Ethernet only; no analog/USB audio) |
+|---|---|
+| Hardware | Raspberry Pi 5 (Ethernet PTP hardware clock) or Pi 4 (software timestamping); SSD1322 OLED on SPI, EC11 encoder, Record/Stop/Play buttons with lamps |
+| Audio I/O | AES67 via inferno, Ethernet only (no analog/USB audio, by design) |
 | Rates | 44.1 / 48 / 96 / 192 kHz |
-| Channels | 1–128. Measured on a Pi 4 at 48 kHz: 1–128 ch bit-exact, 58% CPU at 128 ch (REPORT.md round 3). Above 16 ch relies on the U13 paging fix, in the pinned fork commit (Known Limitations #11) |
-| Format | WAV PCM 24-bit on disk (32-bit internal); `-rf64 auto`, so a take past 4 GiB (under 4 min at 128 ch/48 kHz) is finalised as RF64 instead of with wrapped RIFF sizes |
-| File naming | `prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` in `/rec/YYYY-MM-DD/` |
-| Display | SSD1322 256×64 OLED (SPI), FiraCode TTF |
-| Controls | EC11 rotary encoder + Record/Stop/Play buttons |
-| Remote | HTTP on port 8080 (token + session auth, no HTTPS); `PI9696_REMOTE_PORT` overrides |
-| Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport toggle, default off, no auth; switching it off also drops connected controllers) |
-| Logging | Error/Warn/Info/Debug (default Error-only), journald + app.log. On the OLED it is edited in place on its Settings row (press: `»`, rotate to choose, press to apply) - a single-parameter setting gets no page of its own |
-| File size | ~17.3 MB/min at 48 kHz stereo 24-bit |
+| Channels | 1-128, RX and TX always equal. On a Pi 4 at 48 kHz, 1-128 ch record bit-exact (about 58% CPU at 128 ch) |
+| Format | WAV PCM 24-bit (32-bit internal), `-rf64 auto`: a take past 4 GiB is finalised as RF64 |
+| Files | `/rec/YYYY-MM-DD/prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` (+ `.channels.json` sidecar), about 17.3 MB/min at 48 kHz stereo |
+| Remote | HTTP (token + session auth, no HTTPS), port from `PI9696_REMOTE_PORT` (installer default 80, app default 8080) |
+| Deck control | Blackmagic HyperDeck protocol on TCP 9993 (Settings → Transport, default off, no auth) |
+| Logging | Error/Warn/Info/Debug (default Error), journald + `/var/log/pi9696/app.log` |
 
 ---
 
-## System Architecture
+## Architecture
 
 ```
-                    Inferno (AES67)
-                           │
-                    ┌──────▼──────┐
-                    │    FIFO     │
-                    │  rec/raw/   │
-                    └──────┬──────┘
-                           │
-              ┌────────────▼────────────┐
-              │        ffmpeg           │
-              │  s32le → WAV 24-bit     │
-              └────────────┬────────────┘
-                           │
-                           ▼
-                   /rec/YYYY-MM-DD/
-                           │
-              ┌────────────┴────────────┐
-              │       meterReader       │
-              │  astats → peak/RMS      │
-              └────────────┬────────────┘
-                           │
-              ┌────────────▼────────────┐
-              │     OLED / WebUI        │
-              │  VU meters + meters     │
-              └─────────────────────────┘
+  inferno network (AES67)
+        │  in-process inferno ALSA plugin (txholder.go): one device, RX = TX
+        ▼
+  capture loop ──► FIFO /rec/raw/*.raw ──► ffmpeg ──► /rec/YYYY-MM-DD/*.wav
+                          │
+                          └──► ffmpeg astats (meter chain) ──► OLED + WebUI meters
 
-Playback path:
-  ffmpeg -f s32le → pump → TX holder (`inferno` ALSA, inferno TX out); pause writes
-  silence, seek via -ss restart. Local `-f alsa default` only where no
-  inferno device exists (dev/sim fallback).
+  playback: ffmpeg (decode, -ss seek) ──► pump ──► the same plugin's TX side
 ```
 
-**Key design decisions:**
-- Single Go process owns everything behind one app mutex
-- Inferno lifecycle is `infernoWorker`-owned (the only goroutine that mutates inferno state)
-- Recording starts only from idle, never over an active take
-- **Recording requires a network-synced clock.** A take only starts while statime reports this unit as a PTP *slave* within 1 ms of its master on 5 consecutive 1 s polls of its observation socket (`clocksync.go`). The single-host stub never qualifies, and neither does a PTP master. Demo mode (synthetic source) is exempt
-- Playback and recording are mutually exclusive in both directions
-- Inferno is bidirectional (sends + receives); the app currently drives receive (recording) while transmit/playback-out moves to the app's ALSA client (`alsapcm/`, one process holding capture + playback so a single instance does both)
-- TX is real scope, not a stretch goal: the unit has two modes, RECORDING and PLAYBACK, and its TX and RX channels stay visible on the inferno/AES67 network in both modes. TX and RX channel counts are always equal (one `channelCount` drives both). The clock source is a hard TX gate — Inferno aborts transmit without the usrvclock overlay — so statime (PTPv1, locked to the network's PTP leader) replaces the stub the moment a hardware inferno-network device is on the LAN
-- ffmpeg is the capture/playback converter (tried and tested); no native rewrite planned
+Key decisions:
+
+- One Go process owns everything behind one app mutex. The inferno lifecycle
+  belongs to `infernoWorker`, the only goroutine that starts or stops it.
+- **Exactly one inferno instance**, in-process, with equal RX and TX channel
+  counts, always visible on the network.
+- **Recording requires a network clock.** A take only starts while statime
+  reports this unit as a PTP slave within 1 ms of its master on 5 consecutive
+  polls (`clocksync.go`). The stub never qualifies. Demo mode is exempt.
+- Recording starts only from idle, never over a take. Playback and recording
+  are mutually exclusive.
+- ffmpeg is the capture/playback converter; no native rewrite planned.
+- inferno changes live in the [DrEVILish/inferno](https://github.com/DrEVILish/inferno)
+  fork (`dev`), pinned by commit in the installer; nothing is filed upstream
+  without the maintainer's consent.
 
 ---
 
@@ -85,261 +107,214 @@ Playback path:
 
 ### Recording
 
-- Manual start/stop
-- Start refused unless the clock is synced to the network (OLED flashes `NO CLOCK SYNC / cannot record`, web notice, log line); losing sync mid-take is logged and the take continues
-- Start refused when <30 min space remains at the current rate
-- Take starts contiguous: the input monitor is killed and reaped before the recorder opens the FIFO
-- Take auto-stops when <1 min space remains (graceful finalize, LOW DISK warning)
-- Start refused while Inferno is restarting for a new rate/channel count (`AUDIO RESTARTING - WAIT`): the FIFO still carries the old format, so the take would be corrupt; the worker claims a restart under the app mutex so a press cannot slip into its teardown. Start with Inferno down shows `NO AUDIO INPUT`
-- Faults are reported, not swallowed: a take whose ffmpeg dies unasked shows `RECORDING STOPPED - SEE LOG` and logs ffmpeg's last stderr lines; a crashed Inferno server is reaped (`INFERNO STOPPED - SEE LOG`), any take on its FIFO finalised, and failed servers are retried with a 5-60 s backoff; Inferno's own ERROR/panic lines reach the log (rate-limited)
-- Tag presets (Show/Rehearsal/Soundcheck/Interview/Backup/None) + filename prefix
-- Real-time elapsed/remaining, storage, Peak/RMS on OLED
+- Manual start/stop from the panel, the WebUI or HyperDeck.
+- Refused unless the clock is synced (`NO CLOCK SYNC`), with less than 30 min
+  of space left, while inferno restarts for a new rate/channel count
+  (`AUDIO RESTARTING - WAIT`) or with no input (`NO AUDIO INPUT`).
+- Auto-stops with less than 1 min of space left (graceful finalise, LOW DISK).
+- A take starts contiguous: the input monitor is stopped before the recorder
+  opens the FIFO.
+- Faults are reported, not swallowed: a dying ffmpeg shows
+  `RECORDING STOPPED - SEE LOG` with its last stderr lines logged; a crashed
+  inferno is reaped, its take finalised and the server retried with backoff.
+- Tag presets (Show/Rehearsal/Soundcheck/Interview/Backup/None) and a filename
+  prefix.
+- Channel names: each take saves its channel names when it starts, in
+  `<take>.channels.json`: the unit's channel labels (see Level meters) over
+  inferno's RX channel names, with each channel's source at the time (e.g.
+  `Left@AVIO-USB`). The recordings table renames them per take
+  (`GET/POST /api/recordings/channels`). pi9696 never writes channel names to
+  inferno.
 
 ### Playback
 
-- Target: plays out through Inferno ALSA (pause writes silence to inferno TX so the playhead holds without gaps or SIGSTOP choreography). Bit-perfect end to end: a 32-ch take recorded on the unit and played back reaches a second Pi sample-identical (`test/interop/e2e_bitperfect.py`). Takes go out undithered (`INFERNO_TX_SOURCE_BIT_DEPTH=24`), an idle feeder keeps the transmitter fed with silence between playbacks (owner decision 2026-10-04: transmit silence while idle) so playback never starts with an underrun, and the pump never blocks on the app mutex. The app's one in-process inferno instance is the TX holder (`txholder.go`: the playback side of the paired device), with ffmpeg-decoded s32le pumped through it; local ALSA (`default`) remains the fallback where no inferno device exists (dev/sim). Sample rate/channel mismatches are refused with a log + UI error; a present-but-clockless holder refuses inferno playback with a notice instead of misrouting locally
-- TX behaviour (owner decision): **nothing is sent while the unit is not playing**, and **TX goes silent at pause, end and stop**. A fresh holder sends no media. Pause writes silence. End and stop overwrite the plugin's whole ring with silence, because the plugin keeps re-sending its ring when nothing writes. Current limit: after the first playback TX keeps streaming that silence rather than nothing, because stopping the stream goes through the inferno plugin's deadlock-prone stop path (INFERNO-UPSTREAM.md U5); inferno also dithers silence to ±1 LSB (U3)
-- Channel names: each take saves its channel names when it starts. They come from the unit's inferno RX channel names, as a network controller named them (from inferno's state, read-only), with each channel's source at the time (e.g. `Left@AVIO-USB`). They live in a sidecar, `<take>.channels.json`. The recordings table shows them and renames them per take (`GET/POST /api/recordings/channels`, WebUI/API only). pi9696 never writes channel names to inferno. Sidecars go with downloads (zip + manifest), USB copies and deletes; older takes show `Ch 1..n`
-- What plays: the take loaded with a row's button in the WebUI recordings table (marked "loaded"), else the newest take. Loading only queues the take, also while another one plays (nothing is swapped on the output); PLAY on the deck or the panel starts it. `play=1` on `POST /api/playback/select` still starts a take for API clients
-- A take whose format differs from the device's is refused, naming the cause on the OLED: SAMPLE RATE MISMATCH, CHANNEL COUNT MISMATCH, or RATE + CHANNEL MISMATCH (the log and the WebUI notice give both values)
-- Keys: Play = play / pause / resume (panel and WebUI alike); Stop = stop, and the next Play starts from the beginning; the Play lamp flashes while paused. Stop also ends a paused take: ffmpeg blocked on the paused pump is killed if it has not exited 2 s after the SIGTERM
-- Encoder: rotate while paused = 5 s scrub (ignored while playing); push does nothing during playback (owner decision: only Play pauses); hold = exit
-- Progress bar + elapsed/total with [PAUSED] marker
+- Plays out through inferno TX, bit-perfect end to end (a take played back
+  reaches a second Pi sample-identical, `test/interop/e2e_bitperfect.py`).
+  Takes go out undithered; an idle feeder keeps the transmitter fed with
+  silence so playback never starts with an underrun. Local ALSA is the
+  fallback where no inferno device exists (dev/sim).
+- What plays: the take loaded with a row's button in the WebUI recordings
+  table (marked "loaded"), else the newest. Loading only queues a take, even
+  while another plays; PLAY starts it (`play=1` on `POST /api/playback/select`
+  starts one for API clients).
+- A take whose format differs from the device's is refused, naming the cause:
+  `SAMPLE RATE MISMATCH`, `CHANNEL COUNT MISMATCH` or `RATE + CHANNEL MISMATCH`.
+- Keys: Play = play / pause / resume; Stop = stop (the next Play starts from
+  the beginning), also from pause. The Play lamp flashes while paused.
+- Encoder: rotate while paused = 5 s scrub; push does nothing during playback
+  (only Play pauses); hold = exit.
 
-### Level Metering
+### Level meters
 
-- Peak/RMS per channel from ffmpeg's `astats` pass-through filter
-- WebUI: green/yellow/red by level (−18 dBFS / −6 dBFS breakpoints)
-- OLED: grayscale (shading + segments); idle-browse shows 16 meters per page, starting 4 px under the status bar (rows 16-47), page number under the scale
-- Configurable meter range and peak-hold decay (hold + 20 dB/s decay)
+- Peak/RMS per channel from ffmpeg's `astats`, green/amber/red at -18 / -6
+  dBFS, configurable range and peak hold (hold time, then 20 dB/s release).
+- OLED: 16 meters per page in idle-browse, 4 px under the status bar.
+- WebUI: banks of 8 meters (each with its own dBFS scale) that wrap to the
+  screen width. Channel number above each meter, name below; a peak-hold bar
+  in its zone colour over the RMS fill and a thin live-peak line.
+  Double-click a name (or Enter/F2) to rename the channel: this sets the
+  unit's own label (`POST /api/channels/label`, persisted; empty restores
+  inferno's name), used by the meters and new takes.
 
-### Files
+### Files and USB
 
-- Copy selected/all takes to USB (per-day structure preserved)
-- Delete with confirmation
-  - Format USB drive: exFAT or FAT32, user-selectable (currently exFAT-first with FAT32 fallback; explicit choice in progress — exFAT has no 4 GB file ceiling, which matters at high channel counts). Every outcome shows a notice (`USB FAT32 - 4GB FILE LIMIT` on the fallback); an abort after the umount remounts the stick
-- Copy ends with `COPY COMPLETE` or `COPY FAILED: N FILES`
-- WebUI: per-file download + Download-ALL as streaming ZIP with manifest
+- Copy selected/all takes to USB (per-day folders), delete with confirmation,
+  format a USB drive (exFAT, FAT32 fallback with a 4 GB file-limit notice).
+- WebUI: per-file download and Download ALL as a streaming ZIP with a manifest.
+- Config export/import (non-secret JSON on USB; no Wi-Fi password or token).
 
-### Button Lamps
+### Front panel (OLED)
 
-- REC (GPIO12): lit while recording
-- PLAY (GPIO16): solid while playing, 250ms pulse while paused
-- STOP: no lamp (nothing a user waits on)
+Fixed 256×64 layout, FiraCode TTF in named contexts (`statusbar`, `header`,
+`menu`, `selected`, `details`, `alert`, `recording`). Every line must fit 256
+px or it silently overflows (`TestSysNoticesFitOneOLEDLine` measures
+notices). Single-parameter settings are edited in place on their row. Lamps:
+REC (GPIO12) lit while recording, PLAY (GPIO16) solid while playing and
+pulsing while paused (see WIRING.md).
 
-### Config Export/Import
+### Web dashboard
 
-- Export: non-secret JSON profile to USB (no WiFi password, no access token)
-- Import: applied + persisted, Inferno restart if rate/channels changed; refused while recording, playing or copying; a Wi-Fi block failing the WebUI's validation is skipped
-- OLED: System Options menu; WebUI: settings modal Config group
+- **Header**: live OLED mirror, on-screen encoder, transport keys that behave
+  like the panel lamps (dim in their colour when off, glowing when on), the
+  same size in icon or text mode.
+- **Level meters** band, collapsible to a label and caret at the header's left.
+- **Transport Status**: a reel-to-reel deck and the Status table (rate,
+  channels, format, tag, inferno, inferno TX, clock, network, uptime, version).
+- **Recordings**: one row per take with load, channel names and download.
+- **Footer**: disk space and record time left, short notices, and the System
+  pane (CPU, app CPU by subsystem, RAM, temperature and disk graphs).
+- Settings modal for every persisted setting. Themes from
+  [ftl-themes](https://github.com/DrEVILish/ftl-themes) (submodule, v5; the
+  app uses the library's components and tokens and declares none itself).
+- `<device>.local` resolves on the LAN (an avahi address record for the device
+  name). The OLED info page's QR links to `http://<device>.local/#t=<token>`.
 
-### WebUI Dashboard
+### Inferno controller view
 
-- Layout (owner, 2026-10-05), top to bottom:
-  - **Header**: logo, live OLED mirror (PNG), on-screen encoder, and the transport keys. These drive the same handlers as the hardware and behave like lamps: each key is dim in its own colour while its LED is off and glows strongly when on. REC is on while recording; PLAY while playing, flashing while paused; STOP while the transport is stopped. The keys are ftl-themes `.key` components and keep the same size whether the transport buttons show icons or text (Settings).
-  - **Level meters**: a full-width band, at least the height of the header. Per-channel meters arrive over a 100 ms WebSocket push. They come in banks of 8 (each with its own dBFS scale) that wrap to the screen width, so lines break only between banks and nothing scrolls sideways. Each meter shows the channel number above it and the channel name below; a 3 px peak-hold bar in its zone colour (the OLED's hold time and 20 dB/s release) sits over the RMS fill, and a thin line follows the live peak. Double-click a name (or Enter/F2) to rename the channel: this sets the unit's own channel label (`POST /api/channels/label`, persisted, empty = inferno's name again), which the meters and new takes use; inferno's channel names are never changed. The collapse caret folds the band completely away; the same "Level meters" label and caret then appear at the header's left edge to bring it back.
-  - **Transport Status**: the reel-to-reel deck (its record lamp is the larger SYS lamp; both reels turn the same way), then the Status table (there is no separate state line: the deck and its keys show the transport state): rate, channels, format, tag, Inferno, Inferno TX, clock, network, uptime, version. There is no Stop button, Peak/RMS or temperature here: the deck keys, meters and System graphs cover those.
-  - **Recordings**, under Transport Status: one line per take, with a load button per row (see Playback), channel names, and downloads that save to disk.
-  - No pane scrolls: each pane is as tall as its contents and the page scrolls. Only a table wider than the screen scrolls sideways in its own box.
-  - **Footer**: disk space (a progress bar) and record time left, short notices (e.g. a refused action or a controller rename), plus a System button. It pops up a full-width System pane with the CPU, app CPU by subsystem, RAM, temperature and disk graphs in a wrapping grid.
-- Settings modal (all persisted settings)
-- Reaching the unit by name: `<device>.local` resolves on the LAN (an avahi address record for the device name, re-published when the name or IPv4 changes; the system hostname is left to avahi-daemon). The OLED info page's access QR links to `http://<device>.local/#t=<token>` (port left out when it is 80), and to the IP only while the name does not resolve
-- INFERNO-LINK lamp reflects Inferno state (runs in meter payload)
-- The Status table shows the clock state (`Synced (PTP slave, 8µs)` / `Locking` / `Not synced (…)`) and the TX state in inferno terms (`ready` / `no clock` / `off`)
-- Sample rate must be visible to an inferno controller (netaudio) for both TX and RX (owner requirement). inferno now answers the rate probe (INFERNO-UPSTREAM.md U2, in the pinned fork commit: `netaudio device show` reports it); RX+TX as one instance (U8): the app always runs exactly one inferno instance, in-process, with equal RX and TX
-- Theming: ftl-themes bundles (46 themes, `third_party/ftl-themes` submodule @ `68b5dde`, v5.2.0 + unreleased — always track latest upstream; `html[data-theme]` slugs unchanged) —
-  one linked stylesheet + `html[data-theme]`; the `third_party/ftl-themes/CONTRACT.md`
-  is the integration spec. Markup uses the library's own components (`.btn`, `.table`, `.modal`, `.meter`, `.scroll` — v4 dropped the `ftl-` prefix everywhere),
-  the shared icon sprite (`/static/themes/icons/<slug>.svg`, per-theme art with a
-  generic fallback) and the app-shell hooks. Density/Motion/Contrast display
-  options persist device-wide beside the theme choice. Palette variants (sub-themes, `themes.json` `variants`) sit beneath their theme in the picker
-  (an `<optgroup>`: the theme's own palette, then each variant), render as `<html data-variant>`, persist beside the theme and are dropped when the theme
-  does not list them; `?preview=<slug>&variant=<id>` previews one. A theme that declares a tint (`themes.json` `tint`, today win7-aero's Window Color)
-  gets a colour control under the theme choice (hidden for every other theme); the colour renders as an inline token on `<html>` (sharing the style
-  attribute with `--density`), is stored per theme (`themeTints`, `#rrggbb` only), and is cleared by choosing one of the theme's presets (variants);
-  `Default` drops it, `&tint=%23rrggbb` previews one. The app reads the library's tokens directly and declares none of them itself (see `TestDefaultThemeIsFTL`).
+A network controller (e.g. netaudio) sees one device with equal RX/TX,
+Product Version (the app version), sample rate and encoding, latency, clock
+role and sync status. Renaming the device from a controller renames the unit.
+A sample rate set on the unit restarts inferno and is announced to open
+controllers. Audio only flows once a controller subscribes the unit:
+inferno never auto-connects.
 
-### Auth & Security
+### Security
 
-- Token (8-char, shown on OLED and printed to the journal at startup/rotation: `journalctl -u pi9696 -b | grep "access code"`; root/adm only) → session cookie (12 h, server-side)
-- Login rate-limited per IP (5 attempts, then a minute's lockout; concurrent attempts count up front); token compared in constant time
-- Behind a reverse proxy, list it in `PI9696_TRUSTED_PROXIES` (comma-separated addresses or CIDR prefixes, in `.env`): the limiter then keys on the client from that proxy's `X-Forwarded-For` (rightmost untrusted hop) instead of locking every client out together. Unset (the default), forwarded headers are ignored.
-- WebSocket streams (meters, telemetry) re-check the session on every push and close once it is logged out, expired or revoked by a token rotation
-- Downloads whitelisted against recording list (no arbitrary file access)
-
-**⚠ Known security limitation:** Plain HTTP only — treat as unencrypted admin page. Anyone sniffing the LAN can see the token and hijack the session. Do not expose beyond a trusted network without adding HTTPS.
-
-**⚠ CSRF:** The WebUI relies on same-origin cookie scoping; there is no explicit CSRF token. Any site a logged-in browser visits could POST to the control port (default `:8080`, `PI9696_REMOTE_PORT` overrides; e.g. `logger` on the recorder) and trigger state changes. Acceptable on a trusted LAN with a token that is never exposed in browser JS.
-
----
-
-## OLED UI
-
-Fixed 256×64 layout with FiraCode TTF rendering in named contexts:
-- `statusbar`: `[ETH] [INF] [USB]` + time/remaining/storage
-- `header`: transport state + recording metadata
-- `menu`: menu items (scrollable, max 4 visible)
-- `selected`: highlighted menu item
-- `details`: info text
-- `alert`: confirmation dialogs (14 pt)
-- `recording`: live elapsed/remaining/PVU during takes
-
-**Layout constraint:** Each line is 256 pixels wide. New menu text must fit or it silently overflows. Use `cmd/simcheck` to render PNGs for visual verification.
+- 8-character access token (on the OLED, and in the journal at startup and
+  rotation) exchanged for a 12 h server-side session; login rate-limited per
+  client; token compared in constant time.
+- Behind a reverse proxy, set `PI9696_TRUSTED_PROXIES` (addresses or CIDR) so
+  rate limiting keys on the forwarded client.
+- WebSocket streams re-check the session on every push; downloads are
+  whitelisted against the recording list.
+- **Plain HTTP only**, and no CSRF token (same-origin cookies): keep the unit
+  on a trusted network.
 
 ---
 
-## Building
+## Clock
 
-### Prerequisites
+inferno only transmits with a clock overlay on `/tmp/ptp-usrvclock`, and the
+app only records while statime reports a lock.
 
-- Raspberry Pi 5, Raspberry Pi OS 64-bit (Trixie or newer)
-- Go 1.27.1+ (build; `go.mod` requires it), Rust/Cargo (Inferno AoIP server), libasound2-dev (`pkg-config alsa` — required: `alsapcm/` uses cgo, so any `go build ./...` / `go test ./...` needs the headers)
-- Root access for GPIO/SPI/ALSA/USB mounting
+- **statime** (default): follows the network's PTPv1 leader (normally a
+  hardware inferno-network device) with `deploy/statime.toml`
+  (`hardware-clock = "auto"`: the Pi 5's `/dev/ptp0`, software timestamping on
+  a Pi 4). Check the Status table's Clock row or `systemctl status statime`.
+- **stub** (`pi9696-clock.service`): publishes this host's own clock. Single
+  host only, never counts as synced: monitor and playback, no recording.
+- Two inferno hosts and no hardware leader: statime cannot be a PTPv1 master;
+  run one host as PTPv2 master (`protocol-version = "PTPv2"`, `priority1`
+  below 251, `usrvclock-export = false`) and the unit as PTPv2 slave.
+- Every device exchanging audio with the unit must follow the same leader, or
+  received audio is silent.
 
-### On the Pi
+---
 
-Full install record, including the clock service and the kernel limits, is in
-[DEPLOYMENT.md](DEPLOYMENT.md). The order matters:
+## Operations
 
-```bash
-# 1. SPI must be enabled or the app exits at startup (display init opens SPI)
-sudo sed -i 's/^#dtparam=spi=on/dtparam=spi=on/' /boot/firmware/config.txt && sudo reboot
+| Task | Command |
+|---|---|
+| Logs | `journalctl -u pi9696 -f`, `/var/log/pi9696/app.log` |
+| Access code | `journalctl -u pi9696 -b \| grep 'access code'` |
+| Restart | `sudo systemctl restart pi9696` |
+| Update | re-run the installer |
+| Settings file | `/etc/pi9696/config.json` |
+| Per-host options | `$PI9696_DIR/.env`: `PI9696_REMOTE_PORT`, `PI9696_TRUSTED_PROXIES`, `PI9696_PPROF` (loopback pprof), `PI9696_SIM` |
 
-# 2. Inferno (pinned to fork dev 3a54d8e; note the submodules). The app runs inferno
-#    in-process through its ALSA plugin, so the plugin is what gets installed
-sudo apt install -y build-essential pkg-config libasound2-dev libudev-dev
-git clone https://github.com/DrEVILish/inferno inferno
-cd inferno && git checkout 3a54d8e && git submodule update --init --recursive
-cargo build --release && cd ..
+The service runs as root (GPIO, SPI, ALSA, USB mounts, the FIFO). **Do not add
+a `CapabilityBoundingSet`**: the 4 MB recording FIFO needs
+`CAP_SYS_RESOURCE`, and without it the recorder silently falls back to the 64
+KB default (about 2.6 ms at 128 ch).
 
-# 3. A clock source must be exporting the usrvclock overlay, or Inferno starts
-#    but never transmits (deploy/pi9696-clock.service)
-
-# 4. Unit files, generated from the repo template rather than hand-written
-sudo sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696.service \
-    | sudo tee /etc/systemd/system/pi9696.service > /dev/null
-sudo sed -e 's|__PI9696_DIR__|/opt/pi9696|g' deploy/pi9696-clock.service \
-    | sudo tee /etc/systemd/system/pi9696-clock.service > /dev/null
-sudo systemctl daemon-reload && sudo systemctl enable --now pi9696-clock pi9696
-sudo systemctl status pi9696 && sudo journalctl -u pi9696 -f
-```
-
-Audio only flows once an inferno controller (netaudio) subscribes the app's device
-to a transmitter — Inferno never auto-connects. `./inferno-loopback.sh` proves
-the path end to end without any hardware inferno-network device present.
-
-### Without a Pi (simulator)
-
-```bash
-PI9696_SIM=1 ./pi9696        # full app, no SPI/GPIO
-go run ./cmd/simcheck        # render all OLED screens to /tmp/pi9696_shots/
-```
-
-Sim facts:
-- Every frame dumped to `/tmp/pi9696_sim_frame.png` (override: `PI9696_SIM_OUT`)
-- Token printed to stderr: `remote access code: XXXX XXXX`
-- Config path: `/tmp/pi9696-config.json` (vs `/etc/pi9696/config.json` on real Pi)
-- Recording requires the inferno ALSA plugin (`libasound_module_pcm_inferno.so`, built in `inferno/` and installed per DEPLOYMENT.md) and a running clock source
-
-### Rebuilding
-
-```bash
-go build -o pi9696 .          # rebuild
-sudo systemctl restart pi9696 # restart service
-sudo journalctl -u pi9696 -f  # tail logs
-sudo systemctl status pi9696  # service status
-```
+| Symptom | Check |
+|---|---|
+| Display blank | SPI enabled (reboot after install)? Wiring per WIRING.md? |
+| Recording refused | `NO CLOCK SYNC`: is a PTP leader on the LAN and statime locked? Low disk? |
+| No audio / silent meters | Has a controller subscribed the unit? Same PTP leader as the source? |
+| Gaps in a take | `journalctl -u pi9696 \| grep 'capture overrun'` |
+| WebUI unreachable | `systemctl status pi9696`; port in `.env`; `ss -tlnp` |
 
 ---
 
 ## Development
 
-### Commands
-
 ```bash
-go build ./...       # compile
-go vet ./...         # static analysis
-go test ./...        # run all tests
-test/gotest.sh       # vet + the full suite under -race (the standard check)
+go build -o pi9696 .     # build (cgo: needs libasound2-dev)
+go vet ./...
+test/gotest.sh           # vet + the whole suite under -race (dev machine only)
+PI9696_SIM=1 ./pi9696    # full app without SPI/GPIO; token printed to stderr
 ```
 
-### Testing
+- **Never run the test suite on a unit**: it starts ffmpeg children and
+  inferno clients that do not belong on a live recorder. The suite is
+  hermetic (temp recordings tree, no real inferno device, the clock gate off).
+- Sim mode writes every OLED frame to `/tmp/pi9696_sim_frame.png` and uses
+  `/tmp/pi9696-config.json`; drive the panel through
+  `POST /api/input/encoder/left|right|click|hold` and
+  `POST /api/input/button/record|stop|play`.
+- `test/ui/settings-roundtrip.js` (Playwright, against a sim instance) checks
+  every settings control; `test/interop/` holds the two-host checks.
+- Tests share one `infernoWorker`: keep them mutex-safe and restore the
+  globals they change.
 
-- 196 tests in `main_test.go` (+ 3 `clocksync_test.go`, 3 `inferno_log_test.go`, 19 `theme_test.go`, 12 `hyperdeck_test.go`, 9 `alsapcm/`, 10 `hardware/`, 4 `logging_test.go`)
-- Run it with `test/gotest.sh`, which adds `-race`: the suite is race-clean, and some regression tests (login-page device-name read, mDNS child reaping) only catch their bug under the race detector
-- The suite is hermetic: a temp recordings tree, no real inferno TX device (a host with the inferno ALSA plugin used to get a real holder, which broke 4 tests), the clock gate off, and per-test restore of audio settings, web notice and monitor (`initTestHardware`). It passes in source order and under `go test -shuffle=on`. Still run it on the dev server, never on a unit - see DEPLOYMENT.md
-- `test/ui/settings-roundtrip.js` (Playwright, dev box, SIM instance only) changes every settings control like a user, Enter included, and fails if a field ever shows a value other than the saved one
-- `test/interop/` measures a unit against a second inferno host sample-for-sample (REPORT.md)
-- Tests run the real HTTP handlers over `httptest` (auth, recordings API, ZIP download, settings)
-- Playback/seek tested against a fake `ffmpeg` via PATH shim
-- Inferno worker concurrency tested against a stub server
-- `cmd/simcheck` renders every OLED screen to PNG for layout checks (hardcodes its own menu items)
-
-**⚠ Testing gotcha:** Tests share a single `infernoWorker`. Keep tests mutex-safe and restore package globals (e.g. reset `usbMounted` in cleanup). Tests run together; order-independence matters.
-
-### Simulator
-
-- Drive the real OLED menus via WebUI encoder endpoints:
-  - `POST /api/input/encoder/left|right` — rotate
-  - `POST /api/input/encoder/click|hold` — press
-  - `POST /api/input/button/record|stop|play` — transport
-
----
-
-## Troubleshooting
-
-| Symptom | Check |
-|---------|-------|
-| Display blank | SPI enabled? Wiring per WIRING.md? Running as root? |
-| `[INF]` never lights | Ethernet up? `ip addr show eth0`? Inferno binary built? |
-| Recording fails | `NO CLOCK SYNC`? statime running and locked (`systemctl status statime`, Status table Clock row)? Low disk (<30 min)? Already recording? OLED flashes the reason |
-| Gaps in a take | `journalctl -u pi9696 \| grep 'capture overrun'` - the in-process capture loop logs overruns (gaps in the input) |
-| WebUI unreachable | Any interface with IP? `ss -tlnp \| grep ${PI9696_REMOTE_PORT:-8080}` |
-| USB not detected | `mount -t tmpfs none /media/usb` for testing; real USB: `lsblk` |
-| Logs | `sudo journalctl -u pi9696 -f` + `/var/log/pi9696/app.log` |
-
----
-
-## Known Limitations & Design Debt
-
-Design debt worth flagging here:
-
-1. **Playback via Inferno/AoIP** — done and bit-perfect (two-Pi test, 32 ch, 2026-10-04: every sample of a 21 s take identical at the second Pi). The unit is one inferno device with equal RX and TX: inferno runs in-process through its ALSA plugin (inferno2pipe and the separate `<name>-TX` device are gone). Fixed on the way: the pump no longer stalls on the app mutex (F2), the transmitter is fed with silence while idle so receivers stay connected and playback starts without an underrun (F3; replaces the no-TX-while-idle decision), takes are sent undithered (F4/U3), and an underrun that does happen no longer drops the receivers' flows (fork `382dc90`: a forced 400 ms stall now costs a receiver ~1.2 s instead of ~6 s). Local ALSA kept as fallback.
-2. **No HTTPS** — plain HTTP on port 8080. Do not expose beyond trusted LAN.
-3. **Directory fsync** — take content fsync'd, but parent directory entry fsync is unimplemented (power loss can lose directory entry).
-4. **FIFO handoff window** — fixed (`7ca4d12`): the monitor's read used to race the new recorder for the first frames (measured: 50 ms missing 50 ms into a take, REPORT.md F6). The recorder now opens the FIFO only after the monitor (SIGKILLed - a graceful exit takes ~300 ms, longer than the FIFO holds at 128 ch) has exited.
-5. **Config persistence** — atomic rename, but temp file not fsync'd before rename (power loss can truncate config).
-6. **Meter race on monitor→record** — fixed via the `meterGen` generation counter (stale reapers can't touch the new session); kept here as history of the hazard.
-7. **No analog/USB audio I/O** — Ethernet only (product decision).
-8. **Sim config path** — `PI9696_SIM=1` writes to `/tmp/pi9696-config.json`; real Pi writes to `/etc/pi9696/config.json`. Resolved once in `init()`: set `PI9696_CONFIG` before startup to override (tests reassign `ConfigPath` directly).
-9. **FIFO buffer needs `CAP_SYS_RESOURCE`** — the 4 MB raw FIFO needs the capability to grow; a `CapabilityBoundingSet` on the unit silently costs it, and the recorder keeps working at the 64 KB default. See DEPLOYMENT.md.
-10. **Stuck takes are always stoppable** — `stopRecording`/`stopMonitor` escalate from SIGTERM to SIGKILL after 10 s (`ffmpegStopGrace`): an ffmpeg blocked reading an empty FIFO never acts on SIGTERM, which used to wedge the transport. The grace is long enough for ffmpeg to finalize a partial WAV on slow storage.
-11. **Above 16 channels relies on the U13 fix** — stock inferno pages its receive-channel list 32 at a time and pads short pages, so netaudio cannot read or subscribe a receiver beyond 16 channels (INFERNO-UPSTREAM.md U13). The fix is on the fork's `dev` (`dbd9570`, in the pinned `3881fff`); a build without it shows PI9696 as TX 0 / RX 0 in netaudio, which is what happened between the #49 deploy and 2026-10-04 (the fix had only been a patch file).
-
----
-
-## Repository Layout
+### Repository layout
 
 ```
-main.go            app: state machine, menus, recording/playback, Inferno lifecycle
-remote.go          web server: auth, dashboard, settings, downloads, meter push
-hyperdeck.go       Blackmagic HyperDeck control server (TCP 9993)
-txholder.go        the in-process inferno instance (capture -> FIFO, TX holder) + playback pump
-clocksync.go       statime observation poller; the recording clock gate
-logging.go         log/slog (stderr + app.log, default Error-only)
-hardware/          SSD1322 display, encoder, buttons, lamps, network detection
-alsapcm/           cgo ALSA wrapper so the app can be the single Inferno client (RX + TX)
-cmd/simcheck/      renders OLED screens to PNG via PI9696_SIM
-deploy/            systemd units (pi9696, pi9696-clock stub, statime) + statime.toml
-test/interop/      two-host accuracy harness: signal, compare, TX run, channel sweep
-inferno-patches/   verified prototype patches for the inferno fork (INFERNO-UPSTREAM.md)
-inferno-loopback.sh  proves inferno TX→RX on one host (tone in, tone out)
-DEPLOYMENT.md      install record (this file defers to it); WIRING.md is hardware
-REPORT.md          interop test results; INFERNO-UPSTREAM.md upstream issues
-inferno/           Inferno AoIP server (Rust) — install-time checkout, NOT tracked
-fonts/ rec/ web assets  install-time/runtime paths, NOT tracked (see .gitignore)
+main.go           state machine, menus, recording/playback, inferno lifecycle
+remote.go         web server: auth, dashboard, settings, downloads, meter push
+txholder.go       the in-process inferno instance (capture → FIFO, TX holder) + pump
+clocksync.go      statime observation poller (the recording clock gate)
+channelnames.go   per-take channel names; channellabels.go: the unit's labels
+devicename.go     controller renames; mdnsaddr.go: <device>.local
+hyperdeck.go      Blackmagic HyperDeck server (TCP 9993)
+logging.go        log/slog (stderr + app.log)
+hardware/         SSD1322 display, encoder, buttons, lamps, network detection
+alsapcm/          cgo ALSA wrapper
+deploy/           systemd units, statime.toml, asound.conf, hostapd drop-in
+docs/install.sh   the installer (served by GitHub Pages)
+test/             gotest.sh, ui/ (Playwright), interop/ (two-host checks)
+third_party/      ftl-themes (submodule)
 ```
+
+Not tracked (created by the installer): `inferno/`, `statime/`, `web/` assets,
+`fonts/`, `.env`, the binary.
 
 ---
 
-**Version:** 1.20.0 · **Status:** recording/playback/WebUI live; Inferno RX live, TX via app ALSA client in progress; OLED seen only in sim.
+## Known limitations
+
+1. **No HTTPS** and no CSRF token: trusted networks only.
+2. **Wi-Fi AP** brings up hostapd on `wlan0` but configures no address or
+   DHCP for clients.
+3. **Power loss**: take content is fsync'd but the directory entry is not,
+   and the config's temp file is not fsync'd before its rename.
+4. **TX after the first playback** keeps streaming silence rather than
+   nothing (stopping the stream goes through the plugin's deadlock-prone stop
+   path).
+5. **Pi 5** GPIO, SPI and the PTP hardware clock are supported by the code
+   and installer but have not yet been verified on hardware; the Pi 4 is.
+
+---
+
+**Version:** 1.20.0
