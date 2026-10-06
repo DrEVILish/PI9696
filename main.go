@@ -941,6 +941,7 @@ func mdnsLoop(stop <-chan struct{}) {
 	}
 	for {
 		mdnsTick()
+		mdnsAddrTick(anyInterfaceIP())
 		select {
 		case <-stop:
 			return
@@ -1340,6 +1341,7 @@ func gracefulShutdown() {
 		mdnsCmd.Process.Kill()
 		mdnsCmd = nil
 	}
+	stopMDNSAddrLocked()
 	mutex.Unlock()
 
 	mutex.Lock()
