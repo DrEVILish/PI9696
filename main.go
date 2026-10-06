@@ -3964,7 +3964,30 @@ func stopPlayback() {
 		// so the TERM is delivered; for a running process SIGCONT is a
 		// harmless no-op.
 		playbackCmd.Process.Signal(syscall.SIGCONT)
+		killIfStillRunning(playbackCmd.Process, playbackStopGrace, "playback")
 	}
+}
+
+// playbackStopGrace is how long Stop waits for ffmpeg to act on SIGTERM
+// before killing it. A take paused on the inferno path is not SIGSTOPped:
+// ffmpeg sits blocked writing into the full pipe the pump stopped reading,
+// and a blocked write restarts after the signal, so ffmpeg never reaches
+// its exit check and the deck stayed Paused after Stop. Var for tests.
+var playbackStopGrace = 2 * time.Second
+
+// killIfStillRunning SIGKILLs p after grace unless it has been reaped by
+// then (Signal(0) fails on a waited-for process, so a finished child is
+// never signalled). The reaper then flips the state as for any stop.
+func killIfStillRunning(p *os.Process, grace time.Duration, what string) {
+	time.AfterFunc(grace, func() {
+		if p.Signal(syscall.Signal(0)) != nil {
+			return
+		}
+		logWarnf("%s: no exit %v after SIGTERM, killing it", what, grace)
+		if err := p.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			logWarnf("%s: SIGKILL failed: %v", what, err)
+		}
+	})
 }
 
 // playbackFileDuration returns the total duration of a WAV recording by
