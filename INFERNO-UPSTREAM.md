@@ -1,7 +1,7 @@
 # Inferno — upstream issues and changes wanted
 
 Things found while building and testing PI9696 that belong in inferno (the
-AoIP stack, pinned at `0501a56` on the `DrEVILish/inferno` fork's `dev`)
+AoIP stack, pinned at `df4d79f` on the `DrEVILish/inferno` fork's `dev`)
 or its companions, statime and netaudio, rather than in this repo. Per
 DEPLOYMENT.md, nothing is filed upstream without the maintainer's consent; this
 file is the record until then.
@@ -38,6 +38,9 @@ and the change wanted. Three fixes (U1, U2, U13) were first prototyped in
 | U23 | inferno ARC | TX flow labels query (0x2204) unanswered | "received unknown opcode1 0x2204" on every controller poll | **fixed in the fork** (`1491622`) |
 | U24 | inferno ARC | No handler for set device name (0x1001) | renaming the device from a controller did nothing | **fixed in the fork** (`a67a337`; the host applies it, see pi9696 devicename.go) |
 | U25 | searchfire (mDNS) | Channel services (`TX1@<name>`) advertise their own host name (`tx1@<name>.local`) instead of the device's | netaudio 0.2.x groups by host and reports "Failed to get a service by type" / device name / channel counts for phantom per-channel devices | **open**: needs a host-name setter in searchfire, a GitLab submodule outside DrEVILish (decision pending) |
+| U26 | inferno info | Clock status kept the captured leader's sync-state word (2) while reporting a follower | controller device view: Sync Status "Error" | **fixed in the fork** (`76e4edd`; locked follower = 3) |
+| U27 | inferno info | Sample rate / encoding status sent requested = 0, a fixed update mode and unchangeable encodings 16/32 | netaudio: requested rate/encoding 0 (a pending change to nothing) | **fixed in the fork** (`892806e`) |
+| U28 | inferno info | Board info capability word lacked the sample rate / encoding configuration bits | controller device config: Sample Rate and Encoding blank, "does not support sample rate configuration" | **fixed in the fork** (`df4d79f`) |
 
 ---
 
@@ -449,3 +452,29 @@ Rate 48 kHz, Active/Configured/Default Latency 10 ms, Latency Range
 device name` renames the unit end to end. Also in the fork: STATE_DIR
 (`0501a56`) pins the saved-state directory, which was keyed by an
 IP-derived device id.
+
+## U26-U28 - Controller interop (sync status, device config)
+
+**Found** from the controller's device view on the test unit: Sync Status
+"Error", and Device Config with blank Sample Rate and Encoding ("does not
+support sample rate configuration"). Product Version, latency and the
+latency monitor were already correct.
+
+- Sync status (U26, `76e4edd`): the clock status template was captured
+  from the LAN's clock leader and kept its sync-state word (0x00 = 2,
+  grand leader) next to a follower's port state. It is now 3, the
+  locked-follower value upstream inferno sent (its note: 1 = PLL not
+  locked). netaudio does not decode this word; the check is the
+  controller's Sync Status.
+- Capability status (U27, `892806e`): requested value = current (it was 0),
+  update modes as the hardware interface reports them (rate 0, encoding 1),
+  and only the running encoding listed (set requests are answered with the
+  unchanged status, so 16/32 did nothing).
+- Capability bits (U28, `df4d79f`): the board info word at 0x14 is now
+  0x00001018 (+ sample rate 0x08, encoding 0x10 configuration). The bits
+  were mapped one at a time through netaudio's parser; the hardware
+  interface sends 0x0D5005DB (also identify, AES67, locking).
+
+Verified on the test unit with netaudio: sample rate / encoding
+configuration supported, requested 48000 / 24 = current, supported
+[48000] / [24], Clock Role Follower of the leader, audio unaffected.
