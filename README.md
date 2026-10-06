@@ -193,7 +193,7 @@ Fixed 256×64 layout with FiraCode TTF rendering in named contexts:
 ### Prerequisites
 
 - Raspberry Pi 5, Raspberry Pi OS 64-bit (Trixie or newer)
-- Go 1.26+ (build), Rust/Cargo (Inferno AoIP server), libasound2-dev (`pkg-config alsa` — required: `alsapcm/` uses cgo, so any `go build ./...` / `go test ./...` needs the headers)
+- Go 1.27.1+ (build; `go.mod` requires it), Rust/Cargo (Inferno AoIP server), libasound2-dev (`pkg-config alsa` — required: `alsapcm/` uses cgo, so any `go build ./...` / `go test ./...` needs the headers)
 - Root access for GPIO/SPI/ALSA/USB mounting
 
 ### On the Pi

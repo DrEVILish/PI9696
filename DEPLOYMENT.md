@@ -44,8 +44,8 @@ apt-get install -y hostapd avahi-daemon       # WiFi AP + mDNS service publishin
 apt-get install -y ffmpeg python3-pip         # recording pipeline, netaudio
 
 # Go (official binary; Debian's is too old)
-curl -L https://go.dev/dl/go1.26.0.linux-arm64.tar.gz | tar xz
-mv go /usr/local/go1.26 && ln -sf /usr/local/go1.26/bin/go /usr/local/bin/go
+curl -L https://go.dev/dl/go1.27.1.linux-arm64.tar.gz | tar xz
+mv go /usr/local/go1.27 && ln -sf /usr/local/go1.27/bin/go /usr/local/bin/go && ln -sf /usr/local/go1.27/bin/gofmt /usr/local/bin/gofmt
 
 # Rust (Inferno and Statime are Rust)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
