@@ -888,10 +888,9 @@ var ffmpegStopGrace = 10 * time.Second
 // exactly one reader, so the audio splits between them and the recorder never
 // even creates its output file.
 //
-// Hence the escalation to SIGKILL, mirroring doStopInferno's handling of a
-// hung Inferno. Fire-and-forget by design: callers reach this from the app
-// mutex and from HTTP handlers, so blocking on the child's exit would freeze
-// the UI for the whole grace period.
+// Hence the escalation to SIGKILL. Fire-and-forget by design: callers reach
+// this from the app mutex and from HTTP handlers, so blocking on the child's
+// exit would freeze the UI for the whole grace period.
 func terminateFfmpeg(p *os.Process, exited <-chan struct{}, what string) {
 	if p == nil {
 		return
@@ -2965,50 +2964,10 @@ func infernoRetryDueLocked(now time.Time) bool {
 	return true
 }
 
-// infernoStopGrace/infernoKillGrace bound doStopInferno: SIGTERM, wait, then
-// SIGKILL, then give up and let systemd reap the cgroup rather than wedging
-// infernoWorker forever. Vars (like ffmpegStopGrace) so tests can shrink them.
-var infernoStopGrace = 5 * time.Second
-
 // monitorHandoffWait bounds how long startRecording (holding the app mutex)
 // waits for the outgoing monitor ffmpeg to exit. At 128ch/48kHz the 4 MB FIFO
 // holds ~170 ms, so the wait must stay short.
 var monitorHandoffWait = 500 * time.Millisecond
-var infernoKillGrace = 3 * time.Second
-
-// stopProcessGroup terminates a Setpgid child and any grandchildren it
-// spawned: SIGTERM, bounded wait, SIGKILL, bounded wait, then abandon. Signals
-// go to the negative PID (the child's process group) so grandchildren die
-// instead of being orphaned; the PID itself can't have been recycled because
-// cmd.Wait hasn't returned (a zombie still holds it).
-func stopProcessGroup(cmd *exec.Cmd, what string) {
-	if cmd == nil || cmd.Process == nil {
-		return
-	}
-	waitCh := make(chan struct{})
-	go func() {
-		cmd.Wait()
-		close(waitCh)
-	}()
-	pid := cmd.Process.Pid
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
-		logWarnf("%s: SIGTERM failed: %v", what, err)
-	}
-	select {
-	case <-waitCh:
-		return
-	case <-time.After(infernoStopGrace):
-	}
-	logWarnf("%s did not exit after SIGTERM, sending SIGKILL", what)
-	if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
-		logWarnf("%s: SIGKILL failed: %v", what, err)
-	}
-	select {
-	case <-waitCh:
-	case <-time.After(infernoKillGrace):
-		logErrorf("%s did not exit after SIGKILL, abandoning (systemd will reap the cgroup)", what)
-	}
-}
 
 // doStopInferno stops the Inferno server. Must only be called from
 // infernoWorker (see doStartInferno). Captures what it needs under lock and

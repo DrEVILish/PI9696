@@ -4205,63 +4205,6 @@ func TestCancelCopyAndWaitIdle(t *testing.T) {
 	}
 }
 
-// stopProcessGroup must bound the wait even against a child that ignores
-// SIGTERM: previously the post-SIGKILL wait had no timeout, so a D-state
-// server wedged infernoWorker (and through it, shutdown) forever.
-func TestStopProcessGroupKillsStubbornChild(t *testing.T) {
-	initTestHardware(t)
-	origStop, origKill := infernoStopGrace, infernoKillGrace
-	infernoStopGrace, infernoKillGrace = 150*time.Millisecond, 150*time.Millisecond
-	t.Cleanup(func() { infernoStopGrace, infernoKillGrace = origStop, origKill })
-
-	// NOTE: trap-then-background (trap '' TERM; sleep 300 & wait) does NOT
-	// reliably ignore SIGTERM under dash here; the exec form keeps the
-	// ignore across exec per POSIX and is what actually survives SIGTERM.
-	fakeExecutable(t, "stubborn", `#!/bin/sh
-trap '' TERM
-exec sleep 300
-`)
-	cmd := exec.Command("stubborn")
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	// Same arming race as above: signal only once the trap is installed.
-	time.Sleep(500 * time.Millisecond)
-	start := time.Now()
-	stopProcessGroup(cmd, "stubborn-test")
-	if elapsed := time.Since(start); elapsed > 10*time.Second {
-		t.Fatalf("stop took %s against a SIGTERM-ignoring child", elapsed)
-	}
-	// The child must be gone: SIGKILL is async, so poll briefly rather than
-	// asserting on ProcessState (which reports Exited()==false for a
-	// signalled process even when correctly reaped).
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-			break // ESRCH: no such process
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("stubborn child survived SIGTERM + SIGKILL escalation")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// Nil and already-dead inputs must be safe no-ops.
-func TestStopProcessGroupNilSafe(t *testing.T) {
-	initTestHardware(t)
-	stopProcessGroup(nil, "nil-test")
-	cmd := exec.Command("true")
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	if err := cmd.Wait(); err != nil {
-		t.Fatal(err)
-	}
-	stopProcessGroup(cmd, "exited-test")
-}
-
 // waitChannel is the bounded-wait primitive behind the seek handoff: true for
 // a closed channel, false after the timeout. The handoff itself can't be
 // driven to the abandon path from userspace (only D-state survives SIGKILL),
