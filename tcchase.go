@@ -31,6 +31,9 @@ const (
 	tcChaseTolerance     = 10 * time.Millisecond
 )
 
+// tcChaseEndGuard: the chase does not start a take this close to its end.
+const tcChaseEndGuard = 500 * time.Millisecond
+
 // tcChaseDriftWarn: drift past this is logged as a warning (the summary
 // reports the rest).
 const tcChaseDriftWarn = 10 * time.Millisecond
@@ -71,6 +74,7 @@ var tcChaseLive struct {
 	// the code is ahead of the playback (before any correction).
 	drift   int64
 	driftOK bool
+	aligned bool // the pump has met the code since this chase started
 }
 
 // tcArmLocked arms the take Play would start. Caller holds the app mutex.
@@ -132,7 +136,7 @@ func tcUserTransportLocked() {
 func tcSetChaseLive(cmd any) {
 	tcMu.Lock()
 	tcChaseLive.cmd, tcChaseLive.ref, tcChaseLive.sr = cmd, tcChase.ref, tcChase.sr
-	tcChaseLive.driftOK = false
+	tcChaseLive.driftOK, tcChaseLive.aligned = false, false
 	tcMu.Unlock()
 }
 
@@ -188,8 +192,15 @@ func tcChaseStepLocked(r tcReading, now time.Time) {
 	target := tcChaseTarget(r)
 	rate := tcRates[r.rate]
 	label := timecodeAt(int64(r.frames), rate).format(rate)
-	if target < 0 || (c.dur > 0 && target >= c.dur.Seconds()) {
-		if playing && target >= c.dur.Seconds() {
+	// Not started in the take's last half second: a take that just played
+	// out would otherwise start again for a moment at its very end (the
+	// code is still a few frames inside it).
+	end := c.dur.Seconds()
+	if !playing {
+		end -= tcChaseEndGuard.Seconds()
+	}
+	if target < 0 || (c.dur > 0 && target >= end) {
+		if playing && target >= end {
 			// Let the take end on its own at EOF.
 			c.state = "playing out"
 			return
@@ -234,6 +245,8 @@ func tcChaseStepLocked(r tcReading, now time.Time) {
 	if mdOK {
 		// The code ahead of the playback by md frames = playhead behind.
 		drift = -float64(md) / float64(c.sr)
+	} else if playbackViaDante && tcMediaActive() {
+		return // the pump measures on the media clock once aligned
 	} else {
 		head, ok := tcChasePlayhead(now)
 		if !ok {
@@ -302,9 +315,16 @@ func tcChaseAdjust(owner any, written int64, holder any, sampleRate int) int64 {
 				}
 				want := int64(math.Round(tcSecondsOfFrames(frames, tcRates[rate])*float64(sr))) - ref
 				diff := want - written
-				tcChaseLive.drift, tcChaseLive.driftOK = diff, true
+				tol := int64(tcChaseFineTolerance.Seconds() * float64(sr))
+				within := diff > -tol && diff < tol
+				// Drift counts from the moment the start has been aligned:
+				// until then the difference is the alignment itself.
+				if within {
+					tcChaseLive.aligned = true
+				}
+				tcChaseLive.drift, tcChaseLive.driftOK = diff, tcChaseLive.aligned
 				tcMu.Unlock()
-				if tol := int64(tcChaseFineTolerance.Seconds() * float64(sr)); diff > -tol && diff < tol {
+				if within {
 					return 0
 				}
 				return diff

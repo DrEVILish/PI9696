@@ -796,6 +796,14 @@ func buildPlaybackCmd(file string, pos time.Duration) (cmd *exec.Cmd, stdout io.
 // holder, so a write wedged on one device cannot stall another.
 var txWriteLocks sync.Map // txFrameWriter -> *sync.Mutex
 
+// txWriteBarrier waits for a write to holder already in progress.
+func txWriteBarrier(holder txFrameWriter) {
+	m, _ := txWriteLocks.LoadOrStore(holder, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	mu.Unlock()
+}
+
 func txWrite(holder txFrameWriter, buf []int32) (int, error) {
 	m, _ := txWriteLocks.LoadOrStore(holder, &sync.Mutex{})
 	mu := m.(*sync.Mutex)
@@ -874,6 +882,11 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 		if !counted {
 			counted = true
 			txPumpsActive.Add(1)
+			// The idle feeder checks txPumpsActive before each write, but
+			// one may already be in flight: let it land before the pump
+			// measures where its own first write goes (the chase placed
+			// its start one chunk off and had to skip again).
+			txWriteBarrier(holder)
 		}
 	}
 	defer func() {

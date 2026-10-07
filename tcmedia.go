@@ -35,6 +35,13 @@ var tcMedia struct {
 	offRx int64 // capture stream position minus the capture stream's appl count
 }
 
+// tcMediaActive reports whether the capture loop's device reports clocks.
+func tcMediaActive() bool {
+	tcMu.Lock()
+	defer tcMu.Unlock()
+	return tcMedia.dev != nil
+}
+
 // tcNoteCapture is called by the capture loop after every read: pos is its
 // stream position after the read.
 func tcNoteCapture(dev any, pos int64, rate int) {
@@ -97,8 +104,24 @@ func tcRxPosOfTxLocked(q int64) (float64, bool) {
 	// Same instant on both streams: capture hw - playback hw is the
 	// offset between their start times.
 	d := hwAt(cp, t, m.rate) - hwAt(pp, t, m.rate)
-	return float64(q) + d + float64(m.offRx), true
+	x := float64(q) + d + float64(m.offRx)
+	// Received LTC is inferno's receive latency old by the time it is
+	// captured: what the source sends at a media instant is the code
+	// captured that much later. (MTC does not travel through it.)
+	if int(tcLive.source.Load()) == tcSourceLTC {
+		x += tcRxLatency.Seconds() * float64(m.rate)
+	}
+	return x, true
 }
+
+// tcRxLatency is inferno's receive latency: the larger of the sender's
+// minimum and the unit's own (TX_LATENCY_NS, default 10 ms), which every
+// received sample - the TIMECODE channel included - is captured behind the
+// media instant it was sent at. Takes record audio and code with the same
+// delay, so their stamps need no correction; the chase and the relay, which
+// transmit against the code as the source sends it, do. Measured on the
+// network: without it both trailed the source by 9.5 ms.
+const tcRxLatency = 10 * time.Millisecond
 
 // tcCodeAtRxLocked is the selected input's code position (frames since
 // midnight) at capture stream position x, and its rate. ok is false when
