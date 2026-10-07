@@ -176,6 +176,7 @@ var tcMTC struct {
 	running bool
 	run     int
 	from    string
+	hist    []mtcAnchor // recent labels on the capture stream (tcmedia.go)
 }
 
 // tcRateForDecoded resolves a decoded frame's rate: the decoder's reading
@@ -252,7 +253,17 @@ func tcHandleMIDI(msg []byte, from string) {
 	} else {
 		m.run = 0
 	}
+	if m.run <= 1 {
+		m.hist = m.hist[:0]
+	}
 	m.has, m.frames, m.wall, m.rate, m.running, m.from = true, frames, now, d.rate, d.running, from
+	// On the capture stream too, for the media-clock readings.
+	if x, ok := tcRxPosAtLocked(now); ok && d.running {
+		m.hist = append(m.hist, mtcAnchor{x: x, frames: frames})
+		if len(m.hist) > tcMTCHistory {
+			m.hist = m.hist[1:]
+		}
+	}
 }
 
 // tcReading is the selected input at one moment.
@@ -272,6 +283,13 @@ func tcInputNow(now time.Time) tcReading {
 	src := int(tcLive.source.Load())
 	tcMu.Lock()
 	defer tcMu.Unlock()
+	// On the media clock where there is one (tcmedia.go): the capture
+	// position being captured now, and the code there.
+	if x, ok := tcRxPosAtLocked(now); ok {
+		if frames, rate, ok := tcCodeAtRxLocked(x); ok {
+			return tcReading{source: tcSourceNames[src], frames: frames, rate: rate, locked: true, seen: true}
+		}
+	}
 	switch src {
 	case tcSourceLTC:
 		l := &tcLTC
@@ -302,6 +320,13 @@ func tcInputNow(now time.Time) tcReading {
 // position (the take's first sample): exact for LTC, which arrives on the
 // same stream, and now-based for MTC.
 func tcInputAtStream(pos int64, now time.Time) tcReading {
+	src := int(tcLive.source.Load())
+	tcMu.Lock()
+	if frames, rate, ok := tcCodeAtRxLocked(float64(pos)); ok {
+		tcMu.Unlock()
+		return tcReading{source: tcSourceNames[src], frames: frames, rate: rate, locked: true, seen: true}
+	}
+	tcMu.Unlock()
 	r := tcInputNow(now)
 	if !r.locked || r.source != "LTC" {
 		return r
@@ -460,7 +485,7 @@ type tcIdleGen struct {
 
 // fill writes the TIMECODE channel of buf (frames of channels) for the
 // next chunk, or silence when the output is off.
-func (g *tcIdleGen) fill(buf []int32, channels, sampleRate int, delay int64) {
+func (g *tcIdleGen) fill(buf []int32, channels, sampleRate int, holder any) {
 	if !tcLive.output.Load() || channels < 2 {
 		g.valid = false
 		for i := channels - 1; i < len(buf); i += channels {
@@ -472,15 +497,38 @@ func (g *tcIdleGen) fill(buf []int32, channels, sampleRate int, delay int64) {
 	if g.clock != nil {
 		now = g.clock
 	}
-	at := now().Add(time.Duration(delay) * time.Second / time.Duration(sampleRate))
-	frames, rate := tcFreeRun(at)
+	// Relaying a locked input on the media clock (tcmedia.go): the code
+	// at the instant this write goes on the wire, to the sample, held
+	// within a millisecond. Otherwise the free run by the wall clock plus
+	// the device delay, held within half a frame.
+	var frames float64
+	var rate int
+	tol := int64(0)
+	exact := false
+	if c, ok := holder.(streamClocks); ok {
+		if pp := c.PlaybackClock(); pp.Valid {
+			tcMu.Lock()
+			if x, ok := tcRxPosOfTxLocked(pp.Appl); ok {
+				frames, rate, exact = tcCodeAtRxLocked(x)
+			}
+			tcMu.Unlock()
+		}
+	}
+	if exact {
+		tol = int64(sampleRate) / 1000
+	} else {
+		at := now().Add(time.Duration(txDelayFrames(holder, sampleRate)) * time.Second / time.Duration(sampleRate))
+		frames, rate = tcFreeRun(at)
+	}
 	r := tcRates[rate]
-	target := int64(tcSecondsOfFrames(frames, r) * float64(sampleRate))
-	spf := int64(float64(sampleRate) * float64(r.Den) / float64(r.Num))
+	target := int64(math.Round(tcSecondsOfFrames(frames, r) * float64(sampleRate)))
+	if !exact {
+		tol = int64(float64(sampleRate)*float64(r.Den)/float64(r.Num)) / 2
+	}
 	if g.enc == nil || g.enc.rate != r || g.enc.sampleRate != sampleRate {
 		g.enc, g.valid = newLTCEncoder(r, sampleRate), false
 	}
-	if !g.valid || g.cur-target > spf/2 || target-g.cur > spf/2 {
+	if !g.valid || g.cur-target > tol || target-g.cur > tol {
 		g.cur, g.valid = target, true
 	}
 	g.enc.fill(buf, channels, channels-1, g.cur)

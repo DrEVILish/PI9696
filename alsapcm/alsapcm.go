@@ -83,6 +83,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -117,6 +118,41 @@ type Device struct {
 	// in the audio that Read/Write otherwise hide from the caller.
 	xruns     atomic.Int64
 	playDelay atomic.Int64
+
+	// Where each stream is on the media clock, as of its last read/write
+	// (see ClockPoint). The appl counts restart at 0 when an xrun
+	// re-prepares a stream, like ALSA's own pointers.
+	clockMu             sync.Mutex
+	capAppl, playAppl   int64
+	capClock, playClock ClockPoint
+}
+
+// ClockPoint places a stream on the media clock. The inferno plugin drives
+// both streams' hardware pointers from the network's PTP media clock, so
+// Hw - the frame the hardware side is at - advances by exactly one frame
+// per media-clock sample, for capture and playback alike. Appl counts the
+// frames the app has read (capture) or written (playback) since the stream
+// was last prepared; Hw = Appl + delay for capture (frames waiting to be
+// read) and Appl - delay for playback (frames waiting to be played). At is
+// when the pair was taken.
+type ClockPoint struct {
+	Hw, Appl int64
+	At       time.Time
+	Valid    bool
+}
+
+// CaptureClock is the capture stream's clock point after the last read.
+func (d *Device) CaptureClock() ClockPoint {
+	d.clockMu.Lock()
+	defer d.clockMu.Unlock()
+	return d.capClock
+}
+
+// PlaybackClock is the playback stream's clock point after the last write.
+func (d *Device) PlaybackClock() ClockPoint {
+	d.clockMu.Lock()
+	defer d.clockMu.Unlock()
+	return d.playClock
 }
 
 // Xruns returns how many overruns (capture) and underruns (playback) the
@@ -186,12 +222,25 @@ func (d *Device) Read(buf []int32) (int, error) {
 		var frames, rc C.int
 		C.pcm_readi(d.cap, unsafe.Pointer(&buf[0]), C.int(want), &frames, &rc)
 		if rc == 0 {
+			var delay C.long
+			var drc C.int
+			C.pcm_delay(d.cap, &delay, &drc)
+			now := time.Now()
+			d.clockMu.Lock()
+			d.capAppl += int64(frames)
+			if drc == 0 {
+				d.capClock = ClockPoint{Hw: d.capAppl + int64(delay), Appl: d.capAppl, At: now, Valid: true}
+			}
+			d.clockMu.Unlock()
 			return int(frames), nil
 		}
 		if !recoverable(rc) {
 			return 0, fmt.Errorf("alsapcm: read: %w", alsaErr(rc))
 		}
 		d.xruns.Add(1)
+		d.clockMu.Lock()
+		d.capAppl, d.capClock = 0, ClockPoint{}
+		d.clockMu.Unlock()
 		var prc C.int
 		C.pcm_prepare(d.cap, &prc)
 		if prc != 0 {
@@ -230,15 +279,25 @@ func (d *Device) Write(buf []int32) (int, error) {
 			var delay C.long
 			var drc C.int
 			C.pcm_delay(d.play, &delay, &drc)
+			now := time.Now()
 			if drc == 0 && delay >= 0 {
 				d.playDelay.Store(int64(delay))
 			}
+			d.clockMu.Lock()
+			d.playAppl += int64(frames)
+			if drc == 0 {
+				d.playClock = ClockPoint{Hw: d.playAppl - int64(delay), Appl: d.playAppl, At: now, Valid: true}
+			}
+			d.clockMu.Unlock()
 			return int(frames), nil
 		}
 		if !recoverable(rc) {
 			return 0, fmt.Errorf("alsapcm: write: %w", alsaErr(rc))
 		}
 		d.xruns.Add(1)
+		d.clockMu.Lock()
+		d.playAppl, d.playClock = 0, ClockPoint{}
+		d.clockMu.Unlock()
 		var prc C.int
 		C.pcm_prepare(d.play, &prc)
 		if prc != 0 {

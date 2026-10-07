@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"pi9696/alsapcm"
 	"pi9696/hardware"
 )
 
@@ -43,22 +44,27 @@ func TestChaseAdjust(t *testing.T) {
 		return int64(tcSecondsOfFrames(in.frames, r)*sr) - start + ring
 	}
 	// Behind: skip up to the code; ahead: hold back; close: leave alone.
-	if adj, w := tcChaseAdjust(owner, 0, ring), want(); math.Abs(float64(adj-w)) > 500 {
+	if adj, w := tcChaseAdjust(owner, 0, ringHolder{ring}, sr), want(); math.Abs(float64(adj-w)) > 500 {
 		t.Fatalf("from the take start: adjust %d, want about %d", adj, w)
 	}
 	if w := want(); w < sr/2 {
 		t.Fatalf("the code is %d samples into the take, want at least half a second", w-ring)
 	}
-	if adj := tcChaseAdjust(owner, want()+sr, ring); math.Abs(float64(adj+sr)) > 500 {
+	if adj := tcChaseAdjust(owner, want()+sr, ringHolder{ring}, sr); math.Abs(float64(adj+sr)) > 500 {
 		t.Fatalf("a second ahead: adjust %d, want about %d", adj, -sr)
 	}
-	if adj := tcChaseAdjust(owner, want()+100, ring); adj != 0 {
+	if adj := tcChaseAdjust(owner, want()+100, ringHolder{ring}, sr); adj != 0 {
 		t.Fatalf("2 ms off: adjust %d, want 0 (within tolerance)", adj)
 	}
-	if adj := tcChaseAdjust(new(int), 0, ring); adj != 0 {
+	if adj := tcChaseAdjust(new(int), 0, ringHolder{ring}, sr); adj != 0 {
 		t.Fatal("a pump that is not chasing was adjusted")
 	}
 }
+
+// ringHolder reports a fixed playback delay.
+type ringHolder struct{ d int64 }
+
+func (h ringHolder) PlaybackDelay() int64 { return h.d }
 
 // pacedLTCDevice is ltcDevice whose writes take real time, like the
 // plugin once its ring is full.
@@ -171,5 +177,74 @@ func TestArmNeedsSourceAndIdle(t *testing.T) {
 	defer mutex.Unlock()
 	if err := tcArmLocked(); err == nil {
 		t.Fatal("armed with no timecode source")
+	}
+}
+
+// clockDev reports fixed clock points: the capture stream started at media
+// sample capStart and the playback stream at playStart; both points are
+// taken at media sample now (wall time at).
+type clockDev struct {
+	capStart, playStart, now int64
+	capAppl, playAppl        int64
+	at                       time.Time
+}
+
+func (c *clockDev) CaptureClock() alsapcm.ClockPoint {
+	return alsapcm.ClockPoint{Hw: c.now - c.capStart, Appl: c.capAppl, At: c.at, Valid: true}
+}
+
+func (c *clockDev) PlaybackClock() alsapcm.ClockPoint {
+	return alsapcm.ClockPoint{Hw: c.now - c.playStart, Appl: c.playAppl, At: c.at, Valid: true}
+}
+
+// On the media clock the chase compares the next transmitted frame with the
+// code at the same media instant, to the sample, and corrects past 1 ms.
+func TestChaseAdjustOnTheMediaClock(t *testing.T) {
+	setTimecodeSettings(t, tcSourceLTC, tcRecordMeta, false)
+	const sr = 48000
+	r := tcRates[tcRateDefault]
+	// Capture began at media sample 1000, playback at 5000 (they open
+	// separately). The capture loop's stream position is 300 ahead of the
+	// device's appl count (an earlier xrun reset it, say).
+	dev := &clockDev{capStart: 1000, playStart: 5000, now: 100000, capAppl: 98000, playAppl: 100500, at: time.Now()}
+	tcNoteCapture(dev, 98300, sr)
+	t.Cleanup(func() { tcMediaForget(dev) })
+	// LTC from 10:00:00:00 at capture stream position 0, fed as the device.
+	start := Timecode{10, 0, 0, 0}
+	tcMu.Lock()
+	tcLTC.dec, tcLTC.stream, tcLTC.sr, tcLTC.next = newLTCDecoder(sr), any(dev), sr, 0
+	tcMu.Unlock()
+	feed := ltcStream(start, sr, 3, 0, sr*22/10)
+	tcMu.Lock()
+	tcLTC.dec.feed(feed, 3, 2, func(f ltcDecoded) {
+		tcLTC.has, tcLTC.run, tcLTC.rate = true, tcLTC.run+1, tcRateDefault
+		tcLTC.nextFrames, tcLTC.endPos = f.tc.frames(r)+1, f.endPos
+	})
+	tcMu.Unlock()
+	// The next write starts at playback appl 100500. Playback hw is 95000
+	// (5500 queued), so it goes out at media sample 105500, where capture
+	// hw is 104500: capture appl 104500, stream position 104800 (+300).
+	tcMu.Lock()
+	x, ok := tcRxPosOfTxLocked(dev.playAppl)
+	tcMu.Unlock()
+	if !ok || math.Abs(x-104800) > 0.01 {
+		t.Fatalf("transmit appl %d maps to capture position %.2f, want 104800", dev.playAppl, x)
+	}
+	owner := new(int)
+	ref := samplesFromFrames(start.frames(r), r, sr)
+	tcMu.Lock()
+	tcChaseLive.cmd, tcChaseLive.ref, tcChaseLive.sr = owner, ref, sr
+	tcMu.Unlock()
+	t.Cleanup(func() { tcSetChaseLive(nil) })
+	// The take starts at 10:00:00:00, so take frame 104800 belongs on the
+	// wire next.
+	if adj := tcChaseAdjust(owner, 104800-40, dev, sr); adj != 0 {
+		t.Fatalf("0.8 ms off: adjust %d, want 0", adj)
+	}
+	if adj := tcChaseAdjust(owner, 104800-100, dev, sr); adj != 100 {
+		t.Fatalf("100 samples behind: adjust %d, want 100", adj)
+	}
+	if adj := tcChaseAdjust(owner, 104800+60, dev, sr); adj != -60 {
+		t.Fatalf("60 samples ahead: adjust %d, want -60", adj)
 	}
 }

@@ -191,6 +191,7 @@ func stopInProcInferno() {
 		}
 	}
 	if dev != nil {
+		tcMediaForget(dev)
 		txWriteLocks.Delete(txFrameWriter(dev))
 		// Close waits for any read or write still inside ALSA (the capture
 		// loop past its timeout, a playback pump, the TX warm-up), which
@@ -282,6 +283,7 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 		// The TIMECODE channel to the LTC reader, before the layout drops it.
 		tcFeedLTC(dev, frames[:n*channels], channels, fifo.pos, time.Now(), rate)
 		fifo.pos += int64(n)
+		tcNoteCapture(dev, fifo.pos, rate)
 		out := fifo.layout(frames[:n*channels], channels)
 		if err := fifo.write(framesAsS32LE(out, buf), quit, 2*time.Millisecond); err != nil {
 			if err != errFifoQuit {
@@ -599,7 +601,7 @@ func startTxIdleFeeder(holder txFrameWriter, channels, rate int) {
 				continue
 			}
 			start := time.Now()
-			tc.fill(buf, channels, rate, txDelayFrames(holder, rate))
+			tc.fill(buf, channels, rate, holder)
 			if _, err := txWrite(holder, buf); err != nil {
 				return
 			}
@@ -907,7 +909,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 				}
 				// Chasing timecode (tcchase.go): skip or hold back to
 				// meet the code before writing.
-				if adj := tcChaseAdjust(cmd, written, txDelayFrames(holder, max(p.sampleRate, 1))); adj > 0 {
+				if adj := tcChaseAdjust(cmd, written, holder, max(p.sampleRate, 1)); adj > 0 {
 					skip := min(adj, int64(full))
 					carry = carry[skip*int64(frameBytes):]
 					written += skip

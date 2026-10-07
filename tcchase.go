@@ -24,8 +24,16 @@ import (
 // source that drifts against the network clock. The chase loop measures
 // the remaining drift and logs it.
 
-// tcChaseTolerance is the error the pump lets stand before correcting.
-const tcChaseTolerance = 10 * time.Millisecond
+// tcChaseFineTolerance is the error the pump lets stand before correcting
+// on the media clock; tcChaseTolerance without one (wall-clock estimate).
+const (
+	tcChaseFineTolerance = time.Millisecond
+	tcChaseTolerance     = 10 * time.Millisecond
+)
+
+// tcChaseDriftWarn: drift past this is logged as a warning (the summary
+// reports the rest).
+const tcChaseDriftWarn = 10 * time.Millisecond
 
 // tcChaseRelocate: a playhead this far off the code is a jump, not drift:
 // restart at the new position.
@@ -59,6 +67,10 @@ var tcChaseLive struct {
 	cmd any
 	ref int64
 	sr  int
+	// drift is the pump's last measurement on the media clock: take frames
+	// the code is ahead of the playback (before any correction).
+	drift   int64
+	driftOK bool
 }
 
 // tcArmLocked arms the take Play would start. Caller holds the app mutex.
@@ -120,6 +132,7 @@ func tcUserTransportLocked() {
 func tcSetChaseLive(cmd any) {
 	tcMu.Lock()
 	tcChaseLive.cmd, tcChaseLive.ref, tcChaseLive.sr = cmd, tcChase.ref, tcChase.sr
+	tcChaseLive.driftOK = false
 	tcMu.Unlock()
 }
 
@@ -212,12 +225,22 @@ func tcChaseStepLocked(r tcReading, now time.Time) {
 		logInfof("Chase: %s locked at %s - playing %s from %s", r.source, label, filepath.Base(c.file), formatDuration(pos))
 		return
 	}
-	// Playing: measure the drift between the playhead and the code.
-	head, ok := tcChasePlayhead(now)
-	if !ok {
-		return
+	// Playing: the drift between the playhead and the code - the pump's
+	// measurement on the media clock where it has one, else the playhead.
+	var drift float64
+	tcMu.Lock()
+	md, mdOK := tcChaseLive.drift, tcChaseLive.driftOK
+	tcMu.Unlock()
+	if mdOK {
+		// The code ahead of the playback by md frames = playhead behind.
+		drift = -float64(md) / float64(c.sr)
+	} else {
+		head, ok := tcChasePlayhead(now)
+		if !ok {
+			return
+		}
+		drift = head - target
 	}
-	drift := head - target
 	if math.Abs(drift) >= tcChaseRelocate.Seconds() {
 		logWarnf("Chase: %s jumped to %s (playhead %+.3f s off) - relocating", r.source, label, drift)
 		tcChaseStopPlaybackLocked()
@@ -229,7 +252,7 @@ func tcChaseStepLocked(r tcReading, now time.Time) {
 	c.sum += drift
 	c.maxAbs = math.Max(c.maxAbs, math.Abs(drift))
 	frameSec := tcSecondsOfFrames(1, rate)
-	if math.Abs(drift) > frameSec && now.Sub(c.warnedAt) > time.Second {
+	if math.Abs(drift) > tcChaseDriftWarn.Seconds() && now.Sub(c.warnedAt) > time.Second {
 		logWarnf("Chase: drift %+.1f ms (%.2f frames) at %s", drift*1000, drift/frameSec, label)
 		c.warnedAt = now
 	}
@@ -255,19 +278,46 @@ func tcChasePlayhead(now time.Time) (float64, bool) {
 // tcChaseAdjust tells the pump of owner how far its next frame (take frame
 // written) is from where the code wants it: frames to skip (> 0) or to
 // insert as silence (< 0), 0 within tolerance or when not chasing.
-func tcChaseAdjust(owner any, written int64, ring int64) int64 {
+//
+// On the media clock (tcmedia.go) the comparison is exact: the transmit
+// position the next write starts at maps to the capture position of the
+// same media instant, and the code there names the take frame that belongs
+// on the wire - to the sample, so the tolerance is tcChaseFineTolerance.
+// Without it (a device that reports no clock) the wall clock and the
+// device delay estimate it, within tcChaseTolerance.
+func tcChaseAdjust(owner any, written int64, holder any, sampleRate int) int64 {
 	tcMu.Lock()
 	cmd, ref, sr := tcChaseLive.cmd, tcChaseLive.ref, tcChaseLive.sr
-	tcMu.Unlock()
 	if cmd == nil || cmd != owner || sr == 0 {
+		tcMu.Unlock()
 		return 0
 	}
+	if c, ok := holder.(streamClocks); ok {
+		if pp := c.PlaybackClock(); pp.Valid {
+			if x, ok := tcRxPosOfTxLocked(pp.Appl); ok {
+				frames, rate, ok := tcCodeAtRxLocked(x)
+				if !ok {
+					tcMu.Unlock()
+					return 0
+				}
+				want := int64(math.Round(tcSecondsOfFrames(frames, tcRates[rate])*float64(sr))) - ref
+				diff := want - written
+				tcChaseLive.drift, tcChaseLive.driftOK = diff, true
+				tcMu.Unlock()
+				if tol := int64(tcChaseFineTolerance.Seconds() * float64(sr)); diff > -tol && diff < tol {
+					return 0
+				}
+				return diff
+			}
+		}
+	}
+	tcMu.Unlock()
 	r := tcInputNow(time.Now())
 	if !r.locked {
 		return 0
 	}
 	target := tcSecondsOfFrames(r.frames, tcRates[r.rate])*float64(sr) - float64(ref)
-	want := int64(math.Round(target)) + ring
+	want := int64(math.Round(target)) + txDelayFrames(holder, sampleRate)
 	diff := want - written
 	if tol := int64(tcChaseTolerance.Seconds() * float64(sr)); diff > -tol && diff < tol {
 		return 0
