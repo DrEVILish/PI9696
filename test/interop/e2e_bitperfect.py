@@ -309,6 +309,10 @@ class PiA:
     def get(self, path):
         return self.http.open(f"http://{self.host}{path}", timeout=30).read().decode()
 
+    def meter(self):
+        """The transport state (/api/meter: recording, playing, paused)."""
+        return json.loads(self.get("/api/meter"))
+
     def text(self, path):
         return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", self.get(path)))
 
@@ -424,8 +428,8 @@ def main():
         log("Pi-A: record")
         pia.post("/api/record/start")
         time.sleep(1)
-        if "Recording" not in pia.text("/api/status") and "REC" not in pia.text("/api/status"):
-            log("  warning: status does not show recording: " + pia.text("/api/status")[:160])
+        if not pia.meter().get("recording"):
+            log("  warning: the unit does not report recording")
         time.sleep(a.secs)
         pia.post("/api/record/stop")
         log("Pi-A: stop")
@@ -452,14 +456,14 @@ def main():
         log("Pi-A: play")
         pia.post("/api/input/button/play")
         time.sleep(1)
-        log("  status: " + pia.text("/api/status")[:120])
+        log("  playing: %s" % pia.meter().get("playing"))
         if a.stall_at is not None:
             time.sleep(max(0, a.stall_at - 1))
             log(f"Pi-A: freezing the app for {a.stall_ms} ms (forces a TX underrun)")
             pia.sh("P=$(systemctl show -p MainPID --value pi9696); kill -STOP $P; "
                    f"sleep {a.stall_ms / 1000}; kill -CONT $P")
         t = time.time()
-        while time.time() - t < a.secs + 60 and "Playing back" in pia.text("/api/status"):
+        while time.time() - t < a.secs + 60 and (lambda m: m.get("playing") or m.get("paused"))(pia.meter()):
             time.sleep(1)
         log(f"Pi-A: playback ended after {time.time() - t + 1:.0f} s")
         time.sleep(2)
