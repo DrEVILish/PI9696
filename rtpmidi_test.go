@@ -61,12 +61,11 @@ func TestRTPMIDISessionInviteAndExchange(t *testing.T) {
 	}
 	// Closing says goodbye: the other end drops the peer at once.
 	b.close()
-	waitFor(t, 2*time.Second, "A sees B leave", func() bool { return len(a.peerNames()) == 0 })
-	ga.mu.Lock()
-	defer ga.mu.Unlock()
-	if fmt.Sprint(ga.up) != "[true false]" {
-		t.Fatalf("A's peer events %v", ga.up)
-	}
+	waitFor(t, 2*time.Second, "A sees B leave", func() bool {
+		ga.mu.Lock()
+		defer ga.mu.Unlock()
+		return len(a.peerNames()) == 0 && fmt.Sprint(ga.up) == "[true false]"
+	})
 }
 
 func TestParseRTPMIDICommands(t *testing.T) {
