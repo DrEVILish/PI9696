@@ -1417,9 +1417,6 @@ type optionsView struct {
 // level) render identical markup, differing only in anchor id, endpoint,
 // label, option labels, and selected index - so one template serves them all.
 // Suffix is appended verbatim to every option label (vuRange's "dBFS").
-// Transport keeps its own fragment: its original markup hardcodes two
-// options, one per line, which this single-option-per-line-free layout
-// can't express byte-identically.
 type selectView struct {
 	Id      string
 	Post    string
@@ -1449,18 +1446,6 @@ func sampleRateSelect() selectView {
 func tagSelect() selectView {
 	return settingSelect("tag", "/api/settings/tag", "Tag", "", tagOptionsView)
 }
-
-var transportFragmentTmpl = template.Must(template.New("transport").Parse(`<div id="transportmode" class="setting-cell">
-<div class="field-row">
-<form hx-post="/api/settings/transport-mode" hx-target="#transportmode" hx-swap="outerHTML">
-<label class="label">Transport Buttons</label>
-<select name="idx" class="select" onchange="this.form.requestSubmit()">
-<option value="0" {{if eq .Idx 0}}selected{{end}}>Icon</option>
-<option value="1" {{if eq .Idx 1}}selected{{end}}>Text</option>
-</select>
-</form>
-</div>
-</div>`))
 
 func logLevelSelect() selectView {
 	return settingSelect("loglevel", "/api/settings/log-level", "Log Level", "", logLevelOptionsView)
@@ -1818,8 +1803,12 @@ func handleAPISettingsPrefix(w http.ResponseWriter, r *http.Request) {
 }
 
 // transportSelect switches the main transport buttons between icon
-// SVG glyphs and text labels (see the ICON/TEXT setting). A full fragment,
-// so the settings modal stays consistent with the other setting rows.
+// SVG glyphs and text labels (see the ICON/TEXT setting).
+func transportSelect() selectView {
+	return settingSelect("transportmode", "/api/settings/transport-mode", "Transport Buttons", "", transportOptionsView)
+}
+
+var transportModes = []string{"icon", "text"}
 
 func transportOptionsView() optionsView {
 	idx := 0
@@ -1830,21 +1819,7 @@ func transportOptionsView() optionsView {
 }
 
 func handleAPISettingsTransportMode(w http.ResponseWriter, r *http.Request) {
-	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
-		mutex.Lock()
-		if idx == 0 {
-			transportMode = "icon"
-		} else if idx == 1 {
-			transportMode = "text"
-		} else {
-			mutex.Unlock()
-			renderFragment(w, transportFragmentTmpl, transportOptionsView())
-			return
-		}
-		settingChanged()
-		mutex.Unlock()
-	}
-	renderFragment(w, transportFragmentTmpl, transportOptionsView())
+	handleSelectSetting(w, r, len(transportModes), func(i int) { transportMode = transportModes[i]; settingChanged() }, transportSelect)
 }
 
 // wifiQRView carries the data needed to render the WiFi join QR code in the
@@ -3487,7 +3462,7 @@ func buildDashboardData(r *http.Request) dashboardData {
 	renderFragment(&chBuf, channelCountFragmentTmpl, currentChannelCountView())
 	renderFragment(&tagBuf, selectFragmentTmpl, tagSelect())
 	renderFragment(&prefixBuf, filePrefixFragmentTmpl, filePrefixView())
-	renderFragment(&transportBuf, transportFragmentTmpl, transportOptionsView())
+	renderFragment(&transportBuf, selectFragmentTmpl, transportSelect())
 	renderFragment(&hyperdeckBuf, hyperdeckFragmentTmpl, hyperdeckViewData())
 	renderFragment(&logLevelBuf, selectFragmentTmpl, logLevelSelect())
 	renderFragment(&themeBuf, themeFragmentTmpl, themePicker())
