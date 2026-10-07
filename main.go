@@ -1695,6 +1695,7 @@ func onEncoderHold() {
 		isCopying = false
 		currentState = StateIdle
 	} else if currentState == StatePlaying || currentState == StatePaused {
+		tcUserTransportLocked()
 		stopPlayback()
 	} else if currentState == StateIdleBrowse {
 		exitIdleBrowse()
@@ -1723,6 +1724,8 @@ func onButtonPress(buttonType hardware.ButtonType) {
 	defer mutex.Unlock()
 
 	noteActivity()
+	// The operator takes the transport over from a chase (tcchase.go).
+	tcUserTransportLocked()
 
 	switch buttonType {
 	case hardware.RecordButton:
@@ -3848,6 +3851,13 @@ func startPlayback() {
 		logWarnf("No recordings to play")
 		return
 	}
+	startPlaybackFrom(file, 0)
+}
+
+// startPlaybackFrom starts file at pos (the chase starts mid-take);
+// startPlayback has checked the transport is free. Returns whether it
+// started. Caller holds the app mutex.
+func startPlaybackFrom(file string, pos time.Duration) bool {
 	// Demo playback is synthesized at the current settings regardless of the
 	// take's filename, so format validation is meaningless there; real
 	// playback must match or ffmpeg would resample silently.
@@ -3861,7 +3871,7 @@ func startPlayback() {
 		}
 		showSysNotice(notice)
 		showWebNotice(err.Error())
-		return
+		return false
 	}
 	playbackDuration = playbackFileDuration(file)
 
@@ -3876,7 +3886,7 @@ func startPlayback() {
 		showSysNotice("TX no clock")
 		showWebNotice("Inferno TX clock not ready - playback refused, retrying clock")
 		go warmupTxHolder(txHolder, txHolderChannels)
-		return
+		return false
 	}
 
 	// Playback switches the dashboard OLED/WebUI out of input-monitoring
@@ -3896,24 +3906,24 @@ func startPlayback() {
 	monitoringOutput = true
 	playbackPausedElapsed = 0
 
-	cmd, stdout, viaDante := buildPlaybackCmd(file, 0)
+	cmd, stdout, viaDante := buildPlaybackCmd(file, pos)
 	if err := cmd.Start(); err != nil {
 		logErrorf("Failed to start playback: %v", err)
 		abortPlaybackStart()
-		return
+		return false
 	}
 
 	playbackCmd = cmd
 	playbackViaDante = viaDante
 	if viaDante {
-		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(file, 0))
+		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(file, pos))
 	}
 	playbackFile = file
-	playbackStart = time.Now()
+	playbackStart = time.Now().Add(-pos)
 	currentState = StatePlaying
 	done := make(chan struct{})
 	playbackDone = done
-	armDemoPlaybackEnd(cmd, playbackDuration)
+	armDemoPlaybackEnd(cmd, playbackDuration-pos)
 
 	// cmd.Wait must only ever be called once, and this goroutine is its sole
 	// owner - whether playback finishes naturally (EOF) or is interrupted by
@@ -3941,6 +3951,7 @@ func startPlayback() {
 		mutex.Unlock()
 		close(done)
 	}()
+	return true
 }
 
 // playbackCmdFor builds the playback subprocess: real ffmpeg to ALSA, or in
@@ -4004,6 +4015,7 @@ func armDemoPlaybackEnd(cmd *exec.Cmd, total time.Duration) {
 // paused state. It doesn't reap the process - the goroutine started by
 // startPlayback remains the sole owner of cmd.Wait().
 func pausePlayback() {
+	tcUserTransportLocked()
 	if currentState != StatePlaying || playbackCmd == nil || playbackCmd.Process == nil {
 		return
 	}
@@ -4032,6 +4044,7 @@ func pausePlayback() {
 // resumePlayback unpauses a paused ffmpeg with SIGCONT and returns the UI to
 // the playing state.
 func resumePlayback() {
+	tcUserTransportLocked()
 	if currentState != StatePaused || playbackCmd == nil || playbackCmd.Process == nil {
 		return
 	}
@@ -4144,6 +4157,7 @@ func playbackPosition() time.Duration {
 // it restarts the process with -ss so the new position takes effect, keeping
 // the paused state paused and the playing state playing.
 func seekPlayback(direction int) {
+	tcUserTransportLocked()
 	if currentState != StatePaused && currentState != StatePlaying {
 		return
 	}

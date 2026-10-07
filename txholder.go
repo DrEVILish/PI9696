@@ -843,6 +843,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 	// The take's timecode: generated onto TIMECODE while the output is on,
 	// and published for the MTC sender and the chase.
 	written := p.startFrame
+	var chaseSkipped, chaseHeld int64
 	var enc *ltcEncoder
 	if p.sampleRate > 0 {
 		enc = newLTCEncoder(tcRates[p.tcRate], p.sampleRate)
@@ -892,6 +893,28 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 				full := len(carry) / frameBytes
 				if full > txPumpFrames {
 					full = txPumpFrames
+				}
+				// Chasing timecode (tcchase.go): skip or hold back to
+				// meet the code before writing.
+				if adj := tcChaseAdjust(cmd, written, int64(txRingFrames(max(p.sampleRate, 1)))); adj > 0 {
+					skip := min(adj, int64(full))
+					carry = carry[skip*int64(frameBytes):]
+					written += skip
+					chaseSkipped += skip
+					continue
+				} else if adj < 0 {
+					n := int(min(-adj, txPumpFrames))
+					if _, err := txWrite(holder, zeros[:n*channels]); err != nil {
+						failed = true
+						break
+					}
+					chaseHeld += int64(n)
+					continue
+				}
+				if chaseSkipped+chaseHeld > 0 {
+					logInfof("Chase: met the timecode - %s %d samples (%.1f ms)", map[bool]string{true: "skipped", false: "held back"}[chaseSkipped > 0],
+						chaseSkipped+chaseHeld, float64(chaseSkipped+chaseHeld)*1000/float64(max(p.sampleRate, 1)))
+					chaseSkipped, chaseHeld = 0, 0
 				}
 				p.toTxFrames(carry[:full*frameBytes], samples, full)
 				if enc != nil && tcLive.output.Load() {
