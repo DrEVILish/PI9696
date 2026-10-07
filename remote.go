@@ -3446,11 +3446,17 @@ func buildDashboardData(r *http.Request) dashboardData {
 // escaping), and log lines (unescaped - control chars could forge log
 // entries).
 func isValidDeviceName(name string) bool {
-	if name == "" || len(name) > 32 {
+	return isNameOf(name, "_")
+}
+
+// isNameOf reports whether s is 1-32 bytes of ASCII letters, digits,
+// spaces and hyphens, plus any rune in extra.
+func isNameOf(s, extra string) bool {
+	if s == "" || len(s) > 32 {
 		return false
 	}
-	for _, c := range name {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '_' || c == '-') {
+	for _, c := range s {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '-' || strings.ContainsRune(extra, c)) {
 			return false
 		}
 	}

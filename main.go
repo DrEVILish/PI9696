@@ -5509,15 +5509,7 @@ func prefixStatusText() string {
 // recFilenameRe parser keys on (keeping the WebUI recordings list able to
 // read its own files back). 1-32 chars.
 func isValidFilePrefix(s string) bool {
-	if s == "" || len(s) > 32 || s != strings.TrimSpace(s) {
-		return false
-	}
-	for _, c := range s {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == ' ' || c == '-') {
-			return false
-		}
-	}
-	return true
+	return s == strings.TrimSpace(s) && isNameOf(s, "")
 }
 
 // Get Inferno server status text for display
