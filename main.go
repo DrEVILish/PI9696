@@ -890,15 +890,15 @@ var ffmpegStopGrace = 10 * time.Second
 // Hence the escalation to SIGKILL. Fire-and-forget by design: callers reach
 // this from the app mutex and from HTTP handlers, so blocking on the child's
 // exit would freeze the UI for the whole grace period.
-func terminateFfmpeg(p *os.Process, exited <-chan struct{}, what string) {
+//
+// grace is passed by value rather than read from the watchdog: the watchdog
+// outlives this call, and reading a package var from it races any later
+// change (tests shrink and restore them; -race flagged exactly that).
+func terminateFfmpeg(p *os.Process, exited <-chan struct{}, grace time.Duration, what string) {
 	if p == nil {
 		return
 	}
 	signalTERM(p, what)
-	// Read the grace once, here: the watchdog outlives this call, and
-	// reading the package var from it races any later change (tests shrink
-	// and restore it; -race flagged exactly that).
-	grace := ffmpegStopGrace
 	go func() {
 		select {
 		case <-exited:
@@ -3481,7 +3481,7 @@ func stopRecording() {
 	// against an already-exited process.
 	if ffmpegCmd != nil && ffmpegCmd.Process != nil {
 		markStopRequested(ffmpegCmd)
-		terminateFfmpeg(ffmpegCmd.Process, recordingDone, "recording")
+		terminateFfmpeg(ffmpegCmd.Process, recordingDone, ffmpegStopGrace, "recording")
 	}
 }
 
@@ -3567,7 +3567,7 @@ func startMonitor() {
 func stopMonitor() {
 	// Read without the mutex for the same reason as stopRecording.
 	if monitorCmd != nil && monitorCmd.Process != nil {
-		terminateFfmpeg(monitorCmd.Process, monitorDone, "monitor")
+		terminateFfmpeg(monitorCmd.Process, monitorDone, ffmpegStopGrace, "monitor")
 	}
 }
 
@@ -4005,7 +4005,7 @@ func stopPlayback() {
 	stopDemoEndTimerLocked()
 	if playbackCmd != nil && playbackCmd.Process != nil {
 		markStopRequested(playbackCmd)
-		signalTERM(playbackCmd.Process, "playback")
+		terminateFfmpeg(playbackCmd.Process, playbackDone, playbackStopGrace, "playback")
 		// A paused track is frozen with SIGSTOP (see pausePlayback), and a
 		// stopped process defers signal delivery until it's continued: the
 		// SIGTERM above would sit pending forever, ffmpeg would never exit,
@@ -4015,7 +4015,6 @@ func stopPlayback() {
 		// so the TERM is delivered; for a running process SIGCONT is a
 		// harmless no-op.
 		playbackCmd.Process.Signal(syscall.SIGCONT)
-		killIfStillRunning(playbackCmd.Process, playbackStopGrace, "playback")
 	}
 }
 
@@ -4025,21 +4024,6 @@ func stopPlayback() {
 // and a blocked write restarts after the signal, so ffmpeg never reaches
 // its exit check and the deck stayed Paused after Stop. Var for tests.
 var playbackStopGrace = 2 * time.Second
-
-// killIfStillRunning SIGKILLs p after grace unless it has been reaped by
-// then (Signal(0) fails on a waited-for process, so a finished child is
-// never signalled). The reaper then flips the state as for any stop.
-func killIfStillRunning(p *os.Process, grace time.Duration, what string) {
-	time.AfterFunc(grace, func() {
-		if p.Signal(syscall.Signal(0)) != nil {
-			return
-		}
-		logWarnf("%s: no exit %v after SIGTERM, killing it", what, grace)
-		if err := p.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			logWarnf("%s: SIGKILL failed: %v", what, err)
-		}
-	})
-}
 
 // playbackFileDuration returns the total duration of a WAV recording by
 // parsing its channel count and sample rate from the filename and deriving

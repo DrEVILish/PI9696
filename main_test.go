@@ -3619,7 +3619,7 @@ exec sleep 300
 	exited := make(chan struct{})
 	go func() { cmd.Wait(); close(exited) }()
 
-	terminateFfmpeg(cmd.Process, exited, "stubborn")
+	terminateFfmpeg(cmd.Process, exited, ffmpegStopGrace, "stubborn")
 
 	select {
 	case <-exited:
@@ -3650,7 +3650,7 @@ wait $!
 	go func() { cmd.Wait(); close(exited) }()
 
 	start := time.Now()
-	terminateFfmpeg(cmd.Process, exited, "polite")
+	terminateFfmpeg(cmd.Process, exited, ffmpegStopGrace, "polite")
 	select {
 	case <-exited:
 		if elapsed := time.Since(start); elapsed > 2*time.Second {
