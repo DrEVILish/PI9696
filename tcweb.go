@@ -74,6 +74,31 @@ func currentTCPeerView() tcPeerView {
 	return tcPeerView{Peer: peer, Peers: peers}
 }
 
+// rxLatencySelect is the Audio pane's Receive Latency: the presets, plus the
+// current value when a controller set one that is not a preset.
+func rxLatencySelect() selectView {
+	return settingSelect("rxlatency", "/api/settings/rx-latency", "Receive Latency", "", func() optionsView {
+		mutex.Lock()
+		defer mutex.Unlock()
+		var opts []string
+		for _, p := range rxLatencyPresets {
+			opts = append(opts, rxLatencyLabel(p))
+		}
+		idx := rxLatencyPresetIdx(rxLatencyNs)
+		if idx < 0 {
+			opts = append(opts, rxLatencyLabel(rxLatencyNs)+" (set by a controller)")
+			idx = len(opts) - 1
+		}
+		return optionsView{Options: opts, Idx: idx}
+	})
+}
+
+func handleAPISettingsRxLatency(w http.ResponseWriter, r *http.Request) {
+	handleSelectSetting(w, r, len(rxLatencyPresets), func(i int) {
+		setRxLatencyLocked(rxLatencyPresets[i], "via remote")
+	}, rxLatencySelect)
+}
+
 // tcSettingsFragment is the Timecode pane's contents.
 func tcSettingsFragment() template.HTML {
 	return frag(selectFragmentTmpl, tcSourceSelect()) +
@@ -203,6 +228,7 @@ func registerTimecodeRoutes(mux *http.ServeMux, auth func(http.HandlerFunc) http
 	mux.HandleFunc("POST /api/settings/timecode-rate", auth(handleAPISettingsTCRate))
 	mux.HandleFunc("POST /api/settings/timecode-output", auth(handleAPISettingsTCOutput))
 	mux.HandleFunc("POST /api/settings/timecode-peer", auth(handleAPISettingsTCPeer))
+	mux.HandleFunc("POST /api/settings/rx-latency", auth(handleAPISettingsRxLatency))
 	mux.HandleFunc("POST /api/timecode/arm", auth(handleAPITimecodeArm))
 	mux.HandleFunc("GET /api/timecode", auth(handleAPITimecode))
 }

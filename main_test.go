@@ -549,6 +549,7 @@ func TestStartRecordingGuarded(t *testing.T) {
 	infernoState = InfernoRunning
 	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
 	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	lastRxLatencyNs = rxLatencyNs
 	currentState = StateIdle
 	isRecording = false
 	mutex.Unlock()
@@ -3800,6 +3801,7 @@ func TestInfernoRestartNeededOnlyOnAudioChange(t *testing.T) {
 	demoMode, infernoState = false, InfernoRunning
 	sampleRateIdx, channelCount = 1, 2
 	lastSampleRate, lastChannelCount = sampleRates[1], 2
+	lastRxLatencyNs = rxLatencyNs
 	mutex.Unlock()
 
 	mutex.Lock()
@@ -4951,7 +4953,7 @@ func saveTxGlobals(t *testing.T) {
 	oCmd := playbackCmd
 	oEnv := make(map[string]string)
 	oEnvSet := make(map[string]bool)
-	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT", "INFERNO_TX_SOURCE_BIT_DEPTH", "INFERNO_PRODUCT_VERSION", "INFERNO_NAME_REQUEST_PATH", "INFERNO_FIXED_LAST_CHANNEL_NAME"} {
+	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT", "INFERNO_TX_SOURCE_BIT_DEPTH", "INFERNO_PRODUCT_VERSION", "INFERNO_NAME_REQUEST_PATH", "INFERNO_FIXED_LAST_CHANNEL_NAME", "INFERNO_RX_LATENCY_NS", "INFERNO_LATENCY_REQUEST_PATH"} {
 		oEnv[k], oEnvSet[k] = os.LookupEnv(k)
 	}
 	t.Cleanup(func() {
@@ -5348,7 +5350,7 @@ func TestAudioMenuTxRowClick(t *testing.T) {
 	if currentState != StateAudio || editingParameter {
 		t.Errorf("TX row click: state=%d editing=%v, want StateAudio/no-edit", currentState, editingParameter)
 	}
-	selectedMenu = 5
+	selectedMenu = 6 // Back (after RX Latency)
 	handleAudioClick()
 	if currentState != StateSettings {
 		t.Errorf("Back click: state=%d, want StateSettings", currentState)
@@ -6010,7 +6012,7 @@ func TestUnifiedInfernoEnv(t *testing.T) {
 	saveTxGlobals(t) // restores INFERNO_* env in cleanup
 	os.Setenv("INFERNO_ALT_PORT", "10300")
 	os.Setenv("INFERNO_PROCESS_ID", "1")
-	applyUnifiedInfernoEnv("PI 9696_Live", 48000, 32)
+	applyUnifiedInfernoEnv("PI 9696_Live", 48000, 32, 2_000_000)
 	if got := os.Getenv("INFERNO_NAME"); got != "PI-9696-Live" {
 		t.Errorf("INFERNO_NAME = %q, want sanitized name without -TX", got)
 	}
@@ -6019,6 +6021,12 @@ func TestUnifiedInfernoEnv(t *testing.T) {
 	}
 	if os.Getenv("INFERNO_SAMPLE_RATE") != "48000" {
 		t.Errorf("INFERNO_SAMPLE_RATE = %q, want 48000", os.Getenv("INFERNO_SAMPLE_RATE"))
+	}
+	if got := os.Getenv("INFERNO_RX_LATENCY_NS"); got != "2000000" {
+		t.Errorf("INFERNO_RX_LATENCY_NS = %q, want 2000000", got)
+	}
+	if got := os.Getenv("INFERNO_LATENCY_REQUEST_PATH"); got != infernoLatencyRequestPath {
+		t.Errorf("INFERNO_LATENCY_REQUEST_PATH = %q, want %q", got, infernoLatencyRequestPath)
 	}
 	if got := os.Getenv("INFERNO_FIXED_LAST_CHANNEL_NAME"); got != "TIMECODE" {
 		t.Errorf("INFERNO_FIXED_LAST_CHANNEL_NAME = %q, want TIMECODE", got)
@@ -6044,12 +6052,12 @@ func TestUnifiedInfernoEnv(t *testing.T) {
 func TestUnifiedInfernoEnvDefaultsPluginLogLevel(t *testing.T) {
 	saveTxGlobals(t)
 	t.Setenv("RUST_LOG", "")
-	applyUnifiedInfernoEnv("PI9696", 48000, 2)
+	applyUnifiedInfernoEnv("PI9696", 48000, 2, rxLatencyDefault)
 	if got := os.Getenv("RUST_LOG"); got != "info" {
 		t.Errorf("RUST_LOG = %q, want the info default", got)
 	}
 	t.Setenv("RUST_LOG", "warn,inferno_aoip=debug")
-	applyUnifiedInfernoEnv("PI9696", 48000, 2)
+	applyUnifiedInfernoEnv("PI9696", 48000, 2, rxLatencyDefault)
 	if got := os.Getenv("RUST_LOG"); got != "warn,inferno_aoip=debug" {
 		t.Errorf("RUST_LOG = %q, an explicit setting was overridden", got)
 	}
@@ -6083,6 +6091,7 @@ func startFakeTake(t *testing.T) []string {
 	infernoState = InfernoRunning
 	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
 	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	lastRxLatencyNs = rxLatencyNs
 	currentState = StateIdle
 	startRecording()
 	started := isRecording
@@ -6321,6 +6330,7 @@ func TestRecordRefusedWhileRestartClaimed(t *testing.T) {
 	infernoState, currentState = InfernoRunning, StateIdle
 	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
 	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	lastRxLatencyNs = rxLatencyNs
 	infernoRestarting = true
 	startRecording()
 	started := isRecording
@@ -6369,6 +6379,7 @@ func TestUnexpectedTakeEndIsReported(t *testing.T) {
 	infernoState, currentState = InfernoRunning, StateIdle
 	fifoPath = filepath.Join(t.TempDir(), "fifo.raw")
 	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	lastRxLatencyNs = rxLatencyNs
 	sysNotice = ""
 	startRecording()
 	done := recordingDone
@@ -7223,6 +7234,7 @@ func TestDeferredRestartResumesWhenIdle(t *testing.T) {
 	// Settings match the running server: only the deferral asks for it.
 	infernoState, demoMode = InfernoStopped, false
 	lastSampleRate, lastChannelCount = sampleRates[sampleRateIdx], channelCount
+	lastRxLatencyNs = rxLatencyNs
 
 	isRecording, playbackCmd, infernoRestartDeferred = true, nil, true
 	if resumeDeferredInfernoRestartLocked() {

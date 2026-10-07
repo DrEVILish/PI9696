@@ -82,8 +82,12 @@ const infernoDefaultLog = "info"
 // The deployed /etc/asound.conf is deliberately minimal (no @args: ALSA
 // device-string arguments are rejected with "Unknown parameters"), so every
 // setting travels via the environment, which the plugin reads at open.
-func applyUnifiedInfernoEnv(name string, rate, channels int) {
+func applyUnifiedInfernoEnv(name string, rate, channels, rxLatency int) {
 	os.Setenv("INFERNO_NAME", sanitizeDanteName(name))
+	// The receive latency (rxlatency.go), and where a controller's change
+	// of it is handed to the app (fork 5981fee).
+	os.Setenv("INFERNO_RX_LATENCY_NS", rxLatencyEnv(rxLatency))
+	os.Setenv("INFERNO_LATENCY_REQUEST_PATH", infernoLatencyRequestPath)
 	os.Setenv("INFERNO_SAMPLE_RATE", fmt.Sprintf("%d", rate))
 	os.Setenv("INFERNO_TX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_RX_CHANNELS", fmt.Sprintf("%d", channels))
@@ -117,9 +121,9 @@ func applyUnifiedInfernoEnv(name string, rate, channels int) {
 // loop feeding fifoPath. Returns false if the device cannot be opened (no
 // inferno ALSA plugin, ports busy): the caller leaves the server
 // InfernoFailed for the retry. Runs without the app mutex.
-func startInProcInferno(name string, rate, audioChannels int, fifoPath string) bool {
+func startInProcInferno(name string, rate, audioChannels, rxLatency int, fifoPath string) bool {
 	channels := audioChannels + 1
-	applyUnifiedInfernoEnv(name, rate, channels)
+	applyUnifiedInfernoEnv(name, rate, channels, rxLatency)
 	dev, err := openPairedDevice(rate, channels)
 	if err != nil {
 		if !infernoPluginInstalled() {

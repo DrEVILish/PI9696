@@ -75,6 +75,7 @@ func nameRequestLoop() {
 	defer ticker.Stop()
 	for range ticker.C {
 		applyControllerRename()
+		applyControllerLatency()
 	}
 }
 

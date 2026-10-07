@@ -1379,6 +1379,7 @@ type dashboardData struct {
 	TransportFragment    template.HTML
 	HyperdeckFragment    template.HTML
 	TimecodeFragment     template.HTML
+	RxLatencyFragment    template.HTML
 	LogLevelFragment     template.HTML
 	BrightnessFragment   template.HTML
 	AutoDimFragment      template.HTML
@@ -3309,6 +3310,7 @@ connectMeterSocket();
       <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-audio" id="pane-audio">
         {{.SampleRateFragment}}
         {{.ChannelCountFragment}}
+        {{.RxLatencyFragment}}
         {{.MonitorFragment}}
       </section>
 
@@ -3458,6 +3460,7 @@ func buildDashboardData(r *http.Request) dashboardData {
 		TransportFragment:    frag(selectFragmentTmpl, transportSelect()),
 		HyperdeckFragment:    frag(switchFragmentTmpl, hyperdeckSwitch()),
 		TimecodeFragment:     tcSettingsFragment(),
+		RxLatencyFragment:    frag(selectFragmentTmpl, rxLatencySelect()),
 		LogLevelFragment:     frag(selectFragmentTmpl, logLevelSelect()),
 		ThemeFragment:        frag(themeFragmentTmpl, themePicker()),
 		TintFragment:         frag(tintFragmentTmpl, currentTintView()),

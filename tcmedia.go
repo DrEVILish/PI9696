@@ -109,19 +109,19 @@ func tcRxPosOfTxLocked(q int64) (float64, bool) {
 	// captured: what the source sends at a media instant is the code
 	// captured that much later. (MTC does not travel through it.)
 	if int(tcLive.source.Load()) == tcSourceLTC {
-		x += tcRxLatency.Seconds() * float64(m.rate)
+		x += float64(rxLatencyLive.Load()) / 1e9 * float64(m.rate)
 	}
 	return x, true
 }
 
-// tcRxLatency is inferno's receive latency: the larger of the sender's
-// minimum and the unit's own (TX_LATENCY_NS, default 10 ms), which every
-// received sample - the TIMECODE channel included - is captured behind the
-// media instant it was sent at. Takes record audio and code with the same
-// delay, so their stamps need no correction; the chase and the relay, which
-// transmit against the code as the source sends it, do. Measured on the
-// network: without it both trailed the source by 9.5 ms.
-const tcRxLatency = 10 * time.Millisecond
+// The receive latency (rxlatency.go: the running instance's RX_LATENCY_NS)
+// is how far behind the media instant it was sent at every received sample
+// is captured - the TIMECODE channel included. Takes record audio and code
+// with the same delay, so their stamps need no correction; the chase and
+// the relay, which transmit against the code as the source sends it, do.
+// Measured on the network: without it both trailed the source by 9.5 ms
+// at 10 ms. (A sender that asks for more than the unit's latency raises its
+// flow's latency above this, and the chase then trails by the difference.)
 
 // tcCodeAtRxLocked is the selected input's code position (frames since
 // midnight) at capture stream position x, and its rate. ok is false when

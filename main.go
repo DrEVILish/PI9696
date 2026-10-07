@@ -213,6 +213,9 @@ func applyConfigSettings(c *PersistedConfig) {
 		menuTimeoutIdx = c.MenuTimeoutIdx
 	}
 	applyTimecodeConfig(c)
+	if validRxLatency(c.RxLatencyNs) {
+		rxLatencyNs = c.RxLatencyNs
+	}
 }
 
 // currentConfig snapshots the settings that persistConfig saves and
@@ -246,6 +249,7 @@ func currentConfig() PersistedConfig {
 		TCOutput:          tcOutputOn,
 		TCRate:            tcRates[tcRateIdx].Name,
 		TCMTCPeer:         tcMTCPeer,
+		RxLatencyNs:       rxLatencyNs,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
 		WifiPassword:      wifiPassword,
@@ -1290,6 +1294,9 @@ type PersistedConfig struct {
 	TCOutput  bool   `json:"tcOutput,omitempty"`
 	TCRate    string `json:"tcRate,omitempty"`
 	TCMTCPeer string `json:"tcMTCPeer,omitempty"`
+	// RxLatencyNs is the inferno receive latency (rxlatency.go); 0 (absent)
+	// keeps the default.
+	RxLatencyNs int `json:"rxLatencyNs,omitempty"`
 
 	WifiEnabled  bool   `json:"wifiEnabled"`
 	WifiSSID     string `json:"wifiSSID"`
@@ -1587,6 +1594,8 @@ func onEncoderRotate(direction int) {
 			adjustRecordTag(direction)
 		case 3: // Prefix
 			adjustRecordPrefix(direction)
+		case 5: // RX Latency
+			adjustRxLatency(direction)
 		}
 
 	case StateTimecode:
@@ -1959,7 +1968,7 @@ func navigateMenu(direction int) {
 	case StateTimecode:
 		maxItems = 7 // Source, Record, Output, Rate, Chase, In, Back
 	case StateAudio:
-		maxItems = 6 // Sample Rate, Channel Count, Tag, Prefix, TX status, Back
+		maxItems = 7 // Sample Rate, Channel Count, Tag, Prefix, TX status, RX Latency, Back
 	case StateMetering:
 		maxItems = 3 // Meter Range, Peak Hold, Back
 	case StateDisplay:
@@ -2070,7 +2079,9 @@ func handleAudioClick() {
 	case 0, 1, 2, 3: // Sample Rate, Channel Count, Tag, Prefix
 		editingParameter = true
 	case 4: // TX status row: display only, nothing to edit
-	case 5: // Back
+	case 5: // RX Latency
+		editingParameter = true
+	case 6: // Back
 		currentState = StateSettings
 		selectedMenu = 0
 		menuScrollOffset = 0
@@ -2399,8 +2410,7 @@ func infernoWorker() {
 			for {
 				mutex.Lock()
 				recording := infernoBusyLocked()
-				mismatch := infernoState == InfernoRunning &&
-					(sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount)
+				mismatch := infernoState == InfernoRunning && infernoSettingsChangedLocked()
 				if !recording && mismatch {
 					infernoRestarting = true // same claim as above
 				}
@@ -2511,7 +2521,7 @@ func networkMonitorLoop(stop <-chan struct{}) {
 // onEncoderRotate, which already holds mutex; enqueueInferno only sends on
 // a buffered channel, so this stays fast.
 // infernoRestartNeeded reports whether the running Inferno server no longer
-// matches the audio settings. Only the sample rate and channel count matter:
+// matches the audio settings. Only the sample rate, channel count and receive latency matter:
 // every other setting applies live, so restarting on those would drop the
 // inferno device (and its subscriptions) for no reason. Callers hold the app
 // mutex; factored out of checkInfernoRestart so the rule is unit-testable.
@@ -2519,7 +2529,14 @@ func infernoRestartNeeded() bool {
 	if demoMode || infernoState != InfernoRunning {
 		return false
 	}
-	return sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount
+	return infernoSettingsChangedLocked()
+}
+
+// infernoSettingsChangedLocked reports whether a setting the running
+// inferno was started with has changed: sample rate, channel count or
+// receive latency. Caller holds the app mutex.
+func infernoSettingsChangedLocked() bool {
+	return sampleRates[sampleRateIdx] != lastSampleRate || channelCount != lastChannelCount || rxLatencyNs != lastRxLatencyNs
 }
 
 func checkInfernoRestart() {
@@ -2895,6 +2912,7 @@ func doStartInferno() {
 	infernoState = InfernoStarting
 	sampleRate := sampleRates[sampleRateIdx]
 	channels := channelCount
+	rxLatency := rxLatencyNs
 	name := deviceName
 
 	// Create a persistent FIFO for Inferno output. Nanosecond name like the
@@ -2927,7 +2945,7 @@ func doStartInferno() {
 	// One inferno instance, in-process: open the paired capture+playback
 	// ALSA device (the inferno plugin) and feed the FIFO from it. It
 	// advertises equal RX and TX; record/monitor read the FIFO as before.
-	if !startInProcInferno(name, sampleRate, channels, path) {
+	if !startInProcInferno(name, sampleRate, channels, rxLatency, path) {
 		mutex.Lock()
 		infernoState = InfernoFailed
 		closeFifoKeeperLocked()
@@ -2942,6 +2960,8 @@ func doStartInferno() {
 	infernoNoRetry = false
 	lastSampleRate = sampleRate
 	lastChannelCount = channels
+	lastRxLatencyNs = rxLatency
+	rxLatencyLive.Store(int64(rxLatency))
 	// Input monitoring is on from the moment the server is up, not only
 	// once the user turns the knob into the idle-browse view: the FIFO
 	// reader feeds the live VU meters. startMonitor guards itself against
@@ -5871,6 +5891,7 @@ func renderAudioMenu() {
 		{Label: "Tag →", Value: tagStatusText()},
 		{Label: "Prefix →", Value: prefixStatusText()},
 		{Label: "TX", Value: txStatusShortLocked()},
+		{Label: "RX Latency →", Value: rxLatencyStatusText()},
 		{Label: "← Back", Value: ""},
 	}
 	renderEditableMenu(items)
