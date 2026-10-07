@@ -156,7 +156,7 @@ func TestHyperdeckProtocolSmoke(t *testing.T) {
 	} else {
 		found := false
 		for _, l := range lines {
-			found = found || strings.HasPrefix(l, "count: ")
+			found = found || strings.HasPrefix(l, "clip count: ")
 		}
 		if !found {
 			t.Errorf("clips count missing count: %v", lines)
@@ -304,7 +304,7 @@ func TestHyperdeckPlayIdempotent(t *testing.T) {
 }
 
 // The active take's file exists from take start, so its clip id must be its
-// index in the listing - not one past the end.
+// 1-based position in the listing - not one past the end.
 func TestHyperdeckClipIDMatchesActiveTake(t *testing.T) {
 	initTestHardware(t)
 	if err := os.MkdirAll(RecordPath, 0755); err != nil {
@@ -334,8 +334,8 @@ func TestHyperdeckClipIDMatchesActiveTake(t *testing.T) {
 	if want < 0 {
 		t.Fatalf("fixture take missing from recordingFiles")
 	}
-	if id != strconv.Itoa(want) {
-		t.Fatalf("clip id = %s, want index %d", id, want)
+	if id != strconv.Itoa(want+1) {
+		t.Fatalf("clip id = %s, want %d", id, want+1)
 	}
 }
 

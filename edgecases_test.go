@@ -524,15 +524,15 @@ func TestHyperdeckTransportFields(t *testing.T) {
 	if s, sp := hyperdeckStatusLocked(); s != "record" || sp != 100 {
 		t.Errorf("recording: %s %d", s, sp)
 	}
-	if id := hyperdeckClipIDLocked(); id != "1" {
-		t.Errorf("recording clip id %q, want 1", id)
+	if id := hyperdeckClipIDLocked(); id != "2" {
+		t.Errorf("recording clip id %q, want 2", id)
 	}
 	if e := hyperdeckElapsedLocked(); e < 3*time.Second || e > 5*time.Second {
 		t.Errorf("recording elapsed %v", e)
 	}
 	recordingFile = filepath.Join(dir, "not-listed-yet.wav")
-	if id := hyperdeckClipIDLocked(); id != "2" {
-		t.Errorf("unlisted active take clip id %q, want len(files)=2", id)
+	if id := hyperdeckClipIDLocked(); id != "3" {
+		t.Errorf("unlisted active take clip id %q, want len(files)+1=3", id)
 	}
 
 	isRecording = false
@@ -540,8 +540,8 @@ func TestHyperdeckTransportFields(t *testing.T) {
 	if s, sp := hyperdeckStatusLocked(); s != "play" || sp != 100 {
 		t.Errorf("playing: %s %d", s, sp)
 	}
-	if id := hyperdeckClipIDLocked(); id != "0" {
-		t.Errorf("playing clip id %q, want 0", id)
+	if id := hyperdeckClipIDLocked(); id != "1" {
+		t.Errorf("playing clip id %q, want 1", id)
 	}
 	currentState, playbackPausedElapsed = StatePaused, 7*time.Second
 	if s, sp := hyperdeckStatusLocked(); s != "stopped" || sp != 0 {
@@ -554,7 +554,7 @@ func TestHyperdeckTransportFields(t *testing.T) {
 
 // HyperDeck commands at idle: seeks need a track ("not playing"),
 // shuttle-to-zero is a stop (ok), only slot 1 exists, and clips get lists
-// every take with its 0-based id.
+// every take in the protocol's 205 shape with 1-based ids.
 func TestHyperdeckIdleCommandEdges(t *testing.T) {
 	initTestHardware(t)
 	resetTransportCleanup(t)
@@ -585,14 +585,16 @@ func TestHyperdeckIdleCommandEdges(t *testing.T) {
 		}
 	}
 	first, lines := hyperdeckCmd(t, sc, c, "clips get")
-	if !strings.HasPrefix(first, "206") {
+	if first != "205 clips info:" {
 		t.Fatalf("clips get -> %q", first)
 	}
-	joined := strings.Join(lines, "\n")
-	for _, want := range []string{"clip id: 0", "clip id: 1", "name: cg_20990101_120000_ch2_48kHz.wav", "name: cg_20990101_120100_ch2_48kHz.wav"} {
-		if !strings.Contains(joined, want) {
-			t.Errorf("clips get lacks %q:\n%s", want, joined)
-		}
+	want := []string{
+		"clip count: 2",
+		"1: cg_20990101_120000_ch2_48kHz.wav 00:00:00:00 00:00:00:00",
+		"2: cg_20990101_120100_ch2_48kHz.wav 00:00:00:00 00:00:00:00",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Errorf("clips get body:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
 	}
 }
 

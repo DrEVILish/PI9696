@@ -464,16 +464,22 @@ func (h *hyperdeckConn) dispatch(line string) bool {
 		mutex.Lock()
 		n := len(recordingFiles())
 		mutex.Unlock()
-		h.block(214, "clips count", []string{fmt.Sprintf("count: %d", n)})
+		h.block(214, "clips count", []string{fmt.Sprintf("clip count: %d", n)})
 	case "clips get":
+		// Protocol shape: 205 clips info, a clip count, then one
+		// "{id}: {name} {start} {duration}" line per clip with 1-based ids.
+		// Each take is its own clip starting at zero. 206 is disk list, and
+		// the old "clip id:/name:" pairs were not something a controller parses.
 		mutex.Lock()
 		files := recordingFiles()
 		mutex.Unlock()
-		lines := make([]string, 0, len(files)*3)
+		lines := make([]string, 0, len(files)+1)
+		lines = append(lines, fmt.Sprintf("clip count: %d", len(files)))
 		for i, f := range files {
-			lines = append(lines, "clip id: "+strconv.Itoa(i), "name: "+filepath.Base(f))
+			lines = append(lines, fmt.Sprintf("%d: %s %s %s", i+1, filepath.Base(f),
+				hyperdeckTimecode(0), hyperdeckTimecode(playbackFileDuration(f))))
 		}
-		h.block(206, "clips", lines)
+		h.block(205, "clips info", lines)
 	case "slot select":
 		if hyperdeckIntParam(params, "slot id", 1) == 1 {
 			h.ok()
@@ -627,8 +633,9 @@ func hyperdeckStatusLocked() (string, int) {
 	}
 }
 
-// hyperdeckClipIDLocked is the 0-based index of the active take in the
-// recordings list, or "none" at idle; caller holds the app mutex.
+// hyperdeckClipIDLocked is the active take's clip id - its 1-based position
+// in the recordings list, matching clips get - or "none" at idle; caller
+// holds the app mutex.
 func hyperdeckClipIDLocked() string {
 	files := recordingFiles()
 	if isRecording {
@@ -637,15 +644,15 @@ func hyperdeckClipIDLocked() string {
 		// only if it somehow isn't there yet.
 		for i, f := range files {
 			if f == recordingFile {
-				return strconv.Itoa(i)
+				return strconv.Itoa(i + 1)
 			}
 		}
-		return strconv.Itoa(len(files))
+		return strconv.Itoa(len(files) + 1)
 	}
 	if playbackFile != "" {
 		for i, f := range files {
 			if f == playbackFile {
-				return strconv.Itoa(i)
+				return strconv.Itoa(i + 1)
 			}
 		}
 	}
@@ -694,6 +701,8 @@ func hyperdeckTransportBlock() []string {
 		"video format: none",
 		"loop: false",
 		"timeline: 0",
+		"input video format: none",
+		"dynamic range: none",
 	}
 }
 
