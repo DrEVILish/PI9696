@@ -650,6 +650,13 @@ func renderFragment(w io.Writer, t *template.Template, data any) {
 	}
 }
 
+// frag renders a fragment for embedding in a page template.
+func frag(t *template.Template, data any) template.HTML {
+	var b bytes.Buffer
+	renderFragment(&b, t, data)
+	return template.HTML(b.String())
+}
+
 func writeLoginPage(w http.ResponseWriter, d loginPageData) {
 	// Snapshot under the app mutex: a WebUI rename writes deviceName under
 	// it, and reading a string mid-write is a data race. No caller holds the
@@ -1172,17 +1179,9 @@ func boolIdx(b bool) int {
 	return 0
 }
 
-// displayOptBuf returns the render buffer for a display option's select.
-func displayOptBuf(id string, motion, contrast, density *bytes.Buffer) *bytes.Buffer {
-	switch id {
-	case "motion":
-		return motion
-	case "contrast":
-		return contrast
-	case "density":
-		return density
-	}
-	return nil
+// view is the option's select row at its current value.
+func (opt displayOption) view() selectView {
+	return settingSelect(opt.id, opt.post, opt.label, "", func() optionsView { return optionsView{Options: opt.options, Idx: opt.get()} })
 }
 
 func registerDisplayOptionRoutes(mux *http.ServeMux) {
@@ -1199,7 +1198,7 @@ func registerDisplayOptionRoutes(mux *http.ServeMux) {
 			settingChanged()
 			mutex.Unlock()
 			noteActivity()
-			renderFragment(w, selectFragmentTmpl, settingSelect(opt.id, opt.post, opt.label, "", func() optionsView { return optionsView{Options: opt.options, Idx: opt.get()} }))
+			renderFragment(w, selectFragmentTmpl, opt.view())
 			// Carrier update rides out-of-band so the applied value takes
 			// effect immediately (same pattern as the theme swap).
 			fmt.Fprintf(w, "\n<script hx-swap-oob=\"true\">%s</script>", opt.carrier(idx))
@@ -3407,30 +3406,10 @@ func buildDashboardData(r *http.Request) dashboardData {
 		activeTint = pt
 	}
 
-	var vuBuf, holdBuf, srBuf, chBuf, tagBuf, prefixBuf, transportBuf, hyperdeckBuf, logLevelBuf, brightnessBuf, autoDimBuf, monitorBuf, demoBuf, qrBuf, themeBuf, motionBuf, contrastBuf, densityBuf, nameBuf bytes.Buffer
-	renderFragment(&vuBuf, selectFragmentTmpl, vuRangeSelect())
-	renderFragment(&holdBuf, selectFragmentTmpl, peakHoldSelect())
-	renderFragment(&srBuf, selectFragmentTmpl, sampleRateSelect())
-	renderFragment(&chBuf, channelCountFragmentTmpl, currentChannelCountView())
-	renderFragment(&tagBuf, selectFragmentTmpl, tagSelect())
-	renderFragment(&prefixBuf, filePrefixFragmentTmpl, filePrefixView())
-	renderFragment(&transportBuf, selectFragmentTmpl, transportSelect())
-	renderFragment(&hyperdeckBuf, switchFragmentTmpl, hyperdeckSwitch())
-	renderFragment(&logLevelBuf, selectFragmentTmpl, logLevelSelect())
-	renderFragment(&themeBuf, themeFragmentTmpl, themePicker())
-	var tintBuf bytes.Buffer
-	renderFragment(&tintBuf, tintFragmentTmpl, currentTintView())
+	dispFrag := map[string]template.HTML{}
 	for _, opt := range displayOptions {
-		buf := displayOptBuf(opt.id, &motionBuf, &contrastBuf, &densityBuf)
-		if buf != nil {
-			selectFragmentTmpl.Execute(buf, settingSelect(opt.id, opt.post, opt.label, "", func() optionsView { return optionsView{Options: opt.options, Idx: opt.get()} }))
-		}
+		dispFrag[opt.id] = frag(selectFragmentTmpl, opt.view())
 	}
-	renderFragment(&brightnessBuf, brightnessFragmentTmpl, brightnessViewData())
-	renderFragment(&autoDimBuf, switchFragmentTmpl, autoDimSwitch())
-	renderFragment(&demoBuf, switchFragmentTmpl, demoSwitch())
-	renderFragment(&nameBuf, deviceNameFragmentTmpl, deviceNameNow())
-	renderFragment(&monitorBuf, switchFragmentTmpl, monitorSwitch())
 
 	// Generate WiFi QR code as base64 PNG for the settings modal
 	var qrBase64 string
@@ -3440,7 +3419,6 @@ func buildDashboardData(r *http.Request) dashboardData {
 			qrBase64 = base64.StdEncoding.EncodeToString(png)
 		}
 	}
-	renderFragment(&qrBuf, wifiQRFragmentTmpl, wifiQRView{wifiEn, wifiS, wifiP, qrBase64})
 
 	return dashboardData{
 		DeviceName:           name,
@@ -3450,29 +3428,29 @@ func buildDashboardData(r *http.Request) dashboardData {
 		CoreVersion:          themeBuildVersion(),
 		IconSprite:           iconSpriteHref(activeTheme),
 		HTMLTag:              displayHTMLTag(activeTheme, activeVariant, activeTint),
-		VURangeFragment:      template.HTML(vuBuf.String()),
-		PeakHoldFragment:     template.HTML(holdBuf.String()),
-		SampleRateFragment:   template.HTML(srBuf.String()),
-		ChannelCountFragment: template.HTML(chBuf.String()),
-		TagFragment:          template.HTML(tagBuf.String()),
-		PrefixFragment:       template.HTML(prefixBuf.String()),
-		TransportFragment:    template.HTML(transportBuf.String()),
-		HyperdeckFragment:    template.HTML(hyperdeckBuf.String()),
-		LogLevelFragment:     template.HTML(logLevelBuf.String()),
-		ThemeFragment:        template.HTML(themeBuf.String()),
-		TintFragment:         template.HTML(tintBuf.String()),
-		MotionFragment:       template.HTML(motionBuf.String()),
-		ContrastFragment:     template.HTML(contrastBuf.String()),
-		DensityFragment:      template.HTML(densityBuf.String()),
-		BrightnessFragment:   template.HTML(brightnessBuf.String()),
-		AutoDimFragment:      template.HTML(autoDimBuf.String()),
-		MonitorFragment:      template.HTML(monitorBuf.String()),
-		DemoFragment:         template.HTML(demoBuf.String()),
-		DeviceNameFragment:   template.HTML(nameBuf.String()),
+		VURangeFragment:      frag(selectFragmentTmpl, vuRangeSelect()),
+		PeakHoldFragment:     frag(selectFragmentTmpl, peakHoldSelect()),
+		SampleRateFragment:   frag(selectFragmentTmpl, sampleRateSelect()),
+		ChannelCountFragment: frag(channelCountFragmentTmpl, currentChannelCountView()),
+		TagFragment:          frag(selectFragmentTmpl, tagSelect()),
+		PrefixFragment:       frag(filePrefixFragmentTmpl, filePrefixView()),
+		TransportFragment:    frag(selectFragmentTmpl, transportSelect()),
+		HyperdeckFragment:    frag(switchFragmentTmpl, hyperdeckSwitch()),
+		LogLevelFragment:     frag(selectFragmentTmpl, logLevelSelect()),
+		ThemeFragment:        frag(themeFragmentTmpl, themePicker()),
+		TintFragment:         frag(tintFragmentTmpl, currentTintView()),
+		MotionFragment:       dispFrag["motion"],
+		ContrastFragment:     dispFrag["contrast"],
+		DensityFragment:      dispFrag["density"],
+		BrightnessFragment:   frag(brightnessFragmentTmpl, brightnessViewData()),
+		AutoDimFragment:      frag(switchFragmentTmpl, autoDimSwitch()),
+		MonitorFragment:      frag(switchFragmentTmpl, monitorSwitch()),
+		DemoFragment:         frag(switchFragmentTmpl, demoSwitch()),
+		DeviceNameFragment:   frag(deviceNameFragmentTmpl, deviceNameNow()),
 		WifiEnabled:          wifiEn,
 		WifiSSID:             wifiS,
 		WifiPassword:         wifiP,
-		WifiQRFragment:       template.HTML(qrBuf.String()),
+		WifiQRFragment:       frag(wifiQRFragmentTmpl, wifiQRView{wifiEn, wifiS, wifiP, qrBase64}),
 		TransportIcon:        transportIcon,
 	}
 }
