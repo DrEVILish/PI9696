@@ -121,6 +121,15 @@ func fakeExecutable(t *testing.T, name, script string) {
 // demoMode/demoFifoPath themselves. It also waits for the generator's FIFO
 // to actually disappear - a stuck generator shows up here instead of
 // leaking files (and writes) into the next test.
+// setDemoMode is setDemoModeLocked for tests that do not hold the app
+// mutex: the generator goroutine it starts takes the mutex, so a bare call
+// races (caught by -race).
+func setDemoMode(on bool) bool {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return setDemoModeLocked(on)
+}
+
 func demoTestCleanup(t *testing.T) {
 	t.Helper()
 	origDemo, origFifo := demoMode, demoFifoPath
@@ -1038,7 +1047,7 @@ func TestSettingsMonitorToggle(t *testing.T) {
 	}
 	initTestHardware(t)
 	origDemo := demoMode
-	setDemoModeLocked(true) // infernoUp, so startMonitor works
+	setDemoMode(true) // infernoUp, so startMonitor works
 	t.Cleanup(func() {
 		mutex.Lock()
 		if monitoring {
@@ -1046,7 +1055,7 @@ func TestSettingsMonitorToggle(t *testing.T) {
 		}
 		monitoring, autoMonitor = false, false
 		mutex.Unlock()
-		setDemoModeLocked(origDemo)
+		setDemoMode(origDemo)
 	})
 	ensureMonitorDown(t)
 
@@ -1091,7 +1100,7 @@ func TestOLEDMonitoringRowToggles(t *testing.T) {
 	}
 	initTestHardware(t)
 	origDemo, origState, origSel := demoMode, currentState, selectedMenu
-	setDemoModeLocked(true)
+	setDemoMode(true)
 	t.Cleanup(func() {
 		mutex.Lock()
 		if monitoring {
@@ -1100,7 +1109,7 @@ func TestOLEDMonitoringRowToggles(t *testing.T) {
 		monitoring, autoMonitor = false, false
 		currentState, selectedMenu = origState, origSel
 		mutex.Unlock()
-		setDemoModeLocked(origDemo)
+		setDemoMode(origDemo)
 	})
 	ensureMonitorDown(t)
 
@@ -2809,7 +2818,7 @@ func TestInfernoUpGateAndAudioPath(t *testing.T) {
 	}
 	initTestHardware(t)
 	demoTestCleanup(t)
-	setDemoModeLocked(true)
+	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	startMonitor()
@@ -2841,7 +2850,7 @@ func TestDemoGeneratorPCM(t *testing.T) {
 	}
 	initTestHardware(t)
 	demoTestCleanup(t)
-	setDemoModeLocked(true)
+	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	startMonitor()
@@ -2873,7 +2882,7 @@ func TestDemoMonitorLiveLevels(t *testing.T) {
 	}
 	initTestHardware(t)
 	demoTestCleanup(t)
-	setDemoModeLocked(true)
+	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	mutex.Lock()
@@ -2904,7 +2913,7 @@ func TestStartMonitorResetsOverallMeter(t *testing.T) {
 	}
 	initTestHardware(t)
 	demoTestCleanup(t)
-	setDemoModeLocked(true)
+	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	mutex.Lock()
@@ -2930,7 +2939,7 @@ func TestRecordingWaitsForMonitorExit(t *testing.T) {
 	}
 	initTestHardware(t)
 	demoTestCleanup(t)
-	setDemoModeLocked(true)
+	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	mutex.Lock()
@@ -2969,7 +2978,7 @@ func TestDemoRecordTake(t *testing.T) {
 	}
 	initTestHardware(t)
 	demoTestCleanup(t)
-	setDemoModeLocked(true)
+	setDemoMode(true)
 	resetTransportCleanup(t)
 	ensureMonitorDown(t)
 	startMonitor()
@@ -3017,7 +3026,7 @@ func TestDemoPlaybackSimulated(t *testing.T) {
 	initTestHardware(t)
 	fakeExecutable(t, "ffmpeg", fakeChildScript)
 	demoTestCleanup(t)
-	setDemoModeLocked(true)
+	setDemoMode(true)
 	origState, origMon, origOut, origAuto := currentState, monitoring, monitoringOutput, autoMonitor
 	origCmd, origFile := playbackCmd, playbackFile
 	t.Cleanup(func() {
