@@ -1405,9 +1405,7 @@ func waitChannel(done <-chan struct{}, d time.Duration) bool {
 
 // waitDone waits for a reaping goroutine with a shutdown-bounded timeout.
 func waitDone(done <-chan struct{}, what string) {
-	select {
-	case <-done:
-	case <-time.After(shutdownWaitTimeout()):
+	if !waitChannel(done, shutdownWaitTimeout()) {
 		logWarnf("Shutdown: %s did not exit in time, continuing", what)
 	}
 }
