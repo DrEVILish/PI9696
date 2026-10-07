@@ -1780,8 +1780,20 @@ func handleAPISettingsTransportMode(w http.ResponseWriter, r *http.Request) {
 type wifiQRView struct {
 	Enabled  bool
 	SSID     string
-	Password string
 	QRBase64 string
+}
+
+// wifiQRFragment renders the join-QR row; the code is drawn only while the
+// AP is on with an SSID set.
+func wifiQRFragment(enabled bool, ssid, pass string) template.HTML {
+	v := wifiQRView{Enabled: enabled, SSID: ssid}
+	if enabled && ssid != "" {
+		if code, err := qrcode.New(wifiQRContent(ssid, pass), qrcode.Medium); err == nil {
+			png, _ := code.PNG(256)
+			v.QRBase64 = base64.StdEncoding.EncodeToString(png)
+		}
+	}
+	return frag(wifiQRFragmentTmpl, v)
 }
 
 var wifiQRFragmentTmpl = template.Must(template.New("wifiqr").Parse(`
@@ -1902,18 +1914,8 @@ func handleAPISettingsWiFi(w http.ResponseWriter, r *http.Request) {
 	// Re-apply the AP configuration (hostapd restart)
 	go applyLatestWifiConfig()
 
-	// Return updated fragment with new QR code
-	var qrBuf bytes.Buffer
-	var qrBase64 string
-	if enabled {
-		if code, err := qrcode.New(fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", escapeWifiField(ssid), escapeWifiField(pass)), qrcode.Medium); err == nil {
-			png, _ := code.PNG(256)
-			qrBase64 = base64.StdEncoding.EncodeToString(png)
-		}
-	}
-	wifiQRFragmentTmpl.Execute(&qrBuf, wifiQRView{enabled, ssid, pass, qrBase64})
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(qrBuf.Bytes())
+	fmt.Fprint(w, wifiQRFragment(enabled, ssid, pass))
 	// OOB swap: clear any stale validation error from #wifi-error on success.
 	fmt.Fprint(w, "\n<div id=\"wifi-error\" hx-swap-oob=\"innerHTML\"></div>")
 }
@@ -3411,15 +3413,6 @@ func buildDashboardData(r *http.Request) dashboardData {
 		dispFrag[opt.id] = frag(selectFragmentTmpl, opt.view())
 	}
 
-	// Generate WiFi QR code as base64 PNG for the settings modal
-	var qrBase64 string
-	if wifiEn && wifiS != "" {
-		if code, err := qrcode.New(wifiQRContent(), qrcode.Medium); err == nil {
-			png, _ := code.PNG(256)
-			qrBase64 = base64.StdEncoding.EncodeToString(png)
-		}
-	}
-
 	return dashboardData{
 		DeviceName:           name,
 		Logo:                 template.HTML(pi9696LogoSVG),
@@ -3450,7 +3443,7 @@ func buildDashboardData(r *http.Request) dashboardData {
 		WifiEnabled:          wifiEn,
 		WifiSSID:             wifiS,
 		WifiPassword:         wifiP,
-		WifiQRFragment:       frag(wifiQRFragmentTmpl, wifiQRView{wifiEn, wifiS, wifiP, qrBase64}),
+		WifiQRFragment:       wifiQRFragment(wifiEn, wifiS, wifiP),
 		TransportIcon:        transportIcon,
 	}
 }

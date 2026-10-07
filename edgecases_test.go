@@ -28,11 +28,11 @@ func TestWifiQRContentEscapesSpecialCharacters(t *testing.T) {
 
 	wifiSSID, wifiPassword = `Stage;A,B:C`, `p\a"ss:word`
 	want := `WIFI:T:WPA;S:Stage\;A\,B\:C;P:p\\a\"ss\:word;;`
-	if got := wifiQRContent(); got != want {
+	if got := wifiQRContent(wifiSSID, wifiPassword); got != want {
 		t.Fatalf("QR payload\n got %s\nwant %s", got, want)
 	}
 	wifiSSID, wifiPassword = "PI9696", "plainpass"
-	if got := wifiQRContent(); got != "WIFI:T:WPA;S:PI9696;P:plainpass;;" {
+	if got := wifiQRContent(wifiSSID, wifiPassword); got != "WIFI:T:WPA;S:PI9696;P:plainpass;;" {
 		t.Fatalf("plain fields altered: %s", got)
 	}
 }

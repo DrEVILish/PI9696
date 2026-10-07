@@ -673,10 +673,10 @@ func applyLatestWifiConfig() {
 
 // wifiQRContent builds the WiFi QR payload (WIFI: scheme) so a phone camera
 // can join the AP directly. See renderWifiQRScreen.
-func wifiQRContent() string {
+func wifiQRContent(ssid, pass string) string {
 	// WIFI:T:<security>;S:<ssid>;P:<password>;; - the de-facto standard QR
 	// WiFi barcode format understood by iOS/Android camera apps.
-	return fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", escapeWifiField(wifiSSID), escapeWifiField(wifiPassword))
+	return fmt.Sprintf("WIFI:T:WPA;S:%s;P:%s;;", escapeWifiField(ssid), escapeWifiField(pass))
 }
 
 // escapeWifiField escapes a WiFi QR text field per spec: \ ; , : " must be
@@ -714,7 +714,7 @@ func renderWifiQRScreen() {
 
 	// QR access code, doubled to 2px modules where it fits (see
 	// drawQRBitmapFit); the OLED black surround serves as quiet zone.
-	bmp := qrBitmap(wifiQRContent())
+	bmp := qrBitmap(wifiQRContent(wifiSSID, wifiPassword))
 	drawQRBitmapFit(bmp)
 }
 
