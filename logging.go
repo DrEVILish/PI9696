@@ -104,21 +104,21 @@ func currentLogLevel() LogLevel {
 // survives a reboot. Must be called from under mutex like every other setter
 // (rendered values change on the next frame).
 func setLogLevel(l LogLevel) {
-	if l < LogError || l > LogDebug {
-		return
+	if applyLogLevel(l) {
+		settingChanged()
 	}
-	slogLevel.Set(slogLevels[l])
-	settingChanged()
 }
 
 // applyLogLevel sets the logging threshold without persisting - used only
 // when loading the persisted config at startup, where a spurious write-back
 // (and the directory it implies) is unwanted.
-func applyLogLevel(l LogLevel) {
+// It reports whether l was a valid level.
+func applyLogLevel(l LogLevel) bool {
 	if l < LogError || l > LogDebug {
-		return
+		return false
 	}
 	slogLevel.Set(slogLevels[l])
+	return true
 }
 
 func logDebugf(format string, args ...any) {
