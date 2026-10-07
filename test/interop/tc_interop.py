@@ -133,53 +133,104 @@ class LTCGen:
         return ((smooth * LTC_AMP * (2 ** 31 - 1)).astype(np.int64) & ~0xFF).astype("<i4")
 
 
-def decode_ltc(x, thr=1 << 24):
-    """[(end_sample, frame)] for every LTC frame in x (int s32 samples)."""
-    x = np.asarray(x, dtype=np.int64)
-    t = np.where(x > thr, 1, np.where(x < -thr, -1, 0))
-    nz = np.flatnonzero(t)
-    if len(nz) < 2:
-        return []
-    filled = t[nz]
-    flips = nz[1:][np.diff(filled) != 0]
-    edges = []
-    for e in flips:
-        edges.append(e - 1 if abs(x[e - 1]) <= abs(x[e]) / 2 else e)
-    out, period, half, word, nbits = [], RATE / 2000, False, [], 0
-    last = None
-    for e in edges:
-        if last is None:
-            last = e
-            continue
-        g, last = e - last, e
+class LTCStream:
+    """LTC decoder over a stream fed in chunks (state carries across them),
+    so a long recording decodes in bounded memory."""
+
+    def __init__(self, thr=1 << 24):
+        self.thr, self.pos, self.sign, self.prev = thr, 0, 0, 0
+        self.period, self.half, self.word, self.last = RATE / 2000, False, [], None
+        self.out = []
+
+    def feed(self, x):
+        x = np.asarray(x, dtype=np.int32)
+        n = len(x)
+        if n == 0:
+            return
+        t = np.where(x > self.thr, 1, np.where(x < -self.thr, -1, 0)).astype(np.int8)
+        nz = np.flatnonzero(t)
+        if len(nz):
+            seq = np.concatenate(([self.sign], t[nz])) if self.sign else t[nz]
+            idx = np.concatenate(([-1], nz)) if self.sign else nz
+            flips = idx[1:][np.diff(seq) != 0]
+            prevs = np.concatenate(([self.prev], x[:-1]))
+            for e in flips:
+                at = e - 1 if abs(int(prevs[e])) <= abs(int(x[e])) / 2 else e
+                self.edge(self.pos + int(at))
+            self.sign = int(t[nz[-1]])
+        self.prev = int(x[-1])
+        self.pos += n
+
+    def edge(self, e):
+        if self.last is None:
+            self.last = e
+            return
+        g, self.last = e - self.last, e
+        period = self.period
         if g > period * 1.6 or g < period * 0.3:
-            half, word = False, []
+            self.half, self.word = False, []
             if RATE / 2600 <= g <= RATE / 1800:
-                period = g
-            continue
+                self.period = g
+            return
         if g > period * 0.75:
-            period = 0.8 * period + 0.2 * g
-            if half:
-                half, word = False, []
-                continue
+            self.period = 0.8 * period + 0.2 * g
+            if self.half:
+                self.half, self.word = False, []
+                return
             bit = 0
         else:
-            period = 0.8 * period + 0.4 * g
-            if not half:
-                half = True
-                continue
-            half, bit = False, 1
-        word.append(bit)
-        if len(word) > 80:
-            word.pop(0)
-        if len(word) == 80 and word[64:] == SYNC:
-            b = word
-            v = lambda at, n: sum(b[at + i] << i for i in range(n))
-            fr = v(0, 4) + 10 * v(8, 2); s = v(16, 4) + 10 * v(24, 3)
+            self.period = 0.8 * period + 0.4 * g
+            if not self.half:
+                self.half = True
+                return
+            self.half, bit = False, 1
+        w = self.word
+        w.append(bit)
+        if len(w) > 80:
+            w.pop(0)
+        if len(w) == 80 and w[64:] == SYNC:
+            v = lambda at, k: sum(w[at + i] << i for i in range(k))
+            fr = v(0, 4) + 10 * v(8, 2); s_ = v(16, 4) + 10 * v(24, 3)
             m = v(32, 4) + 10 * v(40, 3); h = v(48, 4) + 10 * v(56, 2)
-            if fr < FPS and s < 60 and m < 60 and h < 24:
-                out.append((int(e), frame_of(h, m, s, fr)))
-    return out
+            if fr < FPS and s_ < 60 and m < 60 and h < 24:
+                self.out.append((int(e), frame_of(h, m, s_, fr)))
+
+
+def decode_ltc(x, chunk=1 << 20):
+    """[(end_sample, frame)] for every LTC frame in x (s32 samples, any
+    length: decoded a chunk at a time)."""
+    d = LTCStream()
+    for i in range(0, len(x), chunk):
+        d.feed(x[i:i + chunk])
+    return d.out
+
+
+def capture(path, mark=0):
+    """The 2-channel capture from frame mark on, memory-mapped."""
+    raw = np.memmap(path, dtype="<i4", mode="r")
+    return raw[: len(raw) // 2 * 2].reshape(-1, 2)[mark:]
+
+
+def capture_frames(path):
+    return os.path.getsize(path) // 8
+
+
+def offsets(out, src):
+    """(sample, output - source in frames) where both decode, from decoded
+    frame lists of the two channels of one capture."""
+    if len(out) < 2:
+        return []
+    oe = np.array([e for e, _ in out], dtype=np.float64)
+    of = np.array([f for _, f in out], dtype=np.float64)
+    res = []
+    for e, f in src:
+        i = int(np.searchsorted(oe, e))
+        for j in (i - 1, i):
+            if 0 <= j < len(oe) and abs(oe[j] - e) < SPF:
+                o = of[j] + 1 + (e - oe[j]) / SPF
+                res.append((e, o - (f + 1)))
+                break
+    return res
 
 
 def runs(decoded):
@@ -193,18 +244,6 @@ def runs(decoded):
     if cur:
         rs.append(cur)
     return rs
-
-
-def code_at(decoded, sample):
-    """The source position (frames, fractional) at a capture sample, from
-    the decoded frame ending nearest it; None if none within a second."""
-    if not decoded:
-        return None
-    ends = np.array([d[0] for d in decoded])
-    i = int(np.argmin(np.abs(ends - sample)))
-    if abs(ends[i] - sample) > RATE:
-        return None
-    return decoded[i][1] + 1 + (sample - ends[i]) / SPF
 
 
 # --- RTP-MIDI peer --------------------------------------------------------------
@@ -401,24 +440,30 @@ def main():
         local = f"{a.work}/take.wav"
         subprocess.run(["scp", "-q", f"{pia.ssh}:{take}", local], check=True)
         side = json.loads(pia.sh(f"cat '{os.path.splitext(take)[0]}.channels.json'").stdout or "{}")
-        data = open(local, "rb").read()
+        data = np.memmap(local, dtype=np.uint8, mode="r")
         posd, nch, ref = 12, None, None
         while posd + 8 <= len(data):
-            cid, csz = data[posd:posd + 4], struct.unpack("<I", data[posd + 4:posd + 8])[0]
+            cid, csz = bytes(data[posd:posd + 4]), struct.unpack("<I", bytes(data[posd + 4:posd + 8]))[0]
             if cid == b"fmt ":
-                nch = struct.unpack("<H", data[posd + 10:posd + 12])[0]
+                nch = struct.unpack("<H", bytes(data[posd + 10:posd + 12]))[0]
             if cid == b"bext":
-                ref = struct.unpack("<Q", data[posd + 8 + 338:posd + 8 + 346])[0]
+                ref = struct.unpack("<Q", bytes(data[posd + 8 + 338:posd + 8 + 346]))[0]
             if cid == b"data":
                 start = posd + 8
                 break
             posd += 8 + csz + (csz & 1)
-        raw = np.frombuffer(data[start:start + (len(data) - start) // (3 * nch) * 3 * nch], dtype=np.uint8).reshape(-1, 3).astype(np.int64)
-        v = (raw[:, 0] << 8 | raw[:, 1] << 16 | raw[:, 2] << 24)
-        v = np.where(v >= 1 << 31, v - (1 << 32), v).reshape(-1, nch)
+        pcm = data[start:start + (len(data) - start) // (3 * nch) * 3 * nch].reshape(-1, nch, 3)
+
+        def s24(block):   # (frames, k, 3) bytes -> (frames, k) s32
+            b = block.astype(np.uint32)
+            return (b[..., 0] << 8 | b[..., 1] << 16 | b[..., 2] << 24).view(np.int32)
+        tcdec = LTCStream()
+        for i in range(0, len(pcm), 1 << 20):
+            tcdec.feed(s24(pcm[i:i + (1 << 20), nch - 1:nch, :])[:, 0])
+        v = s24(pcm[: RATE * 10, :n_audio, :])  # the first 10 s of audio, for its level
         ck.check("take has the TIMECODE channel last", nch == n_audio + 1 and side.get("channels", [{}])[-1].get("name") == "TIMECODE",
                  f"{os.path.basename(take)}: {nch} channels, last named {side.get('channels', [{}])[-1].get('name')}")
-        dec = decode_ltc(v[:, -1])
+        dec = tcdec.out
         rs = runs(dec)
         ck.check("recorded TIMECODE is continuous LTC", len(rs) == 1 and len(dec) > (a.take_secs - 1) * FPS,
                  f"{len(dec)} frames in {len(rs)} run(s), {fmt(dec[0][1]) if dec else '-'} .. {fmt(dec[-1][1]) if dec else '-'}")
@@ -427,17 +472,15 @@ def main():
             recorded = (fr + 1) * SPF - e
             ck.check("BWF time reference = the recorded code at the first sample", abs(recorded - ref) <= 2,
                      f"bext {ref} ({fmt(ref // SPF)}), the code says {recorded} ({recorded - ref:+d} samples); sidecar {side.get('timecode')}")
-        rms = 20 * np.log10(np.sqrt(np.mean((v[:, :n_audio] / 2 ** 31) ** 2)) + 1e-12)
+        rms = 20 * np.log10(np.sqrt(np.mean((v.astype(np.float64) / 2 ** 31) ** 2)) + 1e-12)
         ck.check("the take's audio channels hold sound", rms > -50, f"audio RMS {rms:.1f} dBFS")
 
         # 3. LTC out (idle: relays the input)
         time.sleep(4)
-        caps = np.fromfile(cap, dtype="<i4")
-        caps = caps[: len(caps) // 2 * 2].reshape(-1, 2)
-        win = caps[-RATE * 3:]
+        win = capture(cap)[-RATE * 3:]
         d_out, d_src = decode_ltc(win[:, 0]), decode_ltc(win[:, 1])
         ok = len(runs(d_out)) == 1 and len(d_out) > 2 * FPS
-        offs = [code_at(d_out, e) - code_at(d_src, e) for e, _ in d_src if code_at(d_out, e) is not None] if d_src else []
+        offs = [o for _, o in offsets(d_out, d_src)]
         off = float(np.median(offs)) if offs else float("nan")
         ck.check("LTC out relays the input, continuous", ok and abs(off) < 1.0,
                  f"{len(d_out)} frames, output - source = {off * 1000 / FPS:+.1f} ms (median)")
@@ -448,7 +491,7 @@ def main():
         r = json.loads(pia.post("/api/timecode/arm", {"arm": "1"}) or "{}")
         ck.check("chase arms the take", r.get("armed"), f"{r.get('take')}: {r.get('chase')}")
         take_start = ref // SPF
-        mark = len(np.fromfile(cap, dtype="<i4")) // 2
+        mark = capture_frames(cap)
         gen.jump(take_start - 3 * FPS)
         log(f"source jumped to {fmt(take_start - 3 * FPS)} (take starts at {fmt(take_start)})")
         t = time.time()
@@ -457,15 +500,26 @@ def main():
         started = time.time() - t
         ck.check("chase starts the take as the code enters it", 2 <= started <= 6, f"playing {started:.1f} s after the jump (code entered the take at 3 s)")
         time.sleep(a.take_secs - 2)
-        caps = np.fromfile(cap, dtype="<i4")
-        caps = caps[: len(caps) // 2 * 2].reshape(-1, 2)[mark:]
-        win = caps[-RATE * (a.take_secs - 3):]
+        win = capture(cap, mark)[-RATE * (a.take_secs - 3):]
         d_out, d_src = decode_ltc(win[:, 0]), decode_ltc(win[:, 1])
-        offs = [code_at(d_out, e) - code_at(d_src, e) for e, _ in d_src if code_at(d_out, e) is not None]
+        pairs = offsets(d_out, d_src)
+        offs = [o for _, o in pairs]
         off = float(np.median(offs)) if offs else float("nan")
         spread = (max(offs) - min(offs)) * 1000 / FPS if offs else float("nan")
+        # The drift over the chase: the offset per minute (or per tenth of
+        # the chase, if shorter), and its trend.
+        span = max(RATE * 10, min(RATE * 60, len(win) // 10))
+        rows = {}
+        for e, o in pairs:
+            rows.setdefault(e // span, []).append(o * 1000 / FPS)
+        meds = [(k * span / RATE, float(np.median(v))) for k, v in sorted(rows.items()) if len(v) > 5]
+        trend = np.polyfit([t for t, _ in meds], [m for _, m in meds], 1)[0] * 3600 if len(meds) > 2 else float("nan")
+        for t, m in meds:
+            log(f"  chase t={t:6.0f} s: output - source {m:+.3f} ms")
         ck.check("chased playback runs with the code", offs and abs(off) < 1.0,
-                 f"the take's code out - source = {off * 1000 / FPS:+.1f} ms (median), spread {spread:.1f} ms over {a.take_secs - 3} s")
+                 f"the take's code out - source = {off * 1000 / FPS:+.3f} ms (median), spread {spread:.3f} ms over {len(win) / RATE:.0f} s, "
+                 f"window medians {min(m for _, m in meds) if meds else float('nan'):+.3f}..{max(m for _, m in meds) if meds else float('nan'):+.3f} ms, "
+                 f"trend {trend:+.3f} ms/hour")
         gen.stop()
         t = time.time()
         while time.time() - t < 5 and tc().get("chase") == "chasing":
@@ -476,6 +530,37 @@ def main():
         pia.post("/api/timecode/arm", {"arm": "0"})
         logs = pia.sh("journalctl -u pi9696 --since '-3min' --no-pager | grep -E 'Chase:|Timecode in' | tail -20").stdout
         log("unit log:\n" + logs)
+
+        # 4b. restart mode: the code restarts somewhere unrelated to the
+        # take's own timecode; the take must restart from its top there.
+        pia.post("/api/settings/timecode-restart", {"enabled": "on"})
+        pia.post("/api/timecode/arm", {"arm": "1"})
+        take_first = ref // SPF                       # the take's own first frame
+        for k, jump in enumerate((frame_of(5, 0, 0, 0), frame_of(4, 30, 0, 0))):
+            mark = capture_frames(cap)
+            gen.jump(jump)
+            log(f"restart mode: source jumped to {fmt(jump)}")
+            time.sleep(6)
+            caps = capture(cap, mark)
+            d_out, d_src = decode_ltc(caps[:, 0]), decode_ltc(caps[:, 1])
+            # While playing, the unit sends the take's code: take start +
+            # position; the source's code has moved on from the jump by the
+            # same position, so their difference is constant.
+            srcf = dict(d_src)
+            diffs = [o for e, o in offsets(d_out, d_src) if srcf.get(e, -1) >= jump]
+            want = take_first - jump
+            # (before the take starts, the output relays the source)
+            near = [o for o in diffs if abs(o - want) < 1]
+            med = float(np.median(near)) if near else float("nan")
+            ok = len(near) > 2 * FPS and abs(med - want) < 0.05
+            ck.check(f"restart mode: take restarts from its top ({k + 1})", ok,
+                     f"take code - source code = {med:+.3f} frames over {len(near)} frames, want {want:+d} "
+                     f"(take starts at {fmt(take_first)}, code restarted at {fmt(jump)})")
+        gen.stop()
+        time.sleep(1.5)
+        pia.post("/api/timecode/arm", {"arm": "0"})
+        pia.post("/api/settings/timecode-restart", {})
+        gen.jump(frame_of(10, 30, 0, 0))
 
         # 5. MTC in and out
         setting("source", idx=2)

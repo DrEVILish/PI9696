@@ -64,6 +64,7 @@ What gets installed:
 | Audio I/O | AES67 via inferno, Ethernet only (no analog/USB audio, by design) |
 | Rates | 44.1 / 48 / 96 / 192 kHz |
 | Channels | 1-128, RX and TX always equal, plus one `TIMECODE` channel each way (channel count + 1). On a Pi 4 at 48 kHz, 1-128 ch record bit-exact (about 58% CPU at 128 ch) |
+| Receive latency | 10 / 6 / 4 / 2 / 1 / 0.5 ms (Settings → Audio; default 10 ms); controllers see and set it (0.5-10 ms) |
 | Timecode | SMPTE LTC on the `TIMECODE` channel, MTC over RTP-MIDI (UDP 5004/5005); 23.976, 24, 25, 29.97 DF, 29.97, 30 fps; in, out, take stamping (BWF time reference) and chase |
 | Format | WAV PCM 24-bit (32-bit internal), `-rf64 auto`: a take past 4 GiB is finalised as RF64 |
 | Files | `/rec/YYYY-MM-DD/prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` (+ `.channels.json` sidecar), about 17.3 MB/min at 48 kHz stereo |
@@ -150,6 +151,21 @@ Key decisions:
 - Encoder: rotate while paused = 5 s scrub; push does nothing during playback
   (only Play pauses); hold = exit.
 
+### Receive latency
+
+How far behind the network's media clock the unit plays out what it
+receives (inferno's `RX_LATENCY_NS`; a sender asking for more raises its
+flow's latency). Lower means less delay through the unit; too low for the
+network and received audio drops out. Settings → Audio → Receive Latency
+(panel: Audio → RX Latency) offers 10, 6, 4, 2, 1 and 0.5 ms; changing it
+restarts inferno (deferred while a take records or plays). Network
+controllers read it (active, configured, default, range 0.5-10 ms) and set
+it: the fork hands a controller's change to the app
+(`INFERNO_LATENCY_REQUEST_PATH`), which adopts it like its own setting.
+Controllers offer their own lists (netaudio 0.5/1/2/5 ms); a value that is
+not a preset shows as custom. `test/interop/latency_check.py` checks it
+with netaudio.
+
 ### Timecode
 
 The unit's inferno device carries one channel more each way than the
@@ -208,6 +224,11 @@ Settings → Timecode on the panel and the Timecode pane of the dashboard.
   stops playback and keeps the take armed; a jump of a second or more
   relocates; any transport key disarms. A take without timecode starts at
   00:00:00:00 (its `bext` time reference is used for takes from elsewhere).
+- **Restart Armed Take on Timecode Restart** (Timecode pane; panel:
+  Timecode → On Restart, default off). On, the armed take restarts from its
+  top whenever the code (re)starts - begins rolling, or jumps back - with
+  its start anchored to the code at that moment and held in sync from
+  there, whatever its own timecode. Off, it follows its own timecode.
 - API: `GET /api/timecode` (state), `POST /api/timecode/arm` (`arm=1|0`),
   `POST /api/settings/timecode-{source,record,rate,output,peer}`.
 - Tested on the network by `test/interop/tc_interop.py` (LTC in, a take with
@@ -358,6 +379,7 @@ channelnames.go   per-take channel names; channellabels.go: the unit's labels
 timecode.go       SMPTE labels and rates; ltc.go / mtc.go: the codecs
 tcengine.go       timecode in/out, take stamping; tcchase.go: chase; tcweb.go: UI
 rtpmidi.go        RTP-MIDI (AppleMIDI) session for MTC over IP
+rxlatency.go      the inferno receive latency setting
 devicename.go     controller renames; mdnsaddr.go: <device>.local
 hyperdeck.go      Blackmagic HyperDeck server (TCP 9993)
 logging.go        log/slog (stderr + app.log)
