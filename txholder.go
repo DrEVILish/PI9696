@@ -656,11 +656,45 @@ func dantePlaybackCmdFor(file string, pos time.Duration) (*exec.Cmd, io.ReadClos
 		"-f", "s32le", "-ac", fmt.Sprintf("%d", channels), "-ar", fmt.Sprintf("%d", rate), "-")
 	cmd := exec.Command("ffmpeg", args...)
 	captureStderr(cmd)
-	out, err := cmd.StdoutPipe()
+	// Not StdoutPipe: Wait closes that pipe the moment ffmpeg exits, and
+	// the reaper calls Wait at once - discarding whatever ffmpeg had
+	// written but the pump had not read yet (up to 64 KiB, the last 8192
+	// frames of every 2-channel take; e2e_bitperfect.py). The app owns
+	// this pipe: startedPlaybackPipe closes the write end once ffmpeg has
+	// it, and the pump reads to the real EOF and closes the read end.
+	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, nil, err
 	}
-	return cmd, out, nil
+	cmd.Stdout = w
+	return cmd, &playbackPipe{File: r, w: w}, nil
+}
+
+// playbackPipe is the decoder's stdout as the pump reads it.
+type playbackPipe struct {
+	*os.File
+	w *os.File // ffmpeg's end; the app's copy is closed after Start
+}
+
+// Close closes both ends (a start that failed, or the pump done).
+func (p *playbackPipe) Close() error {
+	p.w.Close()
+	return p.File.Close()
+}
+
+// startedPlaybackPipe releases the app's copy of the write end once ffmpeg
+// has started with it, so the read end sees EOF when ffmpeg exits.
+func startedPlaybackPipe(stdout io.Reader) {
+	if p, ok := stdout.(*playbackPipe); ok {
+		p.w.Close()
+	}
+}
+
+// failedPlaybackPipe closes the pipe of a decoder that did not start.
+func failedPlaybackPipe(stdout io.Reader) {
+	if c, ok := stdout.(io.Closer); ok {
+		c.Close()
+	}
 }
 
 // takeChannels is a take's channel count: from its name, else channelCount.
@@ -825,6 +859,11 @@ func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int) {
 // existing reaper drives the deck back to idle instead of stranding it.
 func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPlayout) {
 	nameThread(threadTxPump)
+	// The pump owns the decoder's stdout: closing it also stops an ffmpeg
+	// still writing when the pump retires early (stop, seek).
+	if c, ok := src.(io.Closer); ok {
+		defer c.Close()
+	}
 	// The pump takes over from the idle feeder only once it has something
 	// to write: counted at its first decoded chunk (or first paused
 	// silence), not at start. Counting at start stopped the feeder while
@@ -946,6 +985,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 			}
 		}
 		if rerr != nil {
+			logInfof("Playback output: take ended at frame %d (%d left over)", written, len(carry)/frameBytes)
 			finishTxPump(cmd, holder, channels)
 			return
 		}

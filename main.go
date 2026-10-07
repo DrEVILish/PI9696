@@ -3939,9 +3939,11 @@ func startPlaybackFrom(file string, pos time.Duration) bool {
 	cmd, stdout, viaDante := buildPlaybackCmd(file, pos)
 	if err := cmd.Start(); err != nil {
 		logErrorf("Failed to start playback: %v", err)
+		failedPlaybackPipe(stdout)
 		abortPlaybackStart()
 		return false
 	}
+	startedPlaybackPipe(stdout)
 
 	playbackCmd = cmd
 	playbackViaDante = viaDante
@@ -4290,6 +4292,7 @@ func restartPlaybackAt(pos time.Duration) {
 		// The old process is confirmed dead here, so drive to idle cleanly
 		// instead of leaving a stale cmd behind.
 		logErrorf("Failed to seek playback: %v", err)
+		failedPlaybackPipe(stdout)
 		playbackCmd = nil
 		monitoringOutput = false
 		playbackPausedElapsed = 0
@@ -4300,6 +4303,7 @@ func restartPlaybackAt(pos time.Duration) {
 		return
 	}
 
+	startedPlaybackPipe(stdout)
 	playbackCmd = cmd
 	playbackViaDante = viaDante
 	if viaDante {
