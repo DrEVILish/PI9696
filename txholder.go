@@ -242,7 +242,11 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 	buf := make([]byte, chunkFrames*channels*4)
 	var xrunsReported int64
 	var xrunsAt time.Time
-	fifo := fifoFeed{fd: fd, ctl: rxFifoCtl}
+	// Drop, never wait: the device must be read on time whether or not
+	// anything reads the FIFO (playback stands the monitor down), or the
+	// TIMECODE channel stops reaching the LTC reader mid-chase.
+	fifo := fifoFeed{fd: fd, ctl: rxFifoCtl, dropWhenFull: true}
+	var droppedAt time.Time
 	for {
 		select {
 		case <-quit:
@@ -285,6 +289,10 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 				inProcRxFailed(gen)
 			}
 			return
+		}
+		if fifo.dropped > 0 && time.Since(droppedAt) >= infernoLogSummaryEvery {
+			logDebugf("in-process inferno: FIFO full (no reader?), %d bytes not queued", fifo.dropped)
+			fifo.dropped, droppedAt = 0, time.Now()
 		}
 	}
 }
@@ -349,6 +357,12 @@ type fifoFeed struct {
 	withTC bool
 	pos    int64 // frames taken from the source so far
 	drop   bool  // a switch happened mid-chunk: abandon the rest of it
+	// dropWhenFull drops a chunk the FIFO has no room for instead of
+	// waiting (the capture loop; the demo generator is paced by waiting).
+	// Only whole chunks: once part of one is written, the rest follows,
+	// so the stream never loses frame alignment.
+	dropWhenFull bool
+	dropped      int64 // bytes dropped since the last report
 }
 
 // serve applies a pending layout switch, if any.
@@ -399,6 +413,10 @@ func (f *fifoFeed) write(out []byte, quit <-chan struct{}, wait time.Duration) e
 		}
 		if werr != nil || w == 0 {
 			if f.serve() {
+				return nil
+			}
+			if f.dropWhenFull && off == 0 {
+				f.dropped += int64(len(out))
 				return nil
 			}
 			time.Sleep(wait)
