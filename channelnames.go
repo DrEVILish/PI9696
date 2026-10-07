@@ -38,9 +38,21 @@ type recChannel struct {
 	Device string `json:"device,omitempty"` // the unit's RX channel name at the time, as the controller showed it
 }
 
-// recChannelsFile is the sidecar's content.
+// recChannelsFile is the sidecar's content: the channels, and the take's
+// timecode when one was recorded (tcengine.go).
 type recChannelsFile struct {
 	Channels []recChannel `json:"channels"`
+	Timecode *recTimecode `json:"timecode,omitempty"`
+}
+
+// readRecordingSidecar reads a take's sidecar.
+func readRecordingSidecar(wav string) (recChannelsFile, error) {
+	var f recChannelsFile
+	data, err := os.ReadFile(channelsSidecar(wav))
+	if err == nil {
+		err = json.Unmarshal(data, &f)
+	}
+	return f, err
 }
 
 func channelsSidecar(wav string) string {
@@ -109,20 +121,26 @@ func infernoRxChannels(n int) []recChannel {
 }
 
 // snapshotRecordingChannels writes a new take's sidecar from inferno's
-// current channel names. A failure only costs the names (logged): the
-// take itself must never depend on it.
-func snapshotRecordingChannels(wav string, channels int) {
+// current channel names, and its timecode (nil: none). A take of one
+// channel more than the channel count recorded the TIMECODE channel last.
+// A failure only costs the names (logged): the take itself must never
+// depend on it.
+func snapshotRecordingChannels(wav string, channels int, tc *recTimecode) {
 	chans := infernoRxChannels(channels)
 	// The WebUI's channel labels name the take's channels (Device keeps
 	// inferno's name). Called from startRecording under the app mutex.
 	for i := range chans {
+		if chans[i].Number > channelCount {
+			chans[i].Name, chans[i].Device = timecodeChannelName, timecodeChannelName
+			continue
+		}
 		if l, ok := channelLabels[chans[i].Number]; ok {
 			chans[i].Name = l
 		}
 	}
 	// Not durable here: this runs under the app mutex as the take starts,
 	// and the take's finalize fsyncs the sidecar with the take, unlocked.
-	if err := writeRecordingChannels(wav, chans, false); err != nil {
+	if err := writeSidecar(wav, recChannelsFile{Channels: chans, Timecode: tc}, false); err != nil {
 		logWarnf("channel names for %s: %v", filepath.Base(wav), err)
 	}
 }
@@ -132,7 +150,15 @@ func snapshotRecordingChannels(wav string, channels int) {
 // run but a power cut can lose it, for callers holding the app mutex that
 // leave the fsync to someone unlocked.
 func writeRecordingChannels(wav string, chans []recChannel, durable bool) error {
-	data, err := json.MarshalIndent(recChannelsFile{Channels: chans}, "", "  ")
+	// Keep the take's timecode: only the channels change here.
+	f, _ := readRecordingSidecar(wav)
+	f.Channels = chans
+	return writeSidecar(wav, f, durable)
+}
+
+// writeSidecar replaces a take's sidecar with f (see writeRecordingChannels).
+func writeSidecar(wav string, f recChannelsFile, durable bool) error {
+	data, err := json.MarshalIndent(f, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -342,7 +368,8 @@ func handleAPIRecordingChannels(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(recChannelsFile{Channels: recordingChannels(f)})
+	sc, _ := readRecordingSidecar(f)
+	json.NewEncoder(w).Encode(recChannelsFile{Channels: recordingChannels(f), Timecode: sc.Timecode})
 }
 
 // rxNamesCache keeps the unit's RX channel names for the meter tick (10 Hz

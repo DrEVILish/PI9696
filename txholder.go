@@ -146,7 +146,7 @@ func startInProcInferno(name string, rate, audioChannels int, fifoPath string) b
 	txHolderDevice = fmt.Sprintf("inferno:%s:%d:%d", sanitizeDanteName(name), rate, channels)
 	txHolderReady = false
 	mutex.Unlock()
-	go infernoRxLoop(dev, fifoPath, quit, done, gen, channels)
+	go infernoRxLoop(dev, fifoPath, quit, done, gen, channels, rate)
 	// Warm up the TX side against the clock overlay; recording is gated
 	// separately on clock sync (clocksync.go).
 	go warmupTxHolder(dev, channels)
@@ -224,7 +224,7 @@ var inProcCloseWait = 3 * time.Second
 // Go's poller would park a blocking write with no reader and ignore quit;
 // EAGAIN keeps every iteration responsive. O_RDWR holds a read end so a write
 // with no ffmpeg attached yet gets EAGAIN rather than SIGPIPE.
-func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done chan struct{}, gen uint64, channels int) {
+func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done chan struct{}, gen uint64, channels, rate int) {
 	nameThread(threadRxCapture)
 	defer close(done)
 	// O_CLOEXEC: without it every ffmpeg started later inherits a write end
@@ -275,6 +275,8 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 			time.Sleep(2 * time.Millisecond)
 			continue
 		}
+		// The TIMECODE channel to the LTC reader, before the layout drops it.
+		tcFeedLTC(dev, frames[:n*channels], channels, fifo.pos, time.Now(), rate)
 		fifo.pos += int64(n)
 		out := fifo.layout(frames[:n*channels], channels)
 		if err := fifo.write(framesAsS32LE(out, buf), quit, 2*time.Millisecond); err != nil {
@@ -559,7 +561,10 @@ func startTxIdleFeeder(holder txFrameWriter, channels, rate int) {
 	go func() {
 		nameThread(threadTxIdle)
 		defer txIdleFeeders.Delete(holder)
-		zeros := make([]int32, txPumpFrames*channels)
+		// Silence on the audio channels; TIMECODE carries the free-running
+		// code while the timecode output is on.
+		buf := make([]int32, txPumpFrames*channels)
+		var tc tcIdleGen
 		chunk := time.Duration(txPumpFrames) * time.Second / time.Duration(rate)
 		for {
 			// TryLock, never Lock: render() can hold the app mutex for
@@ -576,7 +581,8 @@ func startTxIdleFeeder(holder txFrameWriter, channels, rate int) {
 				continue
 			}
 			start := time.Now()
-			if _, err := txWrite(holder, zeros); err != nil {
+			tc.fill(buf, channels, rate)
+			if _, err := txWrite(holder, buf); err != nil {
 				return
 			}
 			// A write returns at once while the ring has room; pace those
@@ -649,16 +655,49 @@ func takeChannels(file string) int {
 }
 
 // txPlayout describes one playback pump's stream: the take's channels and
-// the transmitter's (the audio channels plus TIMECODE).
+// the transmitter's (the audio channels plus TIMECODE), and where in the
+// take and its timecode the stream starts.
 type txPlayout struct {
 	fileChannels int
 	txChannels   int
+	sampleRate   int
+	startFrame   int64 // the take frame the stream starts at (a seek)
+	tcRef        int64 // the take's start in samples since midnight
+	tcRate       int
 }
 
-// playoutFor is the pump description for file on the current holder.
-// Caller holds the app mutex.
-func playoutFor(file string) txPlayout {
-	return txPlayout{fileChannels: takeChannels(file), txChannels: txHolderChannels}
+// playoutFor is the pump description for file played from pos on the
+// current holder. Caller holds the app mutex.
+func playoutFor(file string, pos time.Duration) txPlayout {
+	sr := sampleRates[sampleRateIdx]
+	ref, rate, _ := takeTimecode(file, sr)
+	return txPlayout{
+		fileChannels: takeChannels(file), txChannels: txHolderChannels, sampleRate: sr,
+		startFrame: int64(pos.Seconds() * float64(sr)), tcRef: ref, tcRate: rate,
+	}
+}
+
+// publish makes this pump the source of the playing take's timecode
+// position (tcPlay): written is the next take frame it writes.
+func (p txPlayout) publish(owner any, written int64, paused bool) {
+	tcMu.Lock()
+	defer tcMu.Unlock()
+	if tcPlay.owner != owner {
+		tcPlay.owner = owner
+		tcPlay.timeRef, tcPlay.rate, tcPlay.sr = p.tcRef, p.tcRate, p.sampleRate
+		tcPlay.ring = int64(txRingFrames(p.sampleRate))
+	}
+	tcPlay.active = true
+	tcPlay.written, tcPlay.paused, tcPlay.at = written, paused, time.Now()
+}
+
+// retire ends owner's timecode position, unless a successor took over.
+func (p txPlayout) retire(owner any) {
+	tcMu.Lock()
+	defer tcMu.Unlock()
+	if tcPlay.owner == owner {
+		tcPlay.active, tcPlay.owner = false, nil
+	}
 }
 
 // toTxFrames converts n decoded frames (s32le bytes, p.fileChannels each)
@@ -783,6 +822,14 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 			txPumpsActive.Add(-1)
 		}
 	}()
+	// The take's timecode: generated onto TIMECODE while the output is on,
+	// and published for the MTC sender and the chase.
+	written := p.startFrame
+	var enc *ltcEncoder
+	if p.sampleRate > 0 {
+		enc = newLTCEncoder(tcRates[p.tcRate], p.sampleRate)
+	}
+	defer p.retire(cmd)
 	channels := p.txChannels
 	frameBytes := p.fileChannels * 4
 	tmp := make([]byte, txPumpFrames*frameBytes)
@@ -812,6 +859,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 		}
 		if paused {
 			takeOver()
+			p.publish(cmd, written, true)
 			if _, err := txWrite(holder, zeros); err != nil {
 				break
 			}
@@ -828,10 +876,15 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 					full = txPumpFrames
 				}
 				p.toTxFrames(carry[:full*frameBytes], samples, full)
+				if enc != nil && tcLive.output.Load() {
+					enc.fill(samples[:full*channels], channels, channels-1, p.tcRef+written)
+				}
+				p.publish(cmd, written, false)
 				if _, err := txWrite(holder, samples[:full*channels]); err != nil {
 					failed = true
 					break
 				}
+				written += int64(full)
 				carry = carry[full*frameBytes:]
 			}
 			if failed {

@@ -176,6 +176,7 @@ type ltcDecoder struct {
 	hi         uint16
 	nbits      int
 	lastEnd    int64   // end position of the previous decoded frame, -1 none
+	prev       int32   // the previous sample
 	frameLens  []int64 // recent frame lengths in samples, for the rate
 	maxFrame   int
 	threshold  int32
@@ -193,7 +194,8 @@ func newLTCDecoder(sampleRate int) *ltcDecoder {
 // feed consumes samples, calling found for every complete frame.
 func (d *ltcDecoder) feed(samples []int32, stride, ch int, found func(ltcDecoded)) {
 	for i := ch; i < len(samples); i += stride {
-		x := samples[i]
+		x, prev := samples[i], d.prev
+		d.prev = x
 		d.pos++
 		switch {
 		case !d.high && x > d.threshold:
@@ -203,14 +205,28 @@ func (d *ltcDecoder) feed(samples []int32, stride, ch int, found func(ltcDecoded
 		default:
 			continue
 		}
-		d.edge(d.pos-d.lastEdge, found)
-		d.lastEdge = d.pos
+		// The level changed at this sample, or at the previous one when
+		// that sat about halfway (a transition sample, as the encoder
+		// writes).
+		at := d.pos - 1
+		if abs64(int64(prev)) <= abs64(int64(x))/2 {
+			at--
+		}
+		d.edge(at-d.lastEdge, at, found)
+		d.lastEdge = at
 	}
 }
 
 // edge classifies the interval since the previous transition: about a bit
 // period is a 0, about half of one is half of a 1.
-func (d *ltcDecoder) edge(gap int64, found func(ltcDecoded)) {
+func abs64(x int64) int64 {
+	if x < 0 {
+		return -x
+	}
+	return x
+}
+
+func (d *ltcDecoder) edge(gap, at int64, found func(ltcDecoded)) {
 	g := float64(gap)
 	switch {
 	case g > d.period*1.6 || g < d.period*0.3:
@@ -229,19 +245,19 @@ func (d *ltcDecoder) edge(gap int64, found func(ltcDecoded)) {
 			d.nbits = 0
 			return
 		}
-		d.bit(0, found)
+		d.bit(0, at, found)
 	default:
 		d.period = 0.8*d.period + 0.2*2*g
 		if d.halfPend {
 			d.halfPend = false
-			d.bit(1, found)
+			d.bit(1, at, found)
 		} else {
 			d.halfPend = true
 		}
 	}
 }
 
-func (d *ltcDecoder) bit(b uint64, found func(ltcDecoded)) {
+func (d *ltcDecoder) bit(b uint64, at int64, found func(ltcDecoded)) {
 	d.lo = d.lo>>1 | uint64(d.hi&1)<<63
 	d.hi = d.hi>>1 | uint16(b)<<15
 	d.nbits++
@@ -253,9 +269,8 @@ func (d *ltcDecoder) bit(b uint64, found func(ltcDecoded)) {
 		return
 	}
 	// A bit is complete at the edge that ends it, so this edge is the
-	// frame's end: the next frame's first boundary. pos-1 is the sample
-	// that crossed the threshold.
-	end := d.pos - 1
+	// frame's end: the next frame's first boundary.
+	end := at
 	if d.lastEnd >= 0 {
 		if l := end - d.lastEnd; l > 0 && l < int64(d.sampleRate) {
 			d.frameLens = append(d.frameLens, l)

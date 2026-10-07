@@ -120,7 +120,7 @@ func TestChannelLabelsLoadAndNameNewTakes(t *testing.T) {
 
 	wav := filepath.Join(t.TempDir(), "take.wav")
 	mutex.Lock()
-	snapshotRecordingChannels(wav, 2)
+	snapshotRecordingChannels(wav, 2, nil)
 	mutex.Unlock()
 	chans := recordingChannels(wav)
 	if chans[0].Name != "Kick in" || chans[0].Device != "Kick" {

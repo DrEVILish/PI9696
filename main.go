@@ -212,6 +212,7 @@ func applyConfigSettings(c *PersistedConfig) {
 	if c.MenuTimeoutIdx >= 0 && c.MenuTimeoutIdx < len(menuTimeoutOptions) {
 		menuTimeoutIdx = c.MenuTimeoutIdx
 	}
+	applyTimecodeConfig(c)
 }
 
 // currentConfig snapshots the settings that persistConfig saves and
@@ -240,6 +241,11 @@ func currentConfig() PersistedConfig {
 		MenuTimeoutIdx:    menuTimeoutIdx,
 		DemoMode:          demoMode,
 		HyperdeckEnabled:  hyperdeckEnabled,
+		TCSource:          tcSourceNames[tcSourceIdx],
+		TCRecord:          tcRecordNames[tcRecordIdx],
+		TCOutput:          tcOutputOn,
+		TCRate:            tcRates[tcRateIdx].Name,
+		TCMTCPeer:         tcMTCPeer,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
 		WifiPassword:      wifiPassword,
@@ -1263,6 +1269,14 @@ type PersistedConfig struct {
 	// Plain bool: absent in old configs decodes to false (off).
 	HyperdeckEnabled bool `json:"hyperdeckEnabled,omitempty"`
 
+	// Timecode (tcengine.go), by name so an absent field keeps the
+	// default (record as metadata, 25 fps).
+	TCSource  string `json:"tcSource,omitempty"`
+	TCRecord  string `json:"tcRecord,omitempty"`
+	TCOutput  bool   `json:"tcOutput,omitempty"`
+	TCRate    string `json:"tcRate,omitempty"`
+	TCMTCPeer string `json:"tcMTCPeer,omitempty"`
+
 	WifiEnabled  bool   `json:"wifiEnabled"`
 	WifiSSID     string `json:"wifiSSID"`
 	WifiPassword string `json:"wifiPassword"`
@@ -1313,6 +1327,7 @@ func main() {
 	go nameRequestLoop()
 	go telemetryWSLoop()
 	go mdnsLoop(shutdownCh)
+	go tcServicesLoop()
 
 	// A persisted demo mode starts its generator (and the always-on input
 	// monitor over it) at boot, exactly like doStartInferno does for a real
@@ -2761,6 +2776,11 @@ func demoGenLoop(path string, quit <-chan struct{}, keeper *os.File, gen uint64)
 	sr, ch := 48000, 2
 	var frames []int32
 	var buf []byte
+	// TIMECODE carries the time of day as LTC, so the demo shows a locked
+	// LTC input end to end. The generator runs as fast as its reader, so
+	// the code is anchored to the clock once and then counts samples.
+	var ltc *ltcEncoder
+	var ltcStart int64
 	for {
 		select {
 		case <-quit:
@@ -2798,8 +2818,13 @@ func demoGenLoop(path string, quit <-chan struct{}, keeper *os.File, gen uint64)
 				}
 				frames[i*dc+c] = int32(s * 2147483647)
 			}
-			frames[i*dc+ch] = 0
 		}
+		if r := tcRates[tcOutputRate()]; ltc == nil || ltc.rate != r || ltc.sampleRate != sr {
+			ltc = newLTCEncoder(r, sr)
+			ltcStart = int64(tcSecondsOfFrames(tcTimeOfDayFrames(time.Now(), r), r)*float64(sr)) - fifo.pos
+		}
+		ltc.fill(frames, dc, ch, ltcStart+fifo.pos)
+		tcFeedLTC(&fifo, frames, dc, fifo.pos, time.Now(), sr)
 		t += float64(chunkFrames) / float64(sr)
 		fifo.pos += chunkFrames
 		out := fifo.layout(frames, dc)
@@ -3124,10 +3149,29 @@ func startRecording() {
 	recordStart = time.Now()
 	timestamp := recordStart.Format("20060102_150405")
 	sampleRate := sampleRates[sampleRateIdx]
+	// Timecode (tcengine.go): the take's first sample is stamped with the
+	// incoming timecode (or the time of day). The FIFO switch drains it
+	// with no reader attached, so its answer is exactly where the take
+	// starts; recording timecode as audio switches it to every channel.
+	recChannels := channelCount
+	var stamp *recTimecode
+	tcAudioTake = false
+	if tcRecordIdx != tcRecordOff {
+		pos, ok := fifoSetLayout(tcRecordIdx == tcRecordAudio)
+		if tcRecordIdx == tcRecordAudio {
+			if ok {
+				tcAudioTake = true
+				recChannels++
+			} else {
+				logWarnf("Timecode: the audio input did not switch to the TIMECODE channel; recording timecode as metadata only")
+			}
+		}
+		stamp = tcStampTake(pos, ok, sampleRate, time.Now())
+	}
 	// Filename prefix comes from the WebUI text field or the OLED preset
 	// list (Round 3 design: prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav); an
 	// unset prefix keeps the historical "recording_..." default.
-	stem := fmt.Sprintf("%s_%s_ch%d_%dkHz", effectiveFilePrefix(), timestamp, channelCount, sampleRate/1000)
+	stem := fmt.Sprintf("%s_%s_ch%d_%dkHz", effectiveFilePrefix(), timestamp, recChannels, sampleRate/1000)
 	// Past this point the input monitor has been stood down for the take.
 	// Every failure must bring it back, or the meters stay dark until
 	// something else restarts it - and must tell the operator, since the
@@ -3135,6 +3179,7 @@ func startRecording() {
 	fail := func(format string, args ...any) {
 		logErrorf(format, args...)
 		showSysNotice("RECORD FAILED - SEE LOG")
+		tcEndAudioTakeLocked()
 		maybeResumeInputMonitorLocked()
 	}
 	path, err := uniqueRecordingFile(recordingSubdir(recordStart), stem)
@@ -3169,7 +3214,7 @@ func startRecording() {
 		// meters ran that far behind the audio (fifoProbeSize).
 		"-probesize", fifoProbeSize, "-analyzeduration", "0",
 		"-f", "s32le", "-sample_rate", fmt.Sprintf("%d", sampleRate),
-		"-ac", fmt.Sprintf("%d", channelCount),
+		"-ac", fmt.Sprintf("%d", recChannels),
 		"-i", audioFifoPath(),
 	}
 	// Only output format is WAV (PCM 24-bit) - see OutputBitsPerSample.
@@ -3190,6 +3235,11 @@ func startRecording() {
 	args = append(args, "-metadata", "date="+recordStart.Format(time.RFC3339))
 	if tag := tagPresets[tagPresetIdx]; tag != "" {
 		args = append(args, "-metadata", "comment="+tag)
+	}
+	// The timecode stamp as a BWF bext chunk: its time reference (samples
+	// since midnight) is what DAWs place a take by.
+	if stamp != nil {
+		args = append(args, stamp.bextArgs()...)
 	}
 
 	// The meter chain is pass-through (samples unchanged - see
@@ -3218,7 +3268,14 @@ func startRecording() {
 	currentState = StateRecording
 	// The take's channel names: inferno's names as they are now (see
 	// channelnames.go). A small file, written once per take.
-	snapshotRecordingChannels(recordingFile, channelCount)
+	snapshotRecordingChannels(recordingFile, recChannels, stamp)
+	if stamp != nil {
+		how := "as metadata"
+		if tcAudioTake {
+			how = "as metadata and as audio (channel " + strconv.Itoa(recChannels) + ")"
+		}
+		logInfof("Recording timecode %s @ %s fps (%s) %s", stamp.Start, stamp.Rate, stamp.Source, how)
+	}
 	meterPeakDB = meterSilence
 	meterRMSDB = meterSilence
 	meterGen++
@@ -3231,7 +3288,7 @@ func startRecording() {
 	done := make(chan struct{})
 	recordingDone = done
 
-	go meterReader(stdout, meterGen)
+	go meterReaderOverall(stdout, meterGen, tcAudioTake)
 
 	// Deliberately NOT waiting for meterReader to see stdout EOF before
 	// calling cmd.Wait() below, even though the exec docs call concurrent
@@ -3280,6 +3337,7 @@ func startRecording() {
 			}
 			ffmpegCmd = nil
 			isRecording = false
+			tcEndAudioTakeLocked()
 			meterPeakDB = meterSilence
 			meterRMSDB = meterSilence
 			meterChannelPeak = nil
@@ -3374,11 +3432,38 @@ func sanitizeMeterDB(v float64) float64 {
 	return v
 }
 
+// overallLevels is what astats reports as Overall for these channels: the
+// highest peak, and the RMS of all their samples (the mean power).
+func overallLevels(peak, rms []float64) (float64, float64) {
+	p, power := meterSilence, 0.0
+	for i, v := range peak {
+		p = max(p, v)
+		if i < len(rms) {
+			power += math.Pow(10, rms[i]/10)
+		}
+	}
+	r := meterSilence
+	if len(rms) > 0 && power > 0 {
+		r = max(meterSilence, 10*math.Log10(power/float64(len(rms))))
+	}
+	return p, r
+}
+
 // meterReader parses astats/ametadata's "key=value" lines off the recording
 // ffmpeg's stdout (see the -af comment in startRecording) into the
 // package-level meter vars. Exits on its own once ffmpeg closes stdout
 // (process exit) - no separate stop signal needed.
 func meterReader(stdout io.Reader, gen uint64) {
+	meterReaderOverall(stdout, gen, false)
+}
+
+// meterReaderOverall is meterReader; with ownOverall the overall levels
+// come from the per-channel ones instead of ffmpeg's: a take recording
+// timecode as audio meters its TIMECODE channel too (ffmpeg cannot leave
+// one out above 64 channels), and the meters must not show the code. The
+// per-channel slices end at the audio channels, so the TIMECODE channel's
+// own values are dropped.
+func meterReaderOverall(stdout io.Reader, gen uint64, ownOverall bool) {
 	scanner := bufio.NewScanner(stdout)
 	// astats lines for 128ch takes exceed the 64KB default: one long line
 	// would silently kill meters for the whole take.
@@ -3422,6 +3507,9 @@ func meterReader(stdout io.Reader, gen uint64) {
 					dest[u.channel-1] = u.v
 				}
 			}
+			if ownOverall {
+				meterPeakDB, meterRMSDB = overallLevels(meterChannelPeak, meterChannelRMS)
+			}
 		}
 		mutex.Unlock()
 		n = 0
@@ -3433,6 +3521,7 @@ func meterReader(stdout io.Reader, gen uint64) {
 			// A new window starts: publish the previous one now rather
 			// than when the batch fills (5 windows at 2 channels).
 			flush()
+		case ownOverall && strings.HasPrefix(line, "lavfi.astats.Overall."):
 		case strings.HasPrefix(line, "lavfi.astats.Overall.Peak_level="):
 			if v, err := strconv.ParseFloat(strings.TrimPrefix(line, "lavfi.astats.Overall.Peak_level="), 64); err == nil {
 				pending[n] = update{v: sanitizeMeterDB(v)}
@@ -3817,7 +3906,7 @@ func startPlayback() {
 	playbackCmd = cmd
 	playbackViaDante = viaDante
 	if viaDante {
-		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(file))
+		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(file, 0))
 	}
 	playbackFile = file
 	playbackStart = time.Now()
@@ -4170,7 +4259,7 @@ func restartPlaybackAt(pos time.Duration) {
 	playbackCmd = cmd
 	playbackViaDante = viaDante
 	if viaDante {
-		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(playbackFile))
+		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(playbackFile, pos))
 	}
 	// The old reaper may have run during the handoff wait: it clears
 	// monitoringOutput and can stand the input monitor back up (state

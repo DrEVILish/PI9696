@@ -5058,7 +5058,7 @@ func TestPumpPlaybackPassthrough(t *testing.T) {
 	// Prime-sized reads force the carry path: 7 bytes can never align to an
 	// 8-byte stereo frame.
 	src := &chunkReader{data: raw, chunk: 7}
-	pumpPlaybackToTx(cmd, src, holder, txPlayout{2, 2})
+	pumpPlaybackToTx(cmd, src, holder, txPlayout{fileChannels: 2, txChannels: 2})
 
 	got := holder.flattened()
 	if len(got) < len(want) || !equalInt32(got[:len(want)], want) {
@@ -5091,7 +5091,7 @@ func TestPumpPlaybackStopSilencesTx(t *testing.T) {
 	currentState = StateIdle
 	mutex.Unlock()
 
-	pumpPlaybackToTx(cmd, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, txPlayout{2, 2})
+	pumpPlaybackToTx(cmd, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, txPlayout{fileChannels: 2, txChannels: 2})
 
 	got := holder.flattened()
 	for _, s := range got {
@@ -5154,7 +5154,7 @@ func TestPumpPlaybackPausedWritesSilence(t *testing.T) {
 	currentState = StatePaused
 	mutex.Unlock()
 
-	pumpPlaybackToTx(cmd, src, holder, txPlayout{2, 2})
+	pumpPlaybackToTx(cmd, src, holder, txPlayout{fileChannels: 2, txChannels: 2})
 
 	for _, w := range holder.writes {
 		for _, s := range w {
@@ -5180,7 +5180,7 @@ func TestPumpPlaybackStaleGenerationExits(t *testing.T) {
 	currentState = StatePlaying
 	mutex.Unlock()
 
-	pumpPlaybackToTx(old, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, txPlayout{2, 2})
+	pumpPlaybackToTx(old, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, txPlayout{fileChannels: 2, txChannels: 2})
 
 	if len(holder.writes) != 0 {
 		t.Errorf("stale pump wrote %d chunks, want 0", len(holder.writes))
@@ -7675,7 +7675,7 @@ func TestTxPumpKeepsWritingWhileAppMutexHeld(t *testing.T) {
 	}()
 	pumpDone := make(chan struct{})
 	go func() {
-		pumpPlaybackToTx(cmd, pr, holder, txPlayout{2, 2})
+		pumpPlaybackToTx(cmd, pr, holder, txPlayout{fileChannels: 2, txChannels: 2})
 		close(pumpDone)
 	}()
 	waitWrites(t, holder, 2, 2*time.Second)
@@ -7714,7 +7714,7 @@ func TestTxPumpTakesOverOnlyWithData(t *testing.T) {
 	pr, pw := io.Pipe() // no data yet: the decoder is still starting
 	pumpDone := make(chan struct{})
 	go func() {
-		pumpPlaybackToTx(cmd, pr, holder, txPlayout{2, 2})
+		pumpPlaybackToTx(cmd, pr, holder, txPlayout{fileChannels: 2, txChannels: 2})
 		close(pumpDone)
 	}()
 	time.Sleep(100 * time.Millisecond)

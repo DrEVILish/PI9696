@@ -119,7 +119,7 @@ func TestInfernoRxLoopTimecodeLayout(t *testing.T) {
 	defer syscall.Close(rd)
 	dev := &patternDevice{channels: 3, done: make(chan struct{})}
 	quit, done := make(chan struct{}), make(chan struct{})
-	go infernoRxLoop(dev, path, quit, done, 0, 3)
+	go infernoRxLoop(dev, path, quit, done, 0, 3, 48000)
 	defer func() { close(quit); dev.Close(); <-done }()
 
 	// Audio only: channels 0 and 1, consecutive frames.
