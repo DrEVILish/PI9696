@@ -315,6 +315,7 @@ def main():
     p.add_argument("--pia-name", default=None, help="the unit's inferno name (default: read from netaudio)")
     p.add_argument("--plugin", required=True)
     p.add_argument("--work", default="/var/tmp/pi9696-tc")
+    p.add_argument("--take-secs", type=int, default=6, help="take length; the chase runs over all of it")
     a = p.parse_args()
     os.makedirs(a.work, exist_ok=True)
     asoundrc = f"{a.work}/asoundrc"
@@ -391,7 +392,7 @@ def main():
         # 2. a take with timecode as audio and metadata
         newest = pia.sh("ls -t /rec/*/*.wav 2>/dev/null | head -1").stdout.strip()
         pia.post("/api/record/start")
-        time.sleep(6)
+        time.sleep(a.take_secs)
         pia.post("/api/record/stop")
         time.sleep(3)
         take = pia.sh("ls -t /rec/*/*.wav 2>/dev/null | head -1").stdout.strip()
@@ -419,7 +420,7 @@ def main():
                  f"{os.path.basename(take)}: {nch} channels, last named {side.get('channels', [{}])[-1].get('name')}")
         dec = decode_ltc(v[:, -1])
         rs = runs(dec)
-        ck.check("recorded TIMECODE is continuous LTC", len(rs) == 1 and len(dec) > 5 * FPS,
+        ck.check("recorded TIMECODE is continuous LTC", len(rs) == 1 and len(dec) > (a.take_secs - 1) * FPS,
                  f"{len(dec)} frames in {len(rs)} run(s), {fmt(dec[0][1]) if dec else '-'} .. {fmt(dec[-1][1]) if dec else '-'}")
         if dec and ref is not None:
             e, fr = dec[0]
@@ -455,16 +456,16 @@ def main():
             time.sleep(0.25)
         started = time.time() - t
         ck.check("chase starts the take as the code enters it", 2 <= started <= 6, f"playing {started:.1f} s after the jump (code entered the take at 3 s)")
-        time.sleep(4)
+        time.sleep(a.take_secs - 2)
         caps = np.fromfile(cap, dtype="<i4")
         caps = caps[: len(caps) // 2 * 2].reshape(-1, 2)[mark:]
-        win = caps[-RATE * 3:]
+        win = caps[-RATE * (a.take_secs - 3):]
         d_out, d_src = decode_ltc(win[:, 0]), decode_ltc(win[:, 1])
         offs = [code_at(d_out, e) - code_at(d_src, e) for e, _ in d_src if code_at(d_out, e) is not None]
         off = float(np.median(offs)) if offs else float("nan")
         spread = (max(offs) - min(offs)) * 1000 / FPS if offs else float("nan")
         ck.check("chased playback runs with the code", offs and abs(off) < 1.0,
-                 f"the take's code out - source = {off * 1000 / FPS:+.1f} ms (median), spread {spread:.1f} ms over 3 s")
+                 f"the take's code out - source = {off * 1000 / FPS:+.1f} ms (median), spread {spread:.1f} ms over {a.take_secs - 3} s")
         gen.stop()
         t = time.time()
         while time.time() - t < 5 and tc().get("chase") == "chasing":
@@ -473,7 +474,7 @@ def main():
         ck.check("code stopping stops the chase, take stays armed", st.get("armed") and st.get("chase") != "chasing",
                  f"{time.time() - t:.1f} s: {st.get('chase')}")
         pia.post("/api/timecode/arm", {"arm": "0"})
-        logs = pia.sh("journalctl -u pi9696 --since '-2min' --no-pager | grep -E 'Chase:|Timecode in' | tail -12").stdout
+        logs = pia.sh("journalctl -u pi9696 --since '-3min' --no-pager | grep -E 'Chase:|Timecode in' | tail -20").stdout
         log("unit log:\n" + logs)
 
         # 5. MTC in and out
