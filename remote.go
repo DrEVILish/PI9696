@@ -4643,8 +4643,13 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 		}
 	}()
 
+	// The manifest goes in last, so its header can state what the archive
+	// really holds: a take deleted or unreadable between the caller's
+	// listing and its turn here is skipped, and the headers have long been
+	// sent by then, so the manifest is the only place to tell the user.
 	var manifest strings.Builder
-	fmt.Fprintf(&manifest, "PI9696 recording bundle\nGenerated: %s\nFiles: %d\n\n", time.Now().Format("2006-01-02 15:04:05"), len(files))
+	var skipped []string
+	added := 0
 	fmt.Fprintf(&manifest, "%-60s %12s %8s %6s %8s %10s  %s\n", "Path", "Size(bytes)", "Channels", "Rate", "Format", "Duration", "Start")
 
 	for _, f := range files {
@@ -4656,6 +4661,8 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 
 		info, err := os.Stat(f)
 		if err != nil {
+			logErrorf("download-all: skipping %s: %v", entry, err)
+			skipped = append(skipped, fmt.Sprintf("%s (%v)", entry, err))
 			continue
 		}
 
@@ -4664,6 +4671,7 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 		in, err := os.Open(f)
 		if err != nil {
 			logErrorf("download-all: skipping %s: %v", entry, err)
+			skipped = append(skipped, fmt.Sprintf("%s (%v)", entry, err))
 			continue
 		}
 		// PCM WAV is incompressible noise to Deflate: Store skips the
@@ -4680,6 +4688,7 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 		if copyErr != nil {
 			return copyErr
 		}
+		added++
 
 		row := buildRecordingRow(f)
 		fmt.Fprintf(&manifest, "%-60s %12d %8d %6d %8s %10s  %s\n",
@@ -4703,11 +4712,20 @@ func writeRecordingZip(dst io.Writer, base string, files []string) (err error) {
 		}
 	}
 
+	var head strings.Builder
+	fmt.Fprintf(&head, "PI9696 recording bundle\nGenerated: %s\nFiles: %d\n", time.Now().Format("2006-01-02 15:04:05"), added)
+	if len(skipped) > 0 {
+		fmt.Fprintf(&head, "INCOMPLETE: %d of %d recordings could not be read and are missing:\n", len(skipped), added+len(skipped))
+		for _, s := range skipped {
+			fmt.Fprintf(&head, "    %s\n", s)
+		}
+	}
+	head.WriteString("\n")
 	mw, err := zw.Create("manifest.txt")
 	if err != nil {
 		return err
 	}
-	if _, err := mw.Write([]byte(manifest.String())); err != nil {
+	if _, err := mw.Write([]byte(head.String() + manifest.String())); err != nil {
 		return err
 	}
 	return nil

@@ -2515,6 +2515,43 @@ func TestWriteRecordingZip(t *testing.T) {
 	}
 }
 
+// A take that vanishes between the listing and its turn in the archive is
+// skipped, and the manifest says so: its file count is what the ZIP holds,
+// not what was listed, and the missing take is named.
+func TestWriteRecordingZipReportsSkipped(t *testing.T) {
+	dir := t.TempDir()
+	kept := filepath.Join(dir, "recording_20240131_143022_ch2_48kHz.wav")
+	gone := filepath.Join(dir, "recording_20240131_150000_ch2_48kHz.wav")
+	if err := os.WriteFile(kept, make([]byte, 44+48000*2*3), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := writeRecordingZip(&buf, dir, []string{kept, gone}); err != nil {
+		t.Fatalf("writeRecordingZip: %v", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(buf.Bytes()), int64(buf.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ms string
+	for _, zf := range zr.File {
+		if zf.Name == filepath.Base(gone) {
+			t.Fatalf("missing take has an archive entry")
+		}
+		if zf.Name == "manifest.txt" {
+			rc, _ := zf.Open()
+			b, _ := io.ReadAll(rc)
+			rc.Close()
+			ms = string(b)
+		}
+	}
+	for _, want := range []string{"Files: 1\n", "INCOMPLETE: 1 of 2", filepath.Base(gone)} {
+		if !strings.Contains(ms, want) {
+			t.Fatalf("manifest missing %q; got:\n%s", want, ms)
+		}
+	}
+}
+
 // Download ALL must speak human when /rec is empty - a bare 404 reads as
 // "broken" (the reported bug) - and serve the ZIP when there is something
 // to bundle. Also pins the labeled dashboard button (icon-only read as
