@@ -2,7 +2,6 @@ package hardware
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 
@@ -13,7 +12,7 @@ import (
 
 // FiraCodeManager handles FiraCode font integration for PI9696
 type FiraCodeManager struct {
-	display     *TTFDisplay
+	*TTFDisplay // its drawing primitives are used directly
 	config      *FiraCodeConfig
 	currentFont string
 	currentSize float64
@@ -85,7 +84,7 @@ func NewFiraCodeManager() (*FiraCodeManager, error) {
 	}
 
 	manager := &FiraCodeManager{
-		display:     display,
+		TTFDisplay:  display,
 		config:      config,
 		currentFont: config.Regular,
 		currentSize: config.sizes["MainContent"],
@@ -226,7 +225,7 @@ func (fcm *FiraCodeManager) switchFont(fontPath string, fontSize float64) error 
 		fcm.fontFaces[key] = face
 	}
 
-	fcm.display.SetFontFace(face)
+	fcm.TTFDisplay.SetFontFace(face)
 	fcm.currentFont = fontPath
 	fcm.currentSize = fontSize
 
@@ -245,7 +244,7 @@ func (fcm *FiraCodeManager) DrawStatusBarWithInferno(formatInfo, usbInfo string,
 	usbConnected := usbInfo != "" && usbInfo != "[---]" && usbInfo != "[ ]"
 
 	// Use enhanced status bar with USB, network, and inferno icons
-	fcm.display.DrawStatusBarWithIcons(formatInfo, usbInfo, usbConnected, networkConnected, networkInfo, infernoRunning)
+	fcm.TTFDisplay.DrawStatusBarWithIcons(formatInfo, usbInfo, usbConnected, networkConnected, networkInfo, infernoRunning)
 
 	return nil
 }
@@ -256,7 +255,7 @@ func (fcm *FiraCodeManager) DrawCenteredText(text, context string, y int) error 
 		return err
 	}
 
-	fcm.display.DrawTextCentered(text, y)
+	fcm.TTFDisplay.DrawTextCentered(text, y)
 	return nil
 }
 
@@ -283,14 +282,14 @@ func (fcm *FiraCodeManager) DrawRecordingStatus(elapsed, remaining, filename str
 		return err
 	}
 	recText := fmt.Sprintf("● REC %s", elapsed)
-	fcm.display.DrawTextCentered(recText, 24)
+	fcm.TTFDisplay.DrawTextCentered(recText, 24)
 
 	// Time remaining with regular font
 	if err := fcm.SwitchToContext("details"); err != nil {
 		return err
 	}
 	timeText := fmt.Sprintf("Time Remaining: %s", remaining)
-	fcm.display.DrawTextCentered(timeText, 40)
+	fcm.TTFDisplay.DrawTextCentered(timeText, 40)
 
 	// Filename with light font
 	if filename != "" {
@@ -298,13 +297,13 @@ func (fcm *FiraCodeManager) DrawRecordingStatus(elapsed, remaining, filename str
 		// characters but len(filename) counts bytes, so byte slicing would
 		// split multi-byte UTF-8 mid-sequence and render as garbage.
 		maxWidth := 256 - 32 // Leave margins
-		if fcm.display.GetTextWidth(filename) > maxWidth {
+		if fcm.TTFDisplay.GetTextWidth(filename) > maxWidth {
 			// Estimate characters that fit
-			avgCharWidth := fcm.display.GetTextWidth("M") // Use 'M' as average width
-			maxChars := maxWidth/avgCharWidth - 3         // Reserve space for "..."
+			avgCharWidth := fcm.TTFDisplay.GetTextWidth("M") // Use 'M' as average width
+			maxChars := maxWidth/avgCharWidth - 3            // Reserve space for "..."
 			filename = truncateRunes(filename, maxChars)
 		}
-		fcm.display.DrawTextCentered(filename, 56)
+		fcm.TTFDisplay.DrawTextCentered(filename, 56)
 	}
 
 	return nil
@@ -327,32 +326,27 @@ func (fcm *FiraCodeManager) DrawPlaybackStatus(elapsed, total string, progress f
 	if total != "" {
 		title = fmt.Sprintf("%s / %s", title, total)
 	}
-	fcm.display.DrawTextCentered(title, 24)
+	fcm.TTFDisplay.DrawTextCentered(title, 24)
 
 	// Progress bar: the playhead as a relative offset through the take.
-	fcm.display.DrawProgressBar(0, 34, 256, 6, progress)
+	fcm.TTFDisplay.DrawProgressBar(0, 34, 256, 6, progress)
 
 	if err := fcm.SwitchToContext("details"); err != nil {
 		return err
 	}
 	if filename != "" {
 		maxWidth := 256 - 32
-		if fcm.display.GetTextWidth(filename) > maxWidth {
-			avgCharWidth := fcm.display.GetTextWidth("M")
+		if fcm.TTFDisplay.GetTextWidth(filename) > maxWidth {
+			avgCharWidth := fcm.TTFDisplay.GetTextWidth("M")
 			maxChars := maxWidth/avgCharWidth - 3
 			if maxChars > 0 && maxChars < len(filename) {
 				filename = filename[:maxChars] + "..."
 			}
 		}
-		fcm.display.DrawTextCentered(filename, 46)
+		fcm.TTFDisplay.DrawTextCentered(filename, 46)
 	}
 
 	return nil
-}
-
-// EncodePNG writes the current display frame as a PNG.
-func (fcm *FiraCodeManager) EncodePNG(w io.Writer) error {
-	return fcm.display.EncodePNG(w)
 }
 
 // DrawProgressBar renders a progress bar with percentage. details is the
@@ -365,24 +359,24 @@ func (fcm *FiraCodeManager) DrawProgressBar(title string, progress float64, deta
 	if err := fcm.SwitchToContext("header"); err != nil {
 		return err
 	}
-	fcm.display.DrawTextCentered(title, 24)
+	fcm.TTFDisplay.DrawTextCentered(title, 24)
 
 	// Progress bar (32 characters wide, centered)
 	barWidth := 32
 	barX := (256 - barWidth*8) / 2
 	barY := 32
-	fcm.display.DrawProgressBar(barX, barY, barWidth*8, 8, progress/100.0)
+	fcm.TTFDisplay.DrawProgressBar(barX, barY, barWidth*8, 8, progress/100.0)
 
 	// Percentage text
 	if err := fcm.SwitchToContext("details"); err != nil {
 		return err
 	}
 	percentText := fmt.Sprintf("%.0f%%", progress)
-	fcm.display.DrawTextCentered(percentText, 46)
+	fcm.TTFDisplay.DrawTextCentered(percentText, 46)
 
 	// Details
 	if details != "" {
-		fcm.display.DrawTextCentered(details, 58)
+		fcm.TTFDisplay.DrawTextCentered(details, 58)
 	}
 
 	return nil
@@ -400,7 +394,7 @@ func (fcm *FiraCodeManager) DrawConfirmationDialog(title, message1, message2 str
 		if err := fcm.SwitchToContext("alert"); err != nil {
 			return err
 		}
-		fcm.display.DrawTextCentered(title, titleY)
+		fcm.TTFDisplay.DrawTextCentered(title, titleY)
 	}
 
 	// Messages with regular font
@@ -409,11 +403,11 @@ func (fcm *FiraCodeManager) DrawConfirmationDialog(title, message1, message2 str
 	}
 
 	if message1 != "" {
-		fcm.display.DrawTextCentered(message1, message1Y)
+		fcm.TTFDisplay.DrawTextCentered(message1, message1Y)
 	}
 
 	if message2 != "" {
-		fcm.display.DrawTextCentered(message2, message2Y)
+		fcm.TTFDisplay.DrawTextCentered(message2, message2Y)
 	}
 
 	// YES/NO options
@@ -426,23 +420,23 @@ func (fcm *FiraCodeManager) DrawConfirmationDialog(title, message1, message2 str
 			return err
 		}
 		yesText = "> YES"
-		fcm.display.DrawText(96, yesNoY, yesText)
+		fcm.TTFDisplay.DrawText(96, yesNoY, yesText)
 
 		if err := fcm.SwitchToContext("menu"); err != nil {
 			return err
 		}
-		fcm.display.DrawText(160, yesNoY, noText)
+		fcm.TTFDisplay.DrawText(160, yesNoY, noText)
 	} else { // NO selected (default)
 		if err := fcm.SwitchToContext("menu"); err != nil {
 			return err
 		}
-		fcm.display.DrawText(96, yesNoY, yesText)
+		fcm.TTFDisplay.DrawText(96, yesNoY, yesText)
 
 		if err := fcm.SwitchToContext("selected"); err != nil {
 			return err
 		}
 		noText = "> NO"
-		fcm.display.DrawText(160, yesNoY, noText)
+		fcm.TTFDisplay.DrawText(160, yesNoY, noText)
 	}
 
 	return nil
@@ -459,46 +453,13 @@ func (fcm *FiraCodeManager) Close() error {
 	for _, face := range fcm.fontFaces {
 		// display.font is seeded into the cache above: display.Close()
 		// below owns it, closing it twice faults some face impls.
-		if fcm.display != nil && face == fcm.display.font {
+		if fcm.TTFDisplay != nil && face == fcm.TTFDisplay.font {
 			continue
 		}
 		face.Close()
 	}
-	if fcm.display != nil {
-		return fcm.display.Close()
+	if fcm.TTFDisplay != nil {
+		return fcm.TTFDisplay.Close()
 	}
 	return nil
-}
-
-// ClearDisplay clears the display buffer
-func (fcm *FiraCodeManager) ClearDisplay() {
-	if fcm.display != nil {
-		fcm.display.Clear()
-	}
-}
-
-// UpdateDisplay sends the current buffer to the physical display
-func (fcm *FiraCodeManager) UpdateDisplay() error {
-	if fcm.display != nil {
-		return fcm.display.Update()
-	}
-	return fmt.Errorf("display not initialized")
-}
-
-// FrameHash passes through to the panel buffer checksum (see TTFDisplay);
-// 0 when uninitialized so callers can distinguish "no display".
-func (fcm *FiraCodeManager) FrameHash() uint64 {
-	if fcm.display != nil {
-		return fcm.display.FrameHash()
-	}
-	return 0
-}
-
-// CanvasHash passes through to the canvas checksum (see TTFDisplay);
-// 0 when uninitialized.
-func (fcm *FiraCodeManager) CanvasHash() uint64 {
-	if fcm.display != nil {
-		return fcm.display.CanvasHash()
-	}
-	return 0
 }

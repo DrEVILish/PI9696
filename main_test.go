@@ -829,7 +829,7 @@ func TestDisplaySeqBumpsOnFrameChange(t *testing.T) {
 	t.Cleanup(func() { displaySeq, displayLastHash = origSeq, origHash })
 
 	mutex.Lock()
-	hwManager.ClearDisplay()
+	hwManager.Clear()
 	noteDisplayFrame()
 	afterClear := displaySeq
 	noteDisplayFrame() // identical frame: no bump

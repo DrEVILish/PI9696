@@ -2336,7 +2336,7 @@ func infernoWorker() {
 				preemptMonitorForRestart()
 				doStopInferno()
 				time.Sleep(1 * time.Second) // give the old process a moment to fully release the audio device
-				if !hwManager.IsNetworkAvailable() {
+				if !hwManager.Network.IsNetworkAvailable() {
 					// Retryable, not Stopped: networkMonitorLoop only
 					// starts the server on a down->up edge, and a probe
 					// that failed here may never have been seen as down
@@ -2431,7 +2431,7 @@ func networkMonitorLoop(stop <-chan struct{}) {
 	for {
 		// Probe outside the lock: network I/O must never stall
 		// render()/input handling behind the app mutex.
-		networkUp := hwManager.IsNetworkAvailable()
+		networkUp := hwManager.Network.IsNetworkAvailable()
 		mutex.Lock()
 
 		if networkUp && !networkWasUp {
@@ -4805,7 +4805,7 @@ func render() {
 		checkMidTakeDiskLocked()
 	}
 
-	hwManager.ClearDisplay()
+	hwManager.Clear()
 
 	// QR screens (WiFi join code, idle network/token page) need the full
 	// 64px height for 2px QR modules, so the status bar steps aside there.
@@ -4862,7 +4862,7 @@ func render() {
 		// A dead SPI bus used to show a frozen-but-"fine" UI with nothing
 		// in the logs. Report push failures, throttled: render ticks at
 		// 10Hz and a hard bus fault would otherwise flood.
-		if err := hwManager.UpdateDisplay(); err != nil {
+		if err := hwManager.Update(); err != nil {
 			if now := time.Now(); now.Sub(lastDisplayErrLog) >= time.Minute {
 				lastDisplayErrLog = now
 				logErrorf("display push failed: %v", err)
@@ -5272,7 +5272,7 @@ func accessQRURLLocked(ip string) string {
 func renderIdleInfoPage() {
 	now := time.Now()
 	if now.Sub(infoCache.at) > infoCacheTTL {
-		infoCache.details = hwManager.GetDetailedNetworkInfo()
+		infoCache.details = hwManager.Network.GetDetailedNetworkInfo()
 		infoCache.ip = anyInterfaceIP()
 		infoCache.at = now
 	}
@@ -5315,7 +5315,7 @@ func renderRecordingScreen() {
 	// cleared and replaced by a "LOW DISK" tag (see below), so operators can
 	// see the warning without losing the take.
 	if cachedLowDisk() && time.Now().UnixMilli()/500%2 == 1 {
-		hwManager.ClearDisplay()
+		hwManager.Clear()
 	}
 
 	// The third row shows the level meter rather than the filename while
@@ -6111,7 +6111,7 @@ func renderConfirmDialog() {
 
 func renderNetworkInfo() {
 	// No separate header - see renderSettingsMenu for why.
-	networkDetails := hwManager.GetDetailedNetworkInfo()
+	networkDetails := hwManager.Network.GetDetailedNetworkInfo()
 
 	y := 22
 	maxLines := 3 // Limit to fit above the footer line

@@ -2,19 +2,20 @@ package hardware
 
 import (
 	"fmt"
-	"io"
 
 	"log/slog"
 
 	"golang.org/x/image/font"
 )
 
+// HardwareManager bundles the front-panel devices. The display's drawing
+// methods (FiraCodeManager, and through it TTFDisplay) are promoted.
 type HardwareManager struct {
-	FiraCode *FiraCodeManager
-	Encoder  *Encoder
-	Buttons  *ButtonManager
-	Network  *NetworkDetector
-	Lamps    *LampManager
+	*FiraCodeManager
+	Encoder *Encoder
+	Buttons *ButtonManager
+	Network *NetworkDetector
+	Lamps   *LampManager
 }
 
 func NewHardwareManager() (*HardwareManager, error) {
@@ -34,7 +35,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 
 		// Create a minimal FiraCode manager wrapper for the basic display
 		firacode = &FiraCodeManager{
-			display:     basicDisplay,
+			TTFDisplay:  basicDisplay,
 			config:      fallbackFiraCodeConfig(),
 			currentFont: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 			currentSize: 11.0,
@@ -43,7 +44,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 		firacode.fontFaces[fontFaceKey(firacode.currentFont, firacode.currentSize)] = basicDisplay.font
 		slog.Warn("Using fallback display with system fonts")
 	}
-	hm.FiraCode = firacode
+	hm.FiraCodeManager = firacode
 
 	// Initialize network detector for eth0
 	hm.Network = NewNetworkDetector("eth0")
@@ -51,7 +52,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 	// Initialize encoder
 	encoder, err := NewEncoder()
 	if err != nil {
-		hm.FiraCode.Close()
+		hm.FiraCodeManager.Close()
 		return nil, fmt.Errorf("failed to initialize encoder: %v", err)
 	}
 	hm.Encoder = encoder
@@ -60,7 +61,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 	buttons, err := NewButtonManager()
 	if err != nil {
 		hm.Encoder.Close()
-		hm.FiraCode.Close()
+		hm.FiraCodeManager.Close()
 		return nil, fmt.Errorf("failed to initialize buttons: %v", err)
 	}
 	hm.Buttons = buttons
@@ -70,7 +71,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 	if err != nil {
 		hm.Encoder.Close()
 		hm.Buttons.Close()
-		hm.FiraCode.Close()
+		hm.FiraCodeManager.Close()
 		return nil, fmt.Errorf("failed to initialize lamps: %v", err)
 	}
 	hm.Lamps = lamps
@@ -91,53 +92,23 @@ func (hm *HardwareManager) Close() error {
 			return err
 		}
 	}
-	if hm.FiraCode != nil {
-		return hm.FiraCode.Close()
+	if hm.FiraCodeManager != nil {
+		return hm.FiraCodeManager.Close()
 	}
 	return nil
 }
-
-// Display utility methods using FiraCode manager
-
-func (hm *HardwareManager) ClearDisplay() {
-	if hm.FiraCode != nil {
-		hm.FiraCode.ClearDisplay()
-	}
-}
-
-func (hm *HardwareManager) UpdateDisplay() error {
-	if hm.FiraCode != nil {
-		return hm.FiraCode.UpdateDisplay()
-	}
-	return nil
-}
-
-// Context-aware text drawing methods
 
 // DrawStatusBarWithInferno draws the status bar including Inferno server status
 func (hm *HardwareManager) DrawStatusBarWithInferno(formatInfo, usbInfo string, infernoRunning bool) error {
-	// Get network status
 	networkConnected, networkInfo := hm.Network.GetNetworkStatus()
-	return hm.FiraCode.DrawStatusBarWithInferno(formatInfo, usbInfo, networkConnected, networkInfo, infernoRunning)
-}
-
-func (hm *HardwareManager) DrawCenteredText(text, context string, y int) error {
-	return hm.FiraCode.DrawCenteredText(text, context, y)
-}
-
-func (hm *HardwareManager) DrawRecordingStatus(elapsed, remaining, filename string) error {
-	return hm.FiraCode.DrawRecordingStatus(elapsed, remaining, filename)
-}
-
-func (hm *HardwareManager) EncodePNG(w io.Writer) error {
-	return hm.FiraCode.EncodePNG(w)
+	return hm.FiraCodeManager.DrawStatusBarWithInferno(formatInfo, usbInfo, networkConnected, networkInfo, infernoRunning)
 }
 
 // FrameHash passes through to the panel buffer checksum for change-driven
 // mirror refreshes; 0 when uninitialized.
 func (hm *HardwareManager) FrameHash() uint64 {
-	if hm != nil && hm.FiraCode != nil {
-		return hm.FiraCode.FrameHash()
+	if hm != nil && hm.FiraCodeManager != nil && hm.TTFDisplay != nil {
+		return hm.TTFDisplay.FrameHash()
 	}
 	return 0
 }
@@ -145,54 +116,11 @@ func (hm *HardwareManager) FrameHash() uint64 {
 // CanvasHash passes through to the supersampled-canvas checksum (see
 // TTFDisplay.CanvasHash); 0 when uninitialized.
 func (hm *HardwareManager) CanvasHash() uint64 {
-	if hm != nil && hm.FiraCode != nil {
-		return hm.FiraCode.CanvasHash()
+	if hm != nil && hm.FiraCodeManager != nil && hm.TTFDisplay != nil {
+		return hm.TTFDisplay.CanvasHash()
 	}
 	return 0
 }
-
-func (hm *HardwareManager) DrawPlaybackStatus(elapsed, total string, progress float64, filename string, paused bool) error {
-	return hm.FiraCode.DrawPlaybackStatus(elapsed, total, progress, filename, paused)
-}
-
-func (hm *HardwareManager) DrawProgressBar(title string, progress float64, details string) error {
-	return hm.FiraCode.DrawProgressBar(title, progress, details)
-}
-
-func (hm *HardwareManager) DrawConfirmationDialog(title, message1, message2 string, selectedOption int) error {
-	return hm.FiraCode.DrawConfirmationDialog(title, message1, message2, selectedOption)
-}
-
-// Legacy compatibility methods for existing code
-
-func (hm *HardwareManager) DrawText(x, y int, text string) {
-	if hm.FiraCode != nil && hm.FiraCode.display != nil {
-		hm.FiraCode.display.DrawText(x, y, text)
-	}
-}
-
-// SetBrightness forwards a 0-100% panel brightness to the physical display;
-// also used by auto-dim (dim level, then 0 for off) and by wake-on-input to
-// restore the user's level. No-op in sim mode (writeCommand is).
-func (hm *HardwareManager) SetBrightness(pct int) {
-	if hm.FiraCode != nil && hm.FiraCode.display != nil {
-		hm.FiraCode.display.SetBrightness(pct)
-	}
-}
-
-func (hm *HardwareManager) DrawBox(x, y, width, height int, brightness byte) {
-	if hm.FiraCode != nil && hm.FiraCode.display != nil {
-		hm.FiraCode.display.DrawBox(x, y, width, height, brightness)
-	}
-}
-
-func (hm *HardwareManager) FillBox(x, y, width, height int, brightness byte) {
-	if hm.FiraCode != nil && hm.FiraCode.display != nil {
-		hm.FiraCode.display.FillBox(x, y, width, height, brightness)
-	}
-}
-
-// Encoder utility methods
 
 func (hm *HardwareManager) SetEncoderCallbacks(onRotate func(int), onClick func(), onHold func()) {
 	if hm.Encoder != nil {
@@ -202,49 +130,8 @@ func (hm *HardwareManager) SetEncoderCallbacks(onRotate func(int), onClick func(
 	}
 }
 
-// Button utility methods
-
 func (hm *HardwareManager) SetButtonCallback(buttonType ButtonType, callback func(ButtonType)) {
 	if hm.Buttons != nil {
 		hm.Buttons.SetCallback(buttonType, callback)
 	}
-}
-
-// Font management methods
-
-func (hm *HardwareManager) SwitchToContext(context string) error {
-	if hm.FiraCode != nil {
-		return hm.FiraCode.SwitchToContext(context)
-	}
-	return nil
-}
-
-// Network utility methods
-
-func (hm *HardwareManager) GetDetailedNetworkInfo() []string {
-	if hm.Network != nil {
-		return hm.Network.GetDetailedNetworkInfo()
-	}
-	return []string{"Network Error", "Not initialized"}
-}
-
-func (hm *HardwareManager) IsNetworkAvailable() bool {
-	if hm.Network != nil {
-		return hm.Network.IsNetworkAvailable()
-	}
-	return false
-}
-
-func (hm *HardwareManager) GetFontHeight() int {
-	if hm.FiraCode != nil && hm.FiraCode.display != nil {
-		return hm.FiraCode.display.GetFontHeight()
-	}
-	return 12 // Default fallback
-}
-
-func (hm *HardwareManager) GetTextWidth(text string) int {
-	if hm.FiraCode != nil && hm.FiraCode.display != nil {
-		return hm.FiraCode.display.GetTextWidth(text)
-	}
-	return len(text) * 8 // Fallback estimation
 }
