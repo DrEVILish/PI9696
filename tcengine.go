@@ -59,6 +59,10 @@ var (
 	tcOutputOn  bool
 	tcRateIdx   = tcRateDefault
 	tcMTCPeer   string // RTP-MIDI peer to invite ("" none): host or host:port
+	// tcRestartOn: an armed take restarts from its top whenever the code
+	// (re)starts - begins rolling or jumps back - instead of following the
+	// take's own timecode (tcchase.go).
+	tcRestartOn bool
 )
 
 // tcLive mirrors the settings for the audio threads.
@@ -100,6 +104,7 @@ func applyTimecodeConfig(c *PersistedConfig) {
 	if c.TCMTCPeer == "" || validMTCPeer(c.TCMTCPeer) {
 		tcMTCPeer = c.TCMTCPeer
 	}
+	tcRestartOn = c.TCRestart
 	tcSettingsChangedLocked()
 }
 
@@ -822,6 +827,7 @@ func renderTimecodeMenu() {
 		{Label: "Rate →", Value: tcRates[tcRateIdx].Name},
 		{Label: "Chase", Value: chase},
 		{Label: "In", Value: in},
+		{Label: "On Restart →", Value: map[bool]string{true: "restart", false: "follow"}[tcRestartOn]},
 		{Label: "← Back", Value: ""},
 	})
 }
@@ -842,6 +848,8 @@ func adjustTimecodeSetting(row, direction int) {
 		tcOutputOn = !tcOutputOn
 	case 3:
 		tcRateIdx = step(tcRateIdx, len(tcRates))
+	case 6:
+		tcRestartOn = !tcRestartOn
 	default:
 		return
 	}
@@ -858,7 +866,7 @@ func handleTimecodeClick() {
 		return
 	}
 	switch selectedMenu {
-	case 0, 1, 2, 3:
+	case 0, 1, 2, 3, 6:
 		editingParameter = true
 	case 4:
 		if tcChase.armed {
@@ -867,7 +875,7 @@ func handleTimecodeClick() {
 			showSysNotice("CHASE: " + strings.ToUpper(tcShortReason(err)))
 			logWarnf("Chase not armed: %v", err)
 		}
-	case 6:
+	case 7:
 		currentState = StateSettings
 		selectedMenu = 11
 		menuScrollOffset = 0

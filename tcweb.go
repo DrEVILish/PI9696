@@ -74,6 +74,24 @@ func currentTCPeerView() tcPeerView {
 	return tcPeerView{Peer: peer, Peers: peers}
 }
 
+func tcRestartSwitch() switchView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return switchView{Id: "tcrestart", Post: "/api/settings/timecode-restart", InputId: "tcRestartToggle", Label: "Restart Armed Take on Timecode Restart",
+		Readout: readout("RESTART", "FOLLOW"), Hint: "On: the take restarts from its top whenever the code starts rolling or jumps back. Off: it follows the take's own timecode",
+		Enabled: tcRestartOn}
+}
+
+func handleAPISettingsTCRestart(w http.ResponseWriter, r *http.Request) {
+	enabled := r.FormValue("enabled") != ""
+	mutex.Lock()
+	tcRestartOn = enabled
+	settingChanged()
+	mutex.Unlock()
+	logInfof("Restart armed take on timecode restart %s via remote", map[bool]string{true: "on", false: "off"}[enabled])
+	renderFragment(w, switchFragmentTmpl, tcRestartSwitch())
+}
+
 // rxLatencySelect is the Audio pane's Receive Latency: the presets, plus the
 // current value when a controller set one that is not a preset.
 func rxLatencySelect() selectView {
@@ -105,6 +123,7 @@ func tcSettingsFragment() template.HTML {
 		frag(selectFragmentTmpl, tcRecordSelect()) +
 		frag(switchFragmentTmpl, tcOutputSwitch()) +
 		frag(selectFragmentTmpl, tcRateSelect()) +
+		frag(switchFragmentTmpl, tcRestartSwitch()) +
 		frag(tcPeerFragmentTmpl, currentTCPeerView())
 }
 
@@ -228,6 +247,7 @@ func registerTimecodeRoutes(mux *http.ServeMux, auth func(http.HandlerFunc) http
 	mux.HandleFunc("POST /api/settings/timecode-rate", auth(handleAPISettingsTCRate))
 	mux.HandleFunc("POST /api/settings/timecode-output", auth(handleAPISettingsTCOutput))
 	mux.HandleFunc("POST /api/settings/timecode-peer", auth(handleAPISettingsTCPeer))
+	mux.HandleFunc("POST /api/settings/timecode-restart", auth(handleAPISettingsTCRestart))
 	mux.HandleFunc("POST /api/settings/rx-latency", auth(handleAPISettingsRxLatency))
 	mux.HandleFunc("POST /api/timecode/arm", auth(handleAPITimecodeArm))
 	mux.HandleFunc("GET /api/timecode", auth(handleAPITimecode))

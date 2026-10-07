@@ -252,3 +252,55 @@ func TestChaseAdjustOnTheMediaClock(t *testing.T) {
 		t.Fatalf("60 samples ahead: adjust %d, want -60", adj)
 	}
 }
+
+// With the option on, the code starting to roll or jumping back re-anchors
+// the take's start to it; off, the take's own timecode applies.
+func TestChaseRestartAnchors(t *testing.T) {
+	initTestHardware(t)
+	setTimecodeSettings(t, tcSourceLTC, tcRecordMeta, false)
+	const sr = 48000
+	r := tcRates[tcRateDefault]
+	mutex.Lock()
+	oState, oRec, oRestart := currentState, isRecording, tcRestartOn
+	// Busy: the chase decides but never starts playback here.
+	currentState, isRecording, tcRestartOn = StateRecording, true, true
+	tcChase.armed, tcChase.sr, tcChase.dur = true, sr, time.Hour
+	tcChase.ref, tcChase.takeRef, tcChase.anchored, tcChase.lastLocked = 7, 7, false, false
+	mutex.Unlock()
+	t.Cleanup(func() {
+		mutex.Lock()
+		currentState, isRecording, tcRestartOn = oState, oRec, oRestart
+		tcChase.armed, tcChase.anchored = false, false
+		mutex.Unlock()
+		tcSetChaseLive(nil)
+	})
+	at := func(tc Timecode) tcReading {
+		return tcReading{source: "LTC", frames: float64(tc.frames(r)), rate: tcRateDefault, locked: true}
+	}
+	samples := func(tc Timecode) int64 { return samplesFromFrames(tc.frames(r), r, sr) }
+	step := func(rd tcReading) int64 {
+		mutex.Lock()
+		defer mutex.Unlock()
+		tcChaseStepLocked(rd, time.Now())
+		return tcChase.ref
+	}
+	if ref := step(at(Timecode{1, 0, 0, 0})); ref != samples(Timecode{1, 0, 0, 0}) {
+		t.Fatalf("rolling: take start anchored at %d, want 01:00:00:00", ref)
+	}
+	if ref := step(at(Timecode{1, 0, 5, 0})); ref != samples(Timecode{1, 0, 0, 0}) {
+		t.Fatal("moving forward re-anchored")
+	}
+	if ref := step(at(Timecode{0, 59, 0, 0})); ref != samples(Timecode{0, 59, 0, 0}) {
+		t.Fatal("a jump back did not re-anchor")
+	}
+	step(tcReading{source: "LTC"}) // stopped
+	if ref := step(at(Timecode{2, 0, 0, 0})); ref != samples(Timecode{2, 0, 0, 0}) {
+		t.Fatal("rolling again did not re-anchor")
+	}
+	mutex.Lock()
+	tcRestartOn = false
+	mutex.Unlock()
+	if ref := step(at(Timecode{2, 0, 0, 1})); ref != 7 {
+		t.Fatalf("option off: take start %d, want its own timecode (7)", ref)
+	}
+}

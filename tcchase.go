@@ -57,6 +57,13 @@ var tcChase struct {
 	state string // for the UIs
 	gen   int    // bumped per arm: a loop of an older arm exits
 
+	// Restart mode (tcRestartOn): the take's start is anchored to the code
+	// where it last (re)started instead of to the take's own timecode.
+	takeRef    int64 // the take's own start (samples since midnight at sr)
+	anchored   bool  // ref holds a restart anchor
+	lastLocked bool
+	lastFrames float64
+
 	// drift statistics since the last summary
 	n           int
 	sum, maxAbs float64 // seconds
@@ -96,6 +103,7 @@ func tcArmLocked() error {
 	ref, rate, _ := takeTimecode(file, sr)
 	tcDisarmLocked("")
 	tcChase.armed, tcChase.file, tcChase.ref, tcChase.rate, tcChase.sr = true, file, ref, rate, sr
+	tcChase.takeRef, tcChase.anchored, tcChase.lastLocked = ref, false, false
 	tcChase.dur = playbackFileDuration(file)
 	tcChase.cmd = nil
 	tcChase.gen++
@@ -181,6 +189,10 @@ func tcChaseStepLocked(r tcReading, now time.Time) {
 		c.cmd = nil
 		tcSetChaseLive(nil)
 	}
+	// A restart of the code: it starts rolling, or jumps back by more than
+	// a frame. With the option on, the take restarts from its top there.
+	restarted := r.locked && (!c.lastLocked || r.frames < c.lastFrames-1)
+	c.lastLocked, c.lastFrames = r.locked, r.frames
 	if !r.locked {
 		if playing {
 			logInfof("Chase: %s stopped - stopping playback", r.source)
@@ -188,6 +200,22 @@ func tcChaseStepLocked(r tcReading, now time.Time) {
 		}
 		c.state = "armed - waiting for " + tcSourceNames[tcSourceIdx]
 		return
+	}
+	if tcRestartOn && restarted {
+		rate := tcRates[r.rate]
+		c.ref = int64(math.Round(tcSecondsOfFrames(r.frames, rate) * float64(c.sr)))
+		c.anchored = true
+		tcSetChaseLive(c.cmd)
+		logInfof("Chase: %s restarted at %s - restarting %s from the top", r.source, timecodeAt(int64(r.frames), rate).format(rate), filepath.Base(c.file))
+		if playing {
+			tcChaseStopPlaybackLocked()
+			c.state = "restarting"
+			return
+		}
+	} else if !tcRestartOn && c.anchored {
+		// The option was turned off: back to the take's own timecode.
+		c.ref, c.anchored = c.takeRef, false
+		tcSetChaseLive(c.cmd)
 	}
 	target := tcChaseTarget(r)
 	rate := tcRates[r.rate]

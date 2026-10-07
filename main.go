@@ -249,6 +249,7 @@ func currentConfig() PersistedConfig {
 		TCOutput:          tcOutputOn,
 		TCRate:            tcRates[tcRateIdx].Name,
 		TCMTCPeer:         tcMTCPeer,
+		TCRestart:         tcRestartOn,
 		RxLatencyNs:       rxLatencyNs,
 		WifiEnabled:       wifiEnabled,
 		WifiSSID:          wifiSSID,
@@ -1294,6 +1295,9 @@ type PersistedConfig struct {
 	TCOutput  bool   `json:"tcOutput,omitempty"`
 	TCRate    string `json:"tcRate,omitempty"`
 	TCMTCPeer string `json:"tcMTCPeer,omitempty"`
+	// TCRestart restarts an armed take when the code restarts (tcchase.go).
+	TCRestart bool `json:"tcRestart,omitempty"`
+
 	// RxLatencyNs is the inferno receive latency (rxlatency.go); 0 (absent)
 	// keeps the default.
 	RxLatencyNs int `json:"rxLatencyNs,omitempty"`
@@ -1966,7 +1970,7 @@ func navigateMenu(direction int) {
 	case StateSettings:
 		maxItems = 13 // Audio, Metering, Display, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, Monitoring, WiFi, Timecode, Exit
 	case StateTimecode:
-		maxItems = 7 // Source, Record, Output, Rate, Chase, In, Back
+		maxItems = 8 // Source, Record, Output, Rate, Chase, In, On Restart, Back
 	case StateAudio:
 		maxItems = 7 // Sample Rate, Channel Count, Tag, Prefix, TX status, RX Latency, Back
 	case StateMetering:
