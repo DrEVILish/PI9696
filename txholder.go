@@ -252,7 +252,12 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 	// TIMECODE channel stops reaching the LTC reader mid-chase.
 	fifo := fifoFeed{fd: fd, ctl: rxFifoCtl, dropWhenFull: true}
 	var droppedAt, backlogAt time.Time
-	var maxBacklog int64
+	var maxBacklog, lastBacklog int64
+	// Timing of the last iteration's steps, logged when the loop falls
+	// behind: a slow step here (the read, the reader, the FIFO) is the
+	// loop's own stall; none with a jump in the backlog is the media clock
+	// jumping under it.
+	var tTop, tRead, tFed, tWritten time.Time
 	defer func() { logDebugf("in-process inferno: capture loop's largest backlog %d frames", maxBacklog) }()
 	for {
 		select {
@@ -260,6 +265,8 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 			return
 		default:
 		}
+		prevTop, prevRead, prevFed, prevWritten := tTop, tRead, tFed, tWritten
+		tTop = time.Now()
 		fifo.serve()
 		// Read recovers capture overruns in place, so each one is a gap
 		// in the take that nothing reported. Surface them, at most once
@@ -269,6 +276,7 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 			xrunsReported, xrunsAt = cur, time.Now()
 		}
 		n, err := dev.Read(frames)
+		tRead = time.Now()
 		if err != nil {
 			// Device closed (restart) or unrecoverable: exit. A restart
 			// reopens; a real fault marks the server failed so the
@@ -290,6 +298,7 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 		tcFeedLTC(dev, frames[:n*channels], channels, fifo.pos, time.Now(), rate)
 		fifo.pos += int64(n)
 		tcNoteCapture(dev, fifo.pos, rate)
+		tFed = time.Now()
 		// The plugin only reports an overrun once the loop is a whole ring
 		// behind; past half of one, frames it has not read yet start being
 		// overwritten (a take then loses a block and repeats the next).
@@ -300,9 +309,13 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 					maxBacklog = backlog
 				}
 				if backlog > int64(txRingFrames(rate)/2) && time.Since(backlogAt) >= infernoLogSummaryEvery {
-					logWarnf("in-process inferno: capture loop %d frames (%.0f ms) behind the network", backlog, float64(backlog)*1000/float64(rate))
+					ms := func(a, b time.Time) float64 { return float64(b.Sub(a).Microseconds()) / 1000 }
+					logWarnf("in-process inferno: capture loop %d frames (%.0f ms) behind the network (was %d); last iterations: read %.1f ms, LTC %.1f ms, FIFO %.1f ms, between %.1f ms; this read %.1f ms",
+						backlog, float64(backlog)*1000/float64(rate), lastBacklog,
+						ms(prevTop, prevRead), ms(prevRead, prevFed), ms(prevFed, prevWritten), ms(prevWritten, tTop), ms(tTop, tRead))
 					backlogAt = time.Now()
 				}
+				lastBacklog = backlog
 			}
 		}
 		out := fifo.layout(frames[:n*channels], channels)
@@ -313,6 +326,7 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 			}
 			return
 		}
+		tWritten = time.Now()
 		if fifo.dropped > 0 && time.Since(droppedAt) >= infernoLogSummaryEvery {
 			logDebugf("in-process inferno: FIFO full (no reader?), %d bytes not queued", fifo.dropped)
 			fifo.dropped, droppedAt = 0, time.Now()
@@ -424,6 +438,13 @@ var errFifoQuit = errors.New("quit")
 // old layout) is dropped.
 func (f *fifoFeed) write(out []byte, quit <-chan struct{}, wait time.Duration) error {
 	f.drop = false
+	// Dropping: a chunk that does not fit whole is dropped whole, so the
+	// writer never waits on a part-written chunk (which stalled the loop).
+	if f.dropWhenFull && !f.fits(len(out)) {
+		f.serve()
+		f.dropped += int64(len(out))
+		return nil
+	}
 	for off := 0; off < len(out); {
 		select {
 		case <-quit:
@@ -448,6 +469,18 @@ func (f *fifoFeed) write(out []byte, quit <-chan struct{}, wait time.Duration) e
 		off += w
 	}
 	return nil
+}
+
+// fits reports whether n bytes fit in the FIFO now (its size minus what it
+// holds). Unknown sizes count as fitting.
+func (f *fifoFeed) fits(n int) bool {
+	size, _, e1 := syscall.Syscall(syscall.SYS_FCNTL, uintptr(f.fd), linuxFGetPipeSz, 0)
+	var held int32
+	_, _, e2 := syscall.Syscall(syscall.SYS_IOCTL, uintptr(f.fd), syscall.TIOCINQ, uintptr(unsafe.Pointer(&held)))
+	if e1 != 0 || e2 != 0 {
+		return true
+	}
+	return int(size)-int(held) >= n
 }
 
 // dropLastChannel removes the last channel of interleaved frames in place

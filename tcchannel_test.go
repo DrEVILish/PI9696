@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 )
 
 func TestDropLastChannel(t *testing.T) {
@@ -150,5 +151,37 @@ func TestInfernoRxLoopTimecodeLayout(t *testing.T) {
 	}
 	if f := readFrames(t, rd, 1, 2)[0]; f[0] != int32(pos)<<8 || f[1] != int32(pos)<<8|1 {
 		t.Fatalf("first frame back in the audio layout = %x, want position %d", f, pos)
+	}
+}
+
+// A dropping writer never part-writes a chunk: one that does not fit the
+// FIFO whole is dropped whole, so the capture loop never waits on it.
+func TestFifoFeedDropsWholeChunks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "fifo")
+	if err := syscall.Mkfifo(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(fd)
+	f := fifoFeed{fd: fd, ctl: make(chan fifoLayoutReq), dropWhenFull: true}
+	size, _, _ := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), linuxFGetPipeSz, 0)
+	// Leave 100 bytes of room.
+	if err := f.write(make([]byte, int(size)-100), nil, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := f.write(make([]byte, 4096), nil, time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 100*time.Millisecond || f.dropped != 4096 {
+		t.Fatalf("a chunk that does not fit: dropped %d bytes after %v", f.dropped, time.Since(start))
+	}
+	var held int32
+	syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), syscall.TIOCINQ, uintptr(unsafe.Pointer(&held)))
+	if int(held) != int(size)-100 {
+		t.Fatalf("FIFO holds %d bytes, want %d: part of the dropped chunk was written", held, int(size)-100)
 	}
 }
