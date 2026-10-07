@@ -36,7 +36,7 @@ func NewHardwareManager() (*HardwareManager, error) {
 		// Create a minimal FiraCode manager wrapper for the basic display
 		firacode = &FiraCodeManager{
 			TTFDisplay:  basicDisplay,
-			config:      fallbackFiraCodeConfig(),
+			faces:       fallbackFaces(),
 			currentFont: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 			currentSize: 11.0,
 			fontFaces:   make(map[string]font.Face),

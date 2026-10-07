@@ -12,85 +12,73 @@ import (
 
 // FiraCodeManager handles FiraCode font integration for PI9696
 type FiraCodeManager struct {
-	*TTFDisplay // its drawing primitives are used directly
-	config      *FiraCodeConfig
+	*TTFDisplay                   // its drawing primitives are used directly
+	faces       map[string]string // weight ("Regular", "Bold", ...) -> font file
 	currentFont string
 	currentSize float64
 	fontFaces   map[string]font.Face // cache keyed by "path@size", avoids re-parsing TTFs on every context switch
 }
 
-// FiraCodeConfig holds all FiraCode font variants and settings
-type FiraCodeConfig struct {
-	BasePath string
-	Regular  string
-	Bold     string
-	Light    string
-	Medium   string
-	SemiBold string
-	Retina   string
-	sizes    map[string]float64
+// contextFont is the weight and point size a UI context draws with.
+type contextFont struct {
+	weight string
+	pt     float64
 }
 
-// NewFiraCodeManager creates a new FiraCode font manager
-// defaultFontSizes are the per-context point sizes. Shared with the system-
-// font fallback in NewHardwareManager: a config without them makes every
-// SwitchToContext load a 0pt face, after which nothing renders at all.
-func defaultFontSizes() map[string]float64 {
-	return map[string]float64{
-		"StatusBar":   9.0,  // Top status bar - compact but readable
-		"MainContent": 11.0, // Primary content - optimal balance
-		"MenuItems":   10.0, // Menu navigation - clean spacing
-		"Headers":     13.0, // Section headers - prominent
-		"Recording":   14.0, // Recording indicator - attention grabbing
-		"Small":       8.0,  // Fine details - minimum readable
-		"Large":       16.0, // Alerts/emphasis - maximum for display
+// contextFonts maps the OLED's font contexts to their faces. Any other
+// context (e.g. "idle") uses defaultContextFont. Weights missing from the
+// install fall back to Regular at the same size (see SwitchToContext).
+var contextFonts = map[string]contextFont{
+	"statusbar": {"Regular", 9},
+	"menu":      {"Regular", 10},
+	"selected":  {"SemiBold", 10},
+	"header":    {"Medium", 13},
+	"details":   {"Light", 8},
+	"recording": {"Bold", 14},
+	"alert":     {"Bold", 14},
+}
+
+var defaultContextFont = contextFont{"Regular", 11}
+
+func fontForContext(context string) contextFont {
+	if f, ok := contextFonts[context]; ok {
+		return f
 	}
+	return defaultContextFont
 }
 
-// fallbackFiraCodeConfig is the system-font (DejaVu) config used when the
-// FiraCode files cannot be loaded.
-func fallbackFiraCodeConfig() *FiraCodeConfig {
-	return &FiraCodeConfig{
-		BasePath: "./fonts",
-		Regular:  "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-		Bold:     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-		sizes:    defaultFontSizes(),
+// fallbackFaces is the system-font (DejaVu) set used when the FiraCode
+// files cannot be loaded.
+func fallbackFaces() map[string]string {
+	return map[string]string{
+		"Regular": "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+		"Bold":    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
 	}
 }
 
 func NewFiraCodeManager() (*FiraCodeManager, error) {
-	config := &FiraCodeConfig{
-		BasePath: "./fonts",
-		sizes:    defaultFontSizes(),
+	faces := map[string]string{}
+	for _, w := range []string{"Regular", "Bold", "Light", "Medium", "SemiBold"} {
+		faces[w] = filepath.Join("./fonts", "FiraCode-"+w+".ttf")
 	}
-
-	// Set font paths
-	config.Regular = filepath.Join(config.BasePath, "FiraCode-Regular.ttf")
-	config.Bold = filepath.Join(config.BasePath, "FiraCode-Bold.ttf")
-	config.Light = filepath.Join(config.BasePath, "FiraCode-Light.ttf")
-	config.Medium = filepath.Join(config.BasePath, "FiraCode-Medium.ttf")
-	config.SemiBold = filepath.Join(config.BasePath, "FiraCode-SemiBold.ttf")
-	config.Retina = filepath.Join(config.BasePath, "FiraCode-Retina.ttf")
-
-	// Validate installation
-	if err := config.ValidateInstallation(); err != nil {
+	if err := validateFaces(faces); err != nil {
 		return nil, fmt.Errorf("FiraCode validation failed: %v", err)
 	}
 
 	// Initialize with regular font at main content size
-	display, err := NewTTFDisplay(config.Regular, config.sizes["MainContent"])
+	display, err := NewTTFDisplay(faces["Regular"], defaultContextFont.pt)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize FiraCode display: %v", err)
 	}
 
 	manager := &FiraCodeManager{
 		TTFDisplay:  display,
-		config:      config,
-		currentFont: config.Regular,
-		currentSize: config.sizes["MainContent"],
+		faces:       faces,
+		currentFont: faces["Regular"],
+		currentSize: defaultContextFont.pt,
 		fontFaces:   make(map[string]font.Face),
 	}
-	manager.fontFaces[fontFaceKey(config.Regular, config.sizes["MainContent"])] = display.font
+	manager.fontFaces[fontFaceKey(faces["Regular"], defaultContextFont.pt)] = display.font
 
 	slog.Info("FiraCode manager initialized successfully")
 	return manager, nil
@@ -101,46 +89,26 @@ func fontFaceKey(fontPath string, fontSize float64) string {
 	return fmt.Sprintf("%s@%.1f", fontPath, fontSize)
 }
 
-// ValidateInstallation checks if required FiraCode fonts are available
-func (fc *FiraCodeConfig) ValidateInstallation() error {
-	requiredFonts := map[string]string{
-		"Regular": fc.Regular,
-		"Bold":    fc.Bold,
-	}
-
-	optionalFonts := map[string]string{
-		"Light":    fc.Light,
-		"Medium":   fc.Medium,
-		"SemiBold": fc.SemiBold,
-		"Retina":   fc.Retina,
-	}
-
-	var missingRequired []string
-	var missingOptional []string
-
-	// Check required fonts
-	for name, path := range requiredFonts {
+// validateFaces requires the Regular and Bold files and warns about any
+// other missing weight.
+func validateFaces(faces map[string]string) error {
+	var missingRequired, missingOptional []string
+	for w, path := range faces {
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			missingRequired = append(missingRequired, fmt.Sprintf("%s (%s)", name, path))
+			if w == "Regular" || w == "Bold" {
+				missingRequired = append(missingRequired, fmt.Sprintf("%s (%s)", w, path))
+			} else {
+				missingOptional = append(missingOptional, w)
+			}
 		}
 	}
-
-	// Check optional fonts
-	for name, path := range optionalFonts {
-		if _, err := os.Stat(path); os.IsNotExist(err) {
-			missingOptional = append(missingOptional, name)
-		}
-	}
-
 	if len(missingRequired) > 0 {
 		return fmt.Errorf("missing required FiraCode fonts: %v", missingRequired)
 	}
-
 	if len(missingOptional) > 0 {
 		slog.Warn(fmt.Sprintf("Optional FiraCode fonts not found: %v", missingOptional))
 	}
-
-	slog.Info(fmt.Sprintf("FiraCode fonts validated: Regular=%s, Bold=%s", fc.Regular, fc.Bold))
+	slog.Info(fmt.Sprintf("FiraCode fonts validated: Regular=%s, Bold=%s", faces["Regular"], faces["Bold"]))
 	return nil
 }
 
@@ -149,62 +117,20 @@ func (fc *FiraCodeConfig) ValidateInstallation() error {
 // at the requested size: without this a failed switch leaves the previous
 // context's face stuck, since most draw callers ignore the error return.
 func (fcm *FiraCodeManager) SwitchToContext(context string) error {
-	fontPath := fcm.GetFontForContext(context)
-	fontSize := fcm.GetSizeForContext(context)
+	f := fontForContext(context)
+	fontPath, fontSize := fcm.faces[f.weight], f.pt
 
 	if fontPath == fcm.currentFont && fontSize == fcm.currentSize {
 		return nil // Already using correct font/size
 	}
 
 	if err := fcm.switchFont(fontPath, fontSize); err != nil {
-		if fontPath == fcm.config.Regular {
+		if fontPath == fcm.faces["Regular"] {
 			return err
 		}
-		return fcm.switchFont(fcm.config.Regular, fontSize)
+		return fcm.switchFont(fcm.faces["Regular"], fontSize)
 	}
 	return nil
-}
-
-// GetFontForContext returns the best font variant for different UI contexts
-func (fcm *FiraCodeManager) GetFontForContext(context string) string {
-	switch context {
-	case "statusbar", "time", "counters", "storage":
-		return fcm.config.Regular
-	case "recording", "alert", "error", "warning":
-		return fcm.config.Bold
-	case "menu", "navigation", "settings":
-		return fcm.config.Regular
-	case "details", "filename", "path", "metadata":
-		return fcm.config.Light
-	case "emphasis", "selected", "active":
-		return fcm.config.SemiBold
-	case "header", "title", "section":
-		return fcm.config.Medium
-	case "standby", "idle":
-		return fcm.config.Regular
-	default:
-		return fcm.config.Regular
-	}
-}
-
-// GetSizeForContext returns optimal font size for different UI contexts
-func (fcm *FiraCodeManager) GetSizeForContext(context string) float64 {
-	switch context {
-	case "statusbar":
-		return fcm.config.sizes["StatusBar"]
-	case "recording", "alert":
-		return fcm.config.sizes["Recording"]
-	case "menu", "navigation", "settings", "selected", "active":
-		return fcm.config.sizes["MenuItems"]
-	case "header", "title", "section":
-		return fcm.config.sizes["Headers"]
-	case "details", "filename", "metadata":
-		return fcm.config.sizes["Small"]
-	case "emphasis", "large":
-		return fcm.config.sizes["Large"]
-	default:
-		return fcm.config.sizes["MainContent"]
-	}
 }
 
 // switchFont changes the active font face on the existing display. Faces are
