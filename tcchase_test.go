@@ -224,11 +224,15 @@ func TestChaseAdjustOnTheMediaClock(t *testing.T) {
 	// The next write starts at playback appl 100500. Playback hw is 95000
 	// (5500 queued), so it goes out at media sample 105500, where capture
 	// hw is 104500: capture appl 104500, stream position 104800 (+300).
+	// The LTC captured there was sent inferno's receive latency (10 ms,
+	// 480 samples) earlier, so the code on the wire then is the code
+	// captured at 105280.
+	const onWire = 104800 + 480
 	tcMu.Lock()
 	x, ok := tcRxPosOfTxLocked(dev.playAppl)
 	tcMu.Unlock()
-	if !ok || math.Abs(x-104800) > 0.01 {
-		t.Fatalf("transmit appl %d maps to capture position %.2f, want 104800", dev.playAppl, x)
+	if !ok || math.Abs(x-onWire) > 0.01 {
+		t.Fatalf("transmit appl %d maps to capture position %.2f, want %d", dev.playAppl, x, onWire)
 	}
 	owner := new(int)
 	ref := samplesFromFrames(start.frames(r), r, sr)
@@ -236,15 +240,15 @@ func TestChaseAdjustOnTheMediaClock(t *testing.T) {
 	tcChaseLive.cmd, tcChaseLive.ref, tcChaseLive.sr = owner, ref, sr
 	tcMu.Unlock()
 	t.Cleanup(func() { tcSetChaseLive(nil) })
-	// The take starts at 10:00:00:00, so take frame 104800 belongs on the
+	// The take starts at 10:00:00:00, so take frame onWire belongs on the
 	// wire next.
-	if adj := tcChaseAdjust(owner, 104800-40, dev, sr); adj != 0 {
+	if adj := tcChaseAdjust(owner, onWire-40, dev, sr); adj != 0 {
 		t.Fatalf("0.8 ms off: adjust %d, want 0", adj)
 	}
-	if adj := tcChaseAdjust(owner, 104800-100, dev, sr); adj != 100 {
+	if adj := tcChaseAdjust(owner, onWire-100, dev, sr); adj != 100 {
 		t.Fatalf("100 samples behind: adjust %d, want 100", adj)
 	}
-	if adj := tcChaseAdjust(owner, 104800+60, dev, sr); adj != -60 {
+	if adj := tcChaseAdjust(owner, onWire+60, dev, sr); adj != -60 {
 		t.Fatalf("60 samples ahead: adjust %d, want -60", adj)
 	}
 }
