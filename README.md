@@ -63,7 +63,8 @@ What gets installed:
 | Hardware | Raspberry Pi 5 (Ethernet PTP hardware clock) or Pi 4 (software timestamping); SSD1322 OLED on SPI, EC11 encoder, Record/Stop/Play buttons with lamps |
 | Audio I/O | AES67 via inferno, Ethernet only (no analog/USB audio, by design) |
 | Rates | 44.1 / 48 / 96 / 192 kHz |
-| Channels | 1-128, RX and TX always equal. On a Pi 4 at 48 kHz, 1-128 ch record bit-exact (about 58% CPU at 128 ch) |
+| Channels | 1-128, RX and TX always equal, plus one `TIMECODE` channel each way (channel count + 1). On a Pi 4 at 48 kHz, 1-128 ch record bit-exact (about 58% CPU at 128 ch) |
+| Timecode | SMPTE LTC on the `TIMECODE` channel, MTC over RTP-MIDI (UDP 5004/5005); 23.976, 24, 25, 29.97 DF, 29.97, 30 fps; in, out, take stamping (BWF time reference) and chase |
 | Format | WAV PCM 24-bit (32-bit internal), `-rf64 auto`: a take past 4 GiB is finalised as RF64 |
 | Files | `/rec/YYYY-MM-DD/prefix_YYYYMMDD_HHMMSS_chN_NNkHz.wav` (+ `.channels.json` sidecar), about 17.3 MB/min at 48 kHz stereo |
 | Remote | HTTP (token + session auth, no HTTPS), port from `PI9696_REMOTE_PORT` (installer default 80, app default 8080) |
@@ -83,6 +84,11 @@ What gets installed:
                           └──► ffmpeg astats (meter chain) ──► OLED + WebUI meters
 
   playback: ffmpeg (decode, -ss seek) ──► pump ──► the same plugin's TX side
+
+  timecode: RX TIMECODE ──► LTC reader ┐            ┌──► LTC on TX TIMECODE (pump / idle feeder)
+            RTP-MIDI MTC ──► MTC reader ┴─► engine ─┼──► MTC to RTP-MIDI peers
+                                                    ├──► take stamp (bext + sidecar)
+                                                    └──► chase (pump alignment)
 ```
 
 Key decisions:
@@ -143,6 +149,57 @@ Key decisions:
   the beginning), also from pause. The Play lamp flashes while paused.
 - Encoder: rotate while paused = 5 s scrub; push does nothing during playback
   (only Play pauses); hold = exit.
+
+### Timecode
+
+The unit's inferno device carries one channel more each way than the
+channel count: the last RX and TX channel is always `TIMECODE` (a 64-channel
+unit is a 65-channel device; channel 65 is timecode). Controllers cannot
+rename it (fork setting `FIXED_LAST_CHANNEL_NAME`). Settings live under
+Settings → Timecode on the panel and the Timecode pane of the dashboard.
+
+- **Sync in** (Source: Off / LTC / MTC). LTC is read from the `TIMECODE`
+  receive channel: route any LTC source to it from a controller. MTC
+  arrives over IP as RTP-MIDI (AppleMIDI, the protocol of macOS Network
+  MIDI and rtpMIDI): the unit is a session on UDP 5004/5005, advertised as
+  `_apple-midi._udp`, accepts every invitation, and can keep inviting one
+  configured peer (MTC Peer, `host[:port]`). The input locks after three
+  consecutive frames and drops after 250 ms without one; the rate is read
+  from the code (24/25/30 from the frame numbers and length, drop frame
+  from its flag, 23.976/29.97 from the measured frame length). Lock and loss
+  are logged with the label.
+- **Sync out** (Output, default off): LTC on the `TIMECODE` transmit channel
+  (about -12 dBFS) and MTC quarter frames to every RTP-MIDI peer. While a
+  take plays it is the take's own timecode at the playhead, to the sample;
+  otherwise the incoming timecode when locked (a relay), else the time of
+  day at the selected Rate. Pausing stops it; a locate sends an MTC full
+  frame. Measured on the network, the relayed code trails the source by
+  about 11 ms (the unit's own receive latency).
+- **Recording** (Record: Off / Metadata / Audio, default Metadata). The
+  take's first sample is stamped with the incoming timecode, or the time of
+  day without a lock, as the BWF `bext` time reference (samples since
+  midnight, what DAWs place a take by) and in the take's sidecar
+  (`"timecode": {start, rate, source, timeReference, sampleRate}`). The FIFO
+  is drained at take start with no reader attached, so the stamp is exact:
+  with LTC to the sample. **Audio** also records the `TIMECODE` channel as
+  the take's last channel (channel count + 1, named `TIMECODE`, filename
+  `chN+1`); such a take plays its last channel out on `TIMECODE` unless the
+  output is on.
+- **Chase.** Load a take, then Arm (panel: Timecode → Chase; dashboard:
+  Arm Timecode Chase under the deck; `POST /api/timecode/arm`). When the
+  input locks inside the take, playback starts at the position the code
+  names; the playback pump then skips or holds back samples whenever the
+  take is more than 10 ms off the code, which aligns the start to the
+  sample and absorbs a source drifting against the network clock. Drift is
+  measured every 20 ms: a warning past one frame, a mean/max summary every
+  10 s, and every correction logged. The code stopping or leaving the take
+  stops playback and keeps the take armed; a jump of a second or more
+  relocates; any transport key disarms. A take without timecode starts at
+  00:00:00:00 (its `bext` time reference is used for takes from elsewhere).
+- API: `GET /api/timecode` (state), `POST /api/timecode/arm` (`arm=1|0`),
+  `POST /api/settings/timecode-{source,record,rate,output,peer}`.
+- Tested on the network by `test/interop/tc_interop.py` (LTC in, a take with
+  timecode as audio and metadata, LTC out, chase, MTC in and out).
 
 ### Level meters
 
@@ -286,6 +343,9 @@ remote.go         web server: auth, dashboard, settings, downloads, meter push
 txholder.go       the in-process inferno instance (capture → FIFO, TX holder) + pump
 clocksync.go      statime observation poller (the recording clock gate)
 channelnames.go   per-take channel names; channellabels.go: the unit's labels
+timecode.go       SMPTE labels and rates; ltc.go / mtc.go: the codecs
+tcengine.go       timecode in/out, take stamping; tcchase.go: chase; tcweb.go: UI
+rtpmidi.go        RTP-MIDI (AppleMIDI) session for MTC over IP
 devicename.go     controller renames; mdnsaddr.go: <device>.local
 hyperdeck.go      Blackmagic HyperDeck server (TCP 9993)
 logging.go        log/slog (stderr + app.log)
@@ -310,7 +370,11 @@ Not tracked (created by the installer): `inferno/`, `statime/`, `web/` assets,
 3. **TX after the first playback** keeps streaming silence rather than
    nothing (stopping the stream goes through the plugin's deadlock-prone stop
    path).
-4. **Pi 5** GPIO, SPI and the PTP hardware clock are supported by the code
+4. **Timecode**: LTC is read forwards only (reverse play is not decoded);
+   user bits are neither read nor sent; RTP-MIDI sends no recovery journal,
+   so a lost MTC packet costs a quarter frame (the next complete label
+   corrects it).
+5. **Pi 5** GPIO, SPI and the PTP hardware clock are supported by the code
    and installer but have not yet been verified on hardware; the Pi 4 is.
 
 ---
