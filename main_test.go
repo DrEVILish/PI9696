@@ -5090,6 +5090,8 @@ func TestPumpPlaybackStopSilencesTx(t *testing.T) {
 	playbackCmd, txHolder = nil, holder
 	currentState = StateIdle
 	mutex.Unlock()
+	markStopRequested(cmd) // the operator's Stop (stopPlayback marks it)
+	t.Cleanup(func() { takeStopRequested(cmd) })
 
 	pumpPlaybackToTx(cmd, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, txPlayout{fileChannels: 2, txChannels: 2})
 
@@ -5101,6 +5103,32 @@ func TestPumpPlaybackStopSilencesTx(t *testing.T) {
 	}
 	if len(got)/2 < txSilenceFrames(48000) {
 		t.Errorf("after stop wrote %d silent frames, want >= %d", len(got)/2, txSilenceFrames(48000))
+	}
+}
+
+// A take that ends on its own is reaped (playbackCmd cleared) while the
+// rest of its audio still sits in ffmpeg's pipe: the pump must play that
+// tail, not drop it (e2e_bitperfect.py lost the last 8192 frames).
+func TestPumpPlaysTheTailAfterANaturalEnd(t *testing.T) {
+	initTestHardware(t)
+	saveTxGlobals(t)
+	var raw []byte
+	var want []int32
+	for i := int32(1); i <= 4096; i++ {
+		want = append(want, i)
+		raw = binary.LittleEndian.AppendUint32(raw, uint32(i))
+	}
+	holder := &fakeTxHolder{}
+	cmd := exec.Command("true")
+	mutex.Lock()
+	// Reaped already: ffmpeg exited after writing everything.
+	playbackCmd, txHolder = nil, holder
+	currentState = StateIdle
+	mutex.Unlock()
+	pumpPlaybackToTx(cmd, &chunkReader{data: raw, chunk: 1000}, holder, txPlayout{fileChannels: 2, txChannels: 2})
+	got := holder.flattened()
+	if len(got) < len(want) || !equalInt32(got[:len(want)], want) {
+		t.Fatalf("the take's tail did not play: got %d samples first %v", len(got), got[:min(4, len(got))])
 	}
 }
 

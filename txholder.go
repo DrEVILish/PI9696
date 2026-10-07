@@ -856,8 +856,19 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 	zeros := make([]int32, txPumpFrames*channels)
 	samples := make([]int32, txPumpFrames*channels)
 
+	defer pumpHalt.Delete(cmd)
+	// A take that ends on its own has ffmpeg exit with its last output
+	// still in the pipe (64 KiB: 8192 frames at 2 channels), and the
+	// reaper clears playbackCmd before the pump has read it. Requiring
+	// playbackCmd == cmd dropped that tail, so the last 8192 frames of
+	// every 2-channel take went out as silence (e2e_bitperfect.py). The
+	// pump now plays on to EOF unless this playback was stopped or seeked
+	// (pumpHalted), another one took over, or the device changed.
+	stillOurs := func() bool {
+		return txHolder == holder && (playbackCmd == cmd || playbackCmd == nil) && !pumpHalted(cmd)
+	}
 	mutex.Lock()
-	alive := playbackCmd == cmd && txHolder == holder
+	alive := stillOurs()
 	paused := currentState == StatePaused
 	mutex.Unlock()
 	for {
@@ -868,8 +879,8 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 		// e2e_bitperfect.py). A state change is seen on the next free
 		// chunk, ~21 ms later at most in practice.
 		if mutex.TryLock() {
-			alive = playbackCmd == cmd && txHolder == holder
-			paused = currentState == StatePaused
+			alive = stillOurs()
+			paused = currentState == StatePaused && playbackCmd == cmd
 			mutex.Unlock()
 		}
 		if !alive {
