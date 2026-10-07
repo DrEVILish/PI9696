@@ -60,7 +60,7 @@ func (nd *NetworkDetector) GetNetworkInfo() (*NetworkInfo, error) {
 		if ipnet, ok := addr.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
 			if ipnet.IP.To4() != nil {
 				info.IPAddress = ipnet.IP.String()
-				info.SubnetMask = nd.getSubnetMask(ipnet.Mask)
+				info.SubnetMask = net.IP(ipnet.Mask).String()
 				info.Connected = true
 				break
 			}
@@ -72,27 +72,13 @@ func (nd *NetworkDetector) GetNetworkInfo() (*NetworkInfo, error) {
 
 // isLinkUp checks if the network interface link is up
 func (nd *NetworkDetector) isLinkUp(iface *net.Interface) bool {
-	// Check interface flags
-	if iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagRunning != 0 {
-		// Also check carrier status from /sys/class/net
-		carrierPath := fmt.Sprintf("/sys/class/net/%s/carrier", nd.interfaceName)
-		if data, err := os.ReadFile(carrierPath); err == nil {
-			carrier := strings.TrimSpace(string(data))
-			return carrier == "1"
-		}
-		// Unreadable carrier must not read as link-up: flags can claim
-		// Up+Running while the cable is out, which masked faults.
+	if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagRunning == 0 {
 		return false
 	}
-	return false
-}
-
-// getSubnetMask converts net.IPMask to readable subnet mask
-func (nd *NetworkDetector) getSubnetMask(mask net.IPMask) string {
-	if len(mask) == 4 {
-		return fmt.Sprintf("%d.%d.%d.%d", mask[0], mask[1], mask[2], mask[3])
-	}
-	return ""
+	// Flags can claim Up+Running while the cable is out, so the carrier
+	// decides; an unreadable carrier must not read as link-up.
+	data, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/carrier", nd.interfaceName))
+	return err == nil && strings.TrimSpace(string(data)) == "1"
 }
 
 // GetNetworkStatus returns a simple status string for display
