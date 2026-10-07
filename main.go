@@ -6369,7 +6369,7 @@ func getFreeSpaceAt(path string) uint64 {
 
 // ---- telemetry helpers ----
 
-const appVersion = "1.20.0"
+const appVersion = "1.21.0"
 
 type cpuStat struct{ total, idle int64 }
 
