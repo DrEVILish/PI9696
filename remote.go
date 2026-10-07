@@ -1875,16 +1875,20 @@ var wifiQRFragmentTmpl = template.Must(template.New("wifiqr").Parse(`
 </div>
 `))
 
-func handleAPISettingsVURange(w http.ResponseWriter, r *http.Request) {
-	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
+// handleSelectSetting applies a dropdown's posted index when it is in
+// [0, n) - apply runs under the app mutex - and re-renders the row either
+// way, so a bad value just shows the unchanged setting.
+func handleSelectSetting(w http.ResponseWriter, r *http.Request, n int, apply func(int), view func() selectView) {
+	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil && idx >= 0 && idx < n {
 		mutex.Lock()
-		if idx >= 0 && idx < len(vuRangeOptions) {
-			vuRangeIdx = idx
-			settingChanged()
-		}
+		apply(idx)
 		mutex.Unlock()
 	}
-	renderFragment(w, selectFragmentTmpl, vuRangeSelect())
+	renderFragment(w, selectFragmentTmpl, view())
+}
+
+func handleAPISettingsVURange(w http.ResponseWriter, r *http.Request) {
+	handleSelectSetting(w, r, len(vuRangeOptions), func(i int) { vuRangeIdx = i; settingChanged() }, vuRangeSelect)
 }
 
 func logLevelOptionsView() optionsView {
@@ -1892,39 +1896,19 @@ func logLevelOptionsView() optionsView {
 }
 
 func handleAPISettingsLogLevel(w http.ResponseWriter, r *http.Request) {
-	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
-		mutex.Lock()
-		if idx >= 0 && idx < len(logLevelNames) {
-			setLogLevel(LogLevel(idx))
-		}
-		mutex.Unlock()
-	}
-	renderFragment(w, selectFragmentTmpl, logLevelSelect())
+	handleSelectSetting(w, r, len(logLevelNames), func(i int) { setLogLevel(LogLevel(i)) }, logLevelSelect)
 }
 
 func handleAPISettingsPeakHold(w http.ResponseWriter, r *http.Request) {
-	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
-		mutex.Lock()
-		if idx >= 0 && idx < len(peakHoldOptions) {
-			peakHoldIdx = idx
-			settingChanged()
-		}
-		mutex.Unlock()
-	}
-	renderFragment(w, selectFragmentTmpl, peakHoldSelect())
+	handleSelectSetting(w, r, len(peakHoldOptions), func(i int) { peakHoldIdx = i; settingChanged() }, peakHoldSelect)
 }
 
 func handleAPISettingsSampleRate(w http.ResponseWriter, r *http.Request) {
-	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
-		mutex.Lock()
-		if idx >= 0 && idx < len(sampleRates) {
-			sampleRateIdx = idx
-			checkInfernoRestart()
-			settingChanged()
-		}
-		mutex.Unlock()
-	}
-	renderFragment(w, selectFragmentTmpl, sampleRateSelect())
+	handleSelectSetting(w, r, len(sampleRates), func(i int) {
+		sampleRateIdx = i
+		checkInfernoRestart()
+		settingChanged()
+	}, sampleRateSelect)
 }
 
 // handleAPISettingsChannels applies a channel count. The number box is not
@@ -1958,15 +1942,7 @@ func handleAPISettingsChannels(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleAPISettingsTag(w http.ResponseWriter, r *http.Request) {
-	if idx, err := strconv.Atoi(r.FormValue("idx")); err == nil {
-		mutex.Lock()
-		if idx >= 0 && idx < len(tagPresets) {
-			tagPresetIdx = idx
-			settingChanged()
-		}
-		mutex.Unlock()
-	}
-	renderFragment(w, selectFragmentTmpl, tagSelect())
+	handleSelectSetting(w, r, len(tagPresets), func(i int) { tagPresetIdx = i; settingChanged() }, tagSelect)
 }
 
 // handleAPISettingsWiFi updates the WiFi access point configuration from the
