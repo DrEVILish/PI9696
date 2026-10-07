@@ -2790,26 +2790,6 @@ func ensureMonitorDown(t *testing.T) {
 	mutex.Unlock()
 }
 
-// waitMonitorDown polls for the monitoring flag to become false
-// (reaper has run). Used by tests that need to guarantee the
-// monitor is stopped before proceeding.
-func waitMonitorDown(t *testing.T, what string) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for {
-		mutex.Lock()
-		mon := monitoring
-		mutex.Unlock()
-		if !mon {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("monitor still up after demo playback test: %s", what)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
 // TestInfernoUpGateAndAudioPath verifies that demo mode correctly
 // starts the Inferno server and audio FIFO.
 func TestInfernoUpGateAndAudioPath(t *testing.T) {
@@ -4727,7 +4707,7 @@ func TestSettingChangedDebouncesWrites(t *testing.T) {
 // Render and encode failures (client disconnect mid-response) must be logged,
 // not panics and not silent truncation. A writer that always fails exercises
 // every best-effort error path added for this.
-type failResponseWriter struct{ header http.Header }
+type failResponseWriter struct{}
 
 func (failResponseWriter) Header() http.Header        { return http.Header{} }
 func (failResponseWriter) Write([]byte) (int, error)  { return 0, errors.New("boom") }

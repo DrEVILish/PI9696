@@ -24,7 +24,6 @@ type fakePairedDevice struct {
 	failReadAfter  time.Duration
 	closeDelay     time.Duration
 	noData         bool
-	reads          int
 	done           chan struct{}
 	closeOnce      sync.Once
 }
@@ -43,7 +42,6 @@ func (f *fakePairedDevice) Read(buf []int32) (int, error) {
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.reads++
 	if f.failReadAfter > 0 && time.Since(f.opened) >= f.failReadAfter {
 		return 0, errors.New("fake paired device: capture failed")
 	}
@@ -63,12 +61,6 @@ func (f *fakePairedDevice) Close() error {
 }
 
 func (f *fakePairedDevice) Xruns() int64 { return 0 }
-
-func (f *fakePairedDevice) readCount() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.reads
-}
 
 // fakeInferno is the installed openPairedDevice seam: it records every
 // device it opened, and openErr makes opens fail (no plugin).
