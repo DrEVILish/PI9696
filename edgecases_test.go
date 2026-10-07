@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -360,6 +361,7 @@ func TestLoginLimiterLockoutExpiresAndSweeps(t *testing.T) {
 	l.lockedAt["203.0.113.5"] = time.Now().Add(-61 * time.Second)
 	l.seenAt["198.51.100.1"] = time.Now().Add(-2 * time.Minute) // stale prober
 	l.failures["198.51.100.1"] = 3
+	l.lastSweep = time.Time{} // the sweep is throttled; let this attempt run it
 	l.mu.Unlock()
 	if !l.allowed("203.0.113.5") {
 		t.Fatal("still locked after the lockout expired")
@@ -374,6 +376,40 @@ func TestLoginLimiterLockoutExpiresAndSweeps(t *testing.T) {
 	}
 	if staleSeen || staleFail {
 		t.Error("stale entry for an idle address was not swept")
+	}
+}
+
+// The limiter's maps are keyed by attacker-controlled source addresses, so
+// they are capped: at loginMaxTracked a new address is refused while a known
+// one keeps its allowance, and expired entries free their slots.
+func TestLoginLimiterCapsTrackedAddresses(t *testing.T) {
+	l := newLoginLimiter()
+	l.mu.Lock()
+	for i := 0; i < loginMaxTracked; i++ {
+		l.seenAt["probe-"+strconv.Itoa(i)] = time.Now()
+	}
+	l.seenAt["198.51.100.9"] = time.Now() // a known address, over the cap
+	l.mu.Unlock()
+	if l.allowed("203.0.113.9") {
+		t.Fatal("new address allowed with the limiter full")
+	}
+	if !l.allowed("198.51.100.9") {
+		t.Fatal("known address refused because the limiter is full")
+	}
+	l.mu.Lock()
+	for k := range l.seenAt {
+		l.seenAt[k] = time.Now().Add(-2 * time.Minute)
+	}
+	l.lastSweep = time.Time{}
+	l.mu.Unlock()
+	if !l.allowed("203.0.113.9") {
+		t.Fatal("new address still refused after idle entries expired")
+	}
+	l.mu.Lock()
+	n := len(l.seenAt)
+	l.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d addresses tracked after the sweep, want 1", n)
 	}
 }
 

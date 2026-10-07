@@ -109,12 +109,28 @@ const remoteSessionCookie = "pi9696_session"
 // loginLimiter blunts online guessing of the short token: 5 failed attempts
 // from an IP locks that IP out for a minute. Deliberately separate from the
 // app's UI mutex - this only ever guards its own map, never app state.
+//
+// Its maps are keyed by source address, which a LAN attacker with many
+// addresses controls, so they are bounded: at most loginMaxTracked
+// addresses are tracked, and the stale-entry sweep runs at most once per
+// loginSweepEvery instead of on every attempt.
 type loginLimiter struct {
-	mu       sync.Mutex
-	failures map[string]int
-	lockedAt map[string]time.Time
-	seenAt   map[string]time.Time
+	mu        sync.Mutex
+	failures  map[string]int
+	lockedAt  map[string]time.Time
+	seenAt    map[string]time.Time
+	lastSweep time.Time
 }
+
+// loginMaxTracked caps the addresses the limiter remembers. A new address
+// arriving at the cap is refused (fail closed) rather than evicting an old
+// one, which would hand a locked-out attacker a fresh allowance; the cap
+// drains as the sweep expires idle entries a minute later.
+const loginMaxTracked = 4096
+
+// loginSweepEvery throttles the O(n) stale-entry sweep, so a flood of
+// attempts costs one sweep a second, not one per attempt.
+const loginSweepEvery = time.Second
 
 func newLoginLimiter() *loginLimiter {
 	return &loginLimiter{failures: make(map[string]int), lockedAt: make(map[string]time.Time), seenAt: make(map[string]time.Time)}
@@ -132,14 +148,24 @@ func (l *loginLimiter) allowed(ip string) bool {
 	}
 	// Sweep stale entries: sessions.create prunes its own map, but
 	// probed-never-locked IPs would otherwise grow these maps forever.
-	// O(n) over attacker IPs per login attempt - logins are rare.
-	for probe, at := range l.seenAt {
-		if time.Since(at) >= 60*time.Second {
-			if _, locked := l.lockedAt[probe]; !locked {
-				delete(l.seenAt, probe)
-				delete(l.failures, probe)
+	// Expired lockouts go too, or an address that never returns would
+	// hold its slot against loginMaxTracked forever.
+	if now := time.Now(); now.Sub(l.lastSweep) >= loginSweepEvery {
+		l.lastSweep = now
+		for probe, at := range l.seenAt {
+			if now.Sub(at) < 60*time.Second {
+				continue
 			}
+			if locked, ok := l.lockedAt[probe]; ok && now.Sub(locked) < 60*time.Second {
+				continue
+			}
+			delete(l.seenAt, probe)
+			delete(l.failures, probe)
+			delete(l.lockedAt, probe)
 		}
+	}
+	if _, known := l.seenAt[ip]; !known && len(l.seenAt) >= loginMaxTracked {
+		return false
 	}
 	// Reserve the attempt here, in the same critical section as the
 	// check. Counting only on failure let a burst of N concurrent POSTs all
