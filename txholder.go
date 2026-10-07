@@ -8,16 +8,20 @@
 // open the device itself: inferno keeps its instance in a process-global
 // map, so a second opener would be a second instance fighting this one for
 // the inferno UDP ports. RX and TX channel counts are always equal, because
-// both take the single channelCount.
+// both take the single channelCount - plus one: the last RX and TX channel
+// is always TIMECODE (timecodeChannelName), so a 64-channel unit is a
+// 65-channel inferno device.
 package main
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -42,6 +46,7 @@ type txFrameWriter interface {
 var (
 	txHolder         txFrameWriter
 	txHolderDevice   string // settings identity the holder was opened with; empty when closed
+	txHolderChannels int    // the holder's channel count: audio channels + TIMECODE
 	txHolderReady    bool   // warmed up against the clock overlay; open-but-unready refuses inferno playback
 	playbackViaDante bool   // current/last take plays through the holder, not local ALSA
 )
@@ -82,6 +87,9 @@ func applyUnifiedInfernoEnv(name string, rate, channels int) {
 	os.Setenv("INFERNO_SAMPLE_RATE", fmt.Sprintf("%d", rate))
 	os.Setenv("INFERNO_TX_CHANNELS", fmt.Sprintf("%d", channels))
 	os.Setenv("INFERNO_RX_CHANNELS", fmt.Sprintf("%d", channels))
+	// The last channel each way is TIMECODE, named by the fork and not
+	// renamable from a controller (fork 8f13a30).
+	os.Setenv("INFERNO_FIXED_LAST_CHANNEL_NAME", timecodeChannelName)
 	os.Setenv("INFERNO_TX_SOURCE_BIT_DEPTH", txSourceBitDepth)
 	// Controllers show this as the device's Product Version (needs the
 	// fork's PRODUCT_VERSION, 2bf6974).
@@ -104,11 +112,13 @@ func applyUnifiedInfernoEnv(name string, rate, channels int) {
 	os.Unsetenv("INFERNO_PROCESS_ID")
 }
 
-// startInProcInferno opens the paired device, publishes it as the TX holder,
-// and starts the capture loop feeding fifoPath. Returns false if the device
-// cannot be opened (no inferno ALSA plugin, ports busy): the caller leaves
-// the server InfernoFailed for the retry. Runs without the app mutex.
-func startInProcInferno(name string, rate, channels int, fifoPath string) bool {
+// startInProcInferno opens the paired device with audioChannels plus the
+// TIMECODE channel, publishes it as the TX holder, and starts the capture
+// loop feeding fifoPath. Returns false if the device cannot be opened (no
+// inferno ALSA plugin, ports busy): the caller leaves the server
+// InfernoFailed for the retry. Runs without the app mutex.
+func startInProcInferno(name string, rate, audioChannels int, fifoPath string) bool {
+	channels := audioChannels + 1
 	applyUnifiedInfernoEnv(name, rate, channels)
 	dev, err := openPairedDevice(rate, channels)
 	if err != nil {
@@ -132,6 +142,7 @@ func startInProcInferno(name string, rate, channels int, fifoPath string) bool {
 	gen := inProcRxGen
 	inProcRxDevice, inProcRxQuit, inProcRxDone = dev, quit, done
 	txHolder = dev
+	txHolderChannels = channels
 	txHolderDevice = fmt.Sprintf("inferno:%s:%d:%d", sanitizeDanteName(name), rate, channels)
 	txHolderReady = false
 	mutex.Unlock()
@@ -166,7 +177,7 @@ func stopInProcInferno() {
 	quit, done, dev := inProcRxQuit, inProcRxDone, inProcRxDevice
 	inProcRxQuit, inProcRxDone, inProcRxDevice = nil, nil, nil
 	if txFrameWriter(dev) == txHolder {
-		txHolder, txHolderDevice, txHolderReady = nil, "", false
+		txHolder, txHolderDevice, txHolderReady, txHolderChannels = nil, "", false, 0
 	}
 	mutex.Unlock()
 	if quit != nil {
@@ -205,6 +216,9 @@ var inProcCloseWait = 3 * time.Second
 
 // infernoRxLoop copies captured frames from the paired device into the FIFO
 // ffmpeg records and monitors from, as interleaved little-endian s32le.
+// channels counts the device's channels, TIMECODE (the last) included; the
+// FIFO carries the audio channels only, or all of them while a take
+// records timecode as audio (see fifoSetLayout).
 //
 // Raw O_NONBLOCK FIFO writes (not os.File) for the same reason as demoGenLoop:
 // Go's poller would park a blocking write with no reader and ignore quit;
@@ -228,12 +242,14 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 	buf := make([]byte, chunkFrames*channels*4)
 	var xrunsReported int64
 	var xrunsAt time.Time
+	fifo := fifoFeed{fd: fd, ctl: rxFifoCtl}
 	for {
 		select {
 		case <-quit:
 			return
 		default:
 		}
+		fifo.serve()
 		// Read recovers capture overruns in place, so each one is a gap
 		// in the take that nothing reported. Surface them, at most once
 		// per infernoLogSummaryEvery.
@@ -259,31 +275,147 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 			time.Sleep(2 * time.Millisecond)
 			continue
 		}
-		out := framesAsS32LE(frames[:n*channels], buf)
-		total := len(out)
-		for off := 0; off < total; {
-			select {
-			case <-quit:
-				return
-			default:
-			}
-			w, werr := syscall.Write(fd, out[off:total])
-			if werr != nil {
-				if werr == syscall.EAGAIN {
-					time.Sleep(2 * time.Millisecond)
-					continue
-				}
-				logErrorf("in-process inferno: FIFO write failed: %v", werr)
+		fifo.pos += int64(n)
+		out := fifo.layout(frames[:n*channels], channels)
+		if err := fifo.write(framesAsS32LE(out, buf), quit, 2*time.Millisecond); err != nil {
+			if err != errFifoQuit {
+				logErrorf("in-process inferno: FIFO write failed: %v", err)
 				inProcRxFailed(gen)
-				return
 			}
-			if w == 0 {
-				time.Sleep(2 * time.Millisecond)
-				continue
-			}
-			off += w
+			return
 		}
 	}
+}
+
+// --- The FIFO's channel layout -------------------------------------------
+//
+// The FIFO normally carries the audio channels only: the monitor and every
+// take read channelCount channels. A take that records timecode as audio
+// needs the TIMECODE channel too, and ffmpeg cannot drop one channel of
+// more than 64, so instead the writer switches the FIFO to all channels for
+// that take and back afterwards. A switch happens at a quiet moment (no
+// reader attached: the monitor is down and the take's ffmpeg not started,
+// or the take's ffmpeg has exited) and drains whatever the FIFO holds
+// first, so no reader ever sees two layouts mixed. The writer answers with
+// the stream position of the first frame in the new layout, which is the
+// take's first sample: what its timecode stamp is computed for.
+
+// fifoLayoutReq asks the FIFO writer to switch layout.
+type fifoLayoutReq struct {
+	withTC bool
+	reply  chan int64 // the stream position of the first frame in the layout
+}
+
+// The writers serve these between chunks: the in-process capture loop and
+// the demo generator, one each.
+var (
+	rxFifoCtl   = make(chan fifoLayoutReq)
+	demoFifoCtl = make(chan fifoLayoutReq)
+)
+
+// fifoLayoutWait bounds how long a switch waits for the writer: one chunk
+// is ~21 ms at 48 kHz.
+var fifoLayoutWait = 500 * time.Millisecond
+
+// fifoSetLayout switches the active FIFO's layout (with or without the
+// TIMECODE channel) and returns the stream position the new layout starts
+// at. ok is false when no writer answered (none running). Caller holds the
+// app mutex (demoMode picks the writer); the writers never block on it.
+func fifoSetLayout(withTC bool) (pos int64, ok bool) {
+	ctl := rxFifoCtl
+	if demoMode && demoFifoPath != "" {
+		ctl = demoFifoCtl
+	}
+	r := fifoLayoutReq{withTC: withTC, reply: make(chan int64, 1)}
+	select {
+	case ctl <- r:
+	case <-time.After(fifoLayoutWait):
+		return 0, false
+	}
+	select {
+	case pos = <-r.reply:
+		return pos, true
+	case <-time.After(fifoLayoutWait):
+		return 0, false
+	}
+}
+
+// fifoFeed is a FIFO writer's side of the layout switch.
+type fifoFeed struct {
+	fd     int
+	ctl    chan fifoLayoutReq
+	withTC bool
+	pos    int64 // frames taken from the source so far
+	drop   bool  // a switch happened mid-chunk: abandon the rest of it
+}
+
+// serve applies a pending layout switch, if any.
+func (f *fifoFeed) serve() bool {
+	select {
+	case r := <-f.ctl:
+		var scratch [65536]byte
+		for {
+			n, err := syscall.Read(f.fd, scratch[:])
+			if n <= 0 || err != nil {
+				break
+			}
+		}
+		f.withTC = r.withTC
+		f.drop = true
+		r.reply <- f.pos
+		return true
+	default:
+		return false
+	}
+}
+
+// layout returns the frames as the FIFO carries them now: all channels, or
+// (in place) without the last.
+func (f *fifoFeed) layout(frames []int32, channels int) []int32 {
+	if f.withTC || channels < 2 {
+		return frames
+	}
+	return dropLastChannel(frames, channels)
+}
+
+var errFifoQuit = errors.New("quit")
+
+// write writes out whole, waiting out a full FIFO, until quit. A layout
+// switch while waiting drains the FIFO, and the rest of this chunk (in the
+// old layout) is dropped.
+func (f *fifoFeed) write(out []byte, quit <-chan struct{}, wait time.Duration) error {
+	f.drop = false
+	for off := 0; off < len(out); {
+		select {
+		case <-quit:
+			return errFifoQuit
+		default:
+		}
+		w, werr := syscall.Write(f.fd, out[off:])
+		if werr != nil && werr != syscall.EAGAIN {
+			return werr
+		}
+		if werr != nil || w == 0 {
+			if f.serve() {
+				return nil
+			}
+			time.Sleep(wait)
+			continue
+		}
+		off += w
+	}
+	return nil
+}
+
+// dropLastChannel removes the last channel of interleaved frames in place
+// and returns the shortened slice.
+func dropLastChannel(frames []int32, channels int) []int32 {
+	n := len(frames) / channels
+	keep := channels - 1
+	for i := 1; i < n; i++ {
+		copy(frames[i*keep:(i+1)*keep], frames[i*channels:i*channels+keep])
+	}
+	return frames[:n*keep]
 }
 
 // hostLittleEndian is true on every target the unit runs (arm64, amd64).
@@ -484,11 +616,12 @@ func txStatusShortLocked() string {
 }
 
 // dantePlaybackCmdFor decodes a take to raw s32le on stdout for the pump.
-// Rate/channels are pinned to the device: validatePlaybackFile already
-// refused mismatched takes, so ffmpeg never resamples silently here.
+// Rate/channels are pinned to the take: validatePlaybackFile already
+// refused mismatched takes (channelCount, or one more for a take that
+// recorded timecode as audio), so ffmpeg never resamples silently here.
 func dantePlaybackCmdFor(file string, pos time.Duration) (*exec.Cmd, io.ReadCloser, error) {
 	rate := sampleRates[sampleRateIdx]
-	channels := channelCount
+	channels := takeChannels(file)
 	args := []string{"-nostdin"}
 	if pos > 0 {
 		args = append(args, "-ss", fmt.Sprintf("%.3f", pos.Seconds()))
@@ -502,6 +635,50 @@ func dantePlaybackCmdFor(file string, pos time.Duration) (*exec.Cmd, io.ReadClos
 		return nil, nil, err
 	}
 	return cmd, out, nil
+}
+
+// takeChannels is a take's channel count: from its name, else channelCount.
+// Caller holds the app mutex.
+func takeChannels(file string) int {
+	if m := recFilenameRe.FindStringSubmatch(filepath.Base(file)); m != nil {
+		if n, err := strconv.Atoi(m[4]); err == nil && n > 0 {
+			return n
+		}
+	}
+	return channelCount
+}
+
+// txPlayout describes one playback pump's stream: the take's channels and
+// the transmitter's (the audio channels plus TIMECODE).
+type txPlayout struct {
+	fileChannels int
+	txChannels   int
+}
+
+// playoutFor is the pump description for file on the current holder.
+// Caller holds the app mutex.
+func playoutFor(file string) txPlayout {
+	return txPlayout{fileChannels: takeChannels(file), txChannels: txHolderChannels}
+}
+
+// toTxFrames converts n decoded frames (s32le bytes, p.fileChannels each)
+// into transmitter frames: the take's audio channels, then TIMECODE, which
+// carries the take's own last channel when it recorded timecode as audio
+// (one channel more than the audio) and silence otherwise.
+func (p txPlayout) toTxFrames(src []byte, dst []int32, n int) {
+	audio := p.txChannels - 1
+	for f := 0; f < n; f++ {
+		in := src[f*p.fileChannels*4:]
+		out := dst[f*p.txChannels : (f+1)*p.txChannels]
+		for c := range out {
+			if c < p.fileChannels && (c < audio || p.fileChannels == p.txChannels) {
+				o := c * 4
+				out[c] = int32(in[o]) | int32(in[o+1])<<8 | int32(in[o+2])<<16 | int32(in[o+3])<<24
+			} else {
+				out[c] = 0
+			}
+		}
+	}
 }
 
 // buildPlaybackCmd picks the playback sink. Callers hold the app mutex; this
@@ -587,7 +764,7 @@ func finishTxPump(cmd *exec.Cmd, holder txFrameWriter, channels int) {
 // ffmpeg to a stop, so no SIGSTOP choreography is needed and the wall-clock
 // playhead machinery is untouched. A dead sink kills the decoder so the
 // existing reaper drives the deck back to idle instead of stranding it.
-func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channels int) {
+func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPlayout) {
 	nameThread(threadTxPump)
 	// The pump takes over from the idle feeder only once it has something
 	// to write: counted at its first decoded chunk (or first paused
@@ -606,7 +783,8 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 			txPumpsActive.Add(-1)
 		}
 	}()
-	frameBytes := channels * 4
+	channels := p.txChannels
+	frameBytes := p.fileChannels * 4
 	tmp := make([]byte, txPumpFrames*frameBytes)
 	carry := make([]byte, 0, txPumpFrames*frameBytes)
 	zeros := make([]int32, txPumpFrames*channels)
@@ -649,11 +827,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, channe
 				if full > txPumpFrames {
 					full = txPumpFrames
 				}
-				chunk := carry[:full*frameBytes]
-				for i := range samples[:full*channels] {
-					o := i * 4
-					samples[i] = int32(chunk[o]) | int32(chunk[o+1])<<8 | int32(chunk[o+2])<<16 | int32(chunk[o+3])<<24
-				}
+				p.toTxFrames(carry[:full*frameBytes], samples, full)
 				if _, err := txWrite(holder, samples[:full*channels]); err != nil {
 					failed = true
 					break

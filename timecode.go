@@ -15,6 +15,10 @@ import (
 // within 3.6 ms per hour of the wall clock; the frames themselves are not
 // dropped.
 
+// timecodeChannelName names the unit's last inferno RX and TX channel,
+// which always carries timecode (LTC): channel channelCount+1.
+const timecodeChannelName = "TIMECODE"
+
 // tcRate is one selectable timecode rate.
 type tcRate struct {
 	Name    string // as shown in the UI

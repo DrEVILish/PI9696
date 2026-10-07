@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -2758,23 +2757,30 @@ func demoGenLoop(path string, quit <-chan struct{}, keeper *os.File, gen uint64)
 	const chunkFrames = 2048
 	var t float64
 	var lcg uint64 = 0x12345678
+	fifo := fifoFeed{fd: fd, ctl: demoFifoCtl}
+	sr, ch := 48000, 2
+	var frames []int32
+	var buf []byte
 	for {
 		select {
 		case <-quit:
 			return
 		default:
 		}
-		mutex.Lock()
-		sr := sampleRates[sampleRateIdx]
-		ch := channelCount
-		mutex.Unlock()
-		if ch < 1 {
-			ch = 1
+		fifo.serve()
+		// TryLock: a layout switch waits on this loop with the app mutex
+		// held (fifoSetLayout), so the loop must never block on it.
+		if mutex.TryLock() {
+			sr, ch = sampleRates[sampleRateIdx], channelCount
+			mutex.Unlock()
 		}
-		if ch > MaxChannelCount {
-			ch = MaxChannelCount
+		ch = max(1, min(ch, MaxChannelCount))
+		// The audio channels plus TIMECODE, like the inferno device.
+		dc := ch + 1
+		if len(frames) != chunkFrames*dc {
+			frames = make([]int32, chunkFrames*dc)
+			buf = make([]byte, chunkFrames*dc*4)
 		}
-		buf := make([]byte, chunkFrames*ch*4)
 		for i := 0; i < chunkFrames; i++ {
 			tt := t + float64(i)/float64(sr)
 			for c := 0; c < ch; c++ {
@@ -2790,34 +2796,22 @@ func demoGenLoop(path string, quit <-chan struct{}, keeper *os.File, gen uint64)
 				} else if s < -1 {
 					s = -1
 				}
-				binary.LittleEndian.PutUint32(buf[(i*ch+c)*4:], uint32(int32(s*2147483647)))
+				frames[i*dc+c] = int32(s * 2147483647)
 			}
+			frames[i*dc+ch] = 0
 		}
 		t += float64(chunkFrames) / float64(sr)
-		for off := 0; off < len(buf); {
-			select {
-			case <-quit:
-				return
-			default:
-			}
-			n, err := syscall.Write(fd, buf[off:])
-			if err != nil {
-				if err == syscall.EAGAIN {
-					time.Sleep(10 * time.Millisecond)
-					continue
-				}
+		fifo.pos += chunkFrames
+		out := fifo.layout(frames, dc)
+		if err := fifo.write(framesAsS32LE(out, buf), quit, 10*time.Millisecond); err != nil {
+			if err != errFifoQuit {
 				// Unexpected (reader tore the FIFO down around us): mark
 				// not-running so the render-tick sync restarts us.
 				mutex.Lock()
 				demoGenRunning = false
 				mutex.Unlock()
-				return
 			}
-			if n == 0 {
-				time.Sleep(10 * time.Millisecond)
-				continue
-			}
-			off += n
+			return
 		}
 	}
 }
@@ -3698,8 +3692,10 @@ func validatePlaybackFile(file string) error {
 	}
 	wantRate := sampleRates[sampleRateIdx]
 	m := &playbackMismatch{
-		rate:  row.SampleRate*1000 != wantRate,
-		chans: row.Channels != channelCount,
+		rate: row.SampleRate*1000 != wantRate,
+		// One channel more is a take that recorded timecode as audio:
+		// its last channel plays out on TIMECODE.
+		chans: row.Channels != channelCount && row.Channels != channelCount+1,
 	}
 	switch {
 	case m.rate && m.chans:
@@ -3790,7 +3786,7 @@ func startPlayback() {
 		logErrorf("startPlayback refused: TX clock not ready")
 		showSysNotice("TX no clock")
 		showWebNotice("Inferno TX clock not ready - playback refused, retrying clock")
-		go warmupTxHolder(txHolder, channelCount)
+		go warmupTxHolder(txHolder, txHolderChannels)
 		return
 	}
 
@@ -3821,7 +3817,7 @@ func startPlayback() {
 	playbackCmd = cmd
 	playbackViaDante = viaDante
 	if viaDante {
-		go pumpPlaybackToTx(cmd, stdout, txHolder, channelCount)
+		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(file))
 	}
 	playbackFile = file
 	playbackStart = time.Now()
@@ -4174,7 +4170,7 @@ func restartPlaybackAt(pos time.Duration) {
 	playbackCmd = cmd
 	playbackViaDante = viaDante
 	if viaDante {
-		go pumpPlaybackToTx(cmd, stdout, txHolder, channelCount)
+		go pumpPlaybackToTx(cmd, stdout, txHolder, playoutFor(playbackFile))
 	}
 	// The old reaper may have run during the handoff wait: it clears
 	// monitoringOutput and can stand the input monitor back up (state

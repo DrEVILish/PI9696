@@ -4946,19 +4946,19 @@ func saveTxGlobals(t *testing.T) {
 	t.Helper()
 	oDemo, oState := demoMode, currentState
 	oRate, oCh, oName := sampleRateIdx, channelCount, deviceName
-	oHolder, oDev, oReady := txHolder, txHolderDevice, txHolderReady
+	oHolder, oDev, oReady, oHCh := txHolder, txHolderDevice, txHolderReady, txHolderChannels
 	oVia := playbackViaDante
 	oCmd := playbackCmd
 	oEnv := make(map[string]string)
 	oEnvSet := make(map[string]bool)
-	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT", "INFERNO_TX_SOURCE_BIT_DEPTH", "INFERNO_PRODUCT_VERSION", "INFERNO_NAME_REQUEST_PATH"} {
+	for _, k := range []string{"INFERNO_NAME", "INFERNO_SAMPLE_RATE", "INFERNO_TX_CHANNELS", "INFERNO_RX_CHANNELS", "INFERNO_PROCESS_ID", "INFERNO_ALT_PORT", "INFERNO_TX_SOURCE_BIT_DEPTH", "INFERNO_PRODUCT_VERSION", "INFERNO_NAME_REQUEST_PATH", "INFERNO_FIXED_LAST_CHANNEL_NAME"} {
 		oEnv[k], oEnvSet[k] = os.LookupEnv(k)
 	}
 	t.Cleanup(func() {
 		mutex.Lock()
 		demoMode, currentState = oDemo, oState
 		sampleRateIdx, channelCount, deviceName = oRate, oCh, oName
-		txHolder, txHolderDevice, txHolderReady = oHolder, oDev, oReady
+		txHolder, txHolderDevice, txHolderReady, txHolderChannels = oHolder, oDev, oReady, oHCh
 		playbackViaDante = oVia
 		playbackCmd = oCmd
 		mutex.Unlock()
@@ -5058,7 +5058,7 @@ func TestPumpPlaybackPassthrough(t *testing.T) {
 	// Prime-sized reads force the carry path: 7 bytes can never align to an
 	// 8-byte stereo frame.
 	src := &chunkReader{data: raw, chunk: 7}
-	pumpPlaybackToTx(cmd, src, holder, 2)
+	pumpPlaybackToTx(cmd, src, holder, txPlayout{2, 2})
 
 	got := holder.flattened()
 	if len(got) < len(want) || !equalInt32(got[:len(want)], want) {
@@ -5091,7 +5091,7 @@ func TestPumpPlaybackStopSilencesTx(t *testing.T) {
 	currentState = StateIdle
 	mutex.Unlock()
 
-	pumpPlaybackToTx(cmd, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, 2)
+	pumpPlaybackToTx(cmd, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, txPlayout{2, 2})
 
 	got := holder.flattened()
 	for _, s := range got {
@@ -5154,7 +5154,7 @@ func TestPumpPlaybackPausedWritesSilence(t *testing.T) {
 	currentState = StatePaused
 	mutex.Unlock()
 
-	pumpPlaybackToTx(cmd, src, holder, 2)
+	pumpPlaybackToTx(cmd, src, holder, txPlayout{2, 2})
 
 	for _, w := range holder.writes {
 		for _, s := range w {
@@ -5180,7 +5180,7 @@ func TestPumpPlaybackStaleGenerationExits(t *testing.T) {
 	currentState = StatePlaying
 	mutex.Unlock()
 
-	pumpPlaybackToTx(old, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, 2)
+	pumpPlaybackToTx(old, bytes.NewReader([]byte{1, 2, 3, 4, 5, 6, 7, 8}), holder, txPlayout{2, 2})
 
 	if len(holder.writes) != 0 {
 		t.Errorf("stale pump wrote %d chunks, want 0", len(holder.writes))
@@ -5203,8 +5203,9 @@ func TestInProcStartPublishesTxHolder(t *testing.T) {
 
 	doStartInferno()
 	dev := fi.last()
-	if fi.opens() != 1 || dev.rate != 48000 || dev.channels != 2 {
-		t.Fatalf("opens = %d, last = %+v; want one open at 48000/2", fi.opens(), dev)
+	// Two audio channels plus TIMECODE.
+	if fi.opens() != 1 || dev.rate != 48000 || dev.channels != 3 {
+		t.Fatalf("opens = %d, last at %d/%d; want one open at 48000/3", fi.opens(), dev.rate, dev.channels)
 	}
 	waitFor(t, 2*time.Second, "holder ready", func() bool {
 		mutex.Lock()
@@ -5217,8 +5218,8 @@ func TestInProcStartPublishesTxHolder(t *testing.T) {
 	channelCount = 8
 	mutex.Unlock()
 	doStartInferno()
-	if fi.opens() != 2 || fi.last().channels != 8 {
-		t.Fatalf("after a channel change: opens = %d, last channels %d; want a second open at 8", fi.opens(), fi.last().channels)
+	if fi.opens() != 2 || fi.last().channels != 9 {
+		t.Fatalf("after a channel change: opens = %d, last channels %d; want a second open at 8+TIMECODE", fi.opens(), fi.last().channels)
 	}
 	select {
 	case <-dev.done:
@@ -5990,6 +5991,9 @@ func TestUnifiedInfernoEnv(t *testing.T) {
 	}
 	if os.Getenv("INFERNO_SAMPLE_RATE") != "48000" {
 		t.Errorf("INFERNO_SAMPLE_RATE = %q, want 48000", os.Getenv("INFERNO_SAMPLE_RATE"))
+	}
+	if got := os.Getenv("INFERNO_FIXED_LAST_CHANNEL_NAME"); got != "TIMECODE" {
+		t.Errorf("INFERNO_FIXED_LAST_CHANNEL_NAME = %q, want TIMECODE", got)
 	}
 	if got := os.Getenv("INFERNO_NAME_REQUEST_PATH"); got != infernoNameRequestPath {
 		t.Errorf("INFERNO_NAME_REQUEST_PATH = %q, want %q", got, infernoNameRequestPath)
@@ -7671,7 +7675,7 @@ func TestTxPumpKeepsWritingWhileAppMutexHeld(t *testing.T) {
 	}()
 	pumpDone := make(chan struct{})
 	go func() {
-		pumpPlaybackToTx(cmd, pr, holder, 2)
+		pumpPlaybackToTx(cmd, pr, holder, txPlayout{2, 2})
 		close(pumpDone)
 	}()
 	waitWrites(t, holder, 2, 2*time.Second)
@@ -7710,7 +7714,7 @@ func TestTxPumpTakesOverOnlyWithData(t *testing.T) {
 	pr, pw := io.Pipe() // no data yet: the decoder is still starting
 	pumpDone := make(chan struct{})
 	go func() {
-		pumpPlaybackToTx(cmd, pr, holder, 2)
+		pumpPlaybackToTx(cmd, pr, holder, txPlayout{2, 2})
 		close(pumpDone)
 	}()
 	time.Sleep(100 * time.Millisecond)
