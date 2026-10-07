@@ -69,6 +69,13 @@ func TestMain(m *testing.M) {
 	// The TX idle feeder would mix silence into the write sequences the TX
 	// tests assert on; its own tests turn it back on.
 	txIdleFeedEnabled = false
+	// Many tests change a setting (settingChanged) and then restore the
+	// globals bare. With the production 500ms debounce, the save they
+	// armed fired during a later test and read the globals that test was
+	// writing without the mutex: the suite's intermittent -race failure.
+	// In the suite a debounced save only fires when a test flushes it;
+	// the debounce test sets its own short delay.
+	configPersistDelay = time.Hour
 	go infernoWorker()
 	code := m.Run()
 	os.RemoveAll(recDir)
@@ -1000,11 +1007,21 @@ func TestLoginPageMarksTokenFresh(t *testing.T) {
 func TestSimDefaultLogLevelDebug(t *testing.T) {
 	t.Setenv("PI9696_SIM", "1")
 	origPath, origLevel := ConfigPath, currentLogLevel()
+	// ConfigPath is read by the debounced persist timer under the app
+	// mutex; swapping it bare raced with a save still pending from an
+	// earlier test (the suite's intermittent -race failure). Flush, then
+	// swap, under the mutex - here and in the cleanup.
 	t.Cleanup(func() {
+		mutex.Lock()
+		flushConfig()
 		ConfigPath = origPath
+		mutex.Unlock()
 		applyLogLevel(origLevel)
 	})
+	mutex.Lock()
+	flushConfig()
 	ConfigPath = filepath.Join(t.TempDir(), "nonexistent-config.json")
+	mutex.Unlock()
 	applyLogLevel(LogError)
 
 	loadPersistedConfig()
@@ -4703,6 +4720,13 @@ func TestSettingChangedDebouncesWrites(t *testing.T) {
 		mutex.Unlock()
 	})
 	mutex.Lock()
+	// Drop a save another test left armed (on TestMain's hour delay): a
+	// pending timer would absorb these marks and never fire in time.
+	if configTimer != nil {
+		configTimer.Stop()
+		configTimer = nil
+	}
+	configDirty = false
 	ConfigPath = filepath.Join(t.TempDir(), "config.json")
 	configPersistDelay = 50 * time.Millisecond
 	mutex.Unlock()
