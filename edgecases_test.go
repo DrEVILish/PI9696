@@ -705,3 +705,28 @@ func TestIdleVUSixteenPerPage(t *testing.T) {
 		}
 	}
 }
+
+// writeFileAtomic replaces the file whole and leaves no temp file behind,
+// including when the previous content was longer than the new.
+func TestWriteFileAtomicReplaces(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.json")
+	if err := writeFileAtomic(p, []byte("first, longer content"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFileAtomic(p, []byte("second"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(p); err != nil || string(got) != "second" {
+		t.Fatalf("content %q, %v", got, err)
+	}
+	if info, err := os.Stat(p); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("mode %v, %v", info, err)
+	}
+	if _, err := os.Stat(p + ".tmp"); !os.IsNotExist(err) {
+		t.Fatalf("temp file left behind: %v", err)
+	}
+	// An unwritable target directory fails cleanly instead of panicking.
+	if err := writeFileAtomic(filepath.Join(p, "nested"), []byte("x"), 0600); err == nil {
+		t.Fatal("write under a regular file succeeded")
+	}
+}

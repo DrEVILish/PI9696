@@ -247,8 +247,8 @@ func currentConfig() PersistedConfig {
 }
 
 // persistConfig snapshots the current non-destructive settings to ConfigPath.
-// Safe to call under the app mutex (it only reads globals); the write is
-// atomic via a temp file + rename so a power cut mid-write can't truncate it.
+// Safe to call under the app mutex (it only reads globals); the write goes
+// through writeFileAtomic so a power cut can't truncate or lose it.
 func persistConfig() {
 	cur := currentConfig()
 	data, err := json.MarshalIndent(&cur, "", "  ")
@@ -260,15 +260,54 @@ func persistConfig() {
 		logErrorf("Failed to create config dir: %v", err)
 		return
 	}
-	tmp := ConfigPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	if err := writeFileAtomic(ConfigPath, data, 0600); err != nil {
 		logErrorf("Failed to write config: %v", err)
 		return
 	}
-	if err := os.Rename(tmp, ConfigPath); err != nil {
-		logErrorf("Failed to commit config: %v", err)
-	}
 	logDebugf("Persisted settings to %s", ConfigPath)
+}
+
+// writeFileAtomic replaces path with data so that after a power cut it holds
+// either the old or the new content, never a truncated file. A bare
+// temp-file + rename is not enough: without fsyncing the temp file first,
+// writeback can commit the rename before the data (leaving an empty file),
+// and without fsyncing the directory the rename itself may not survive.
+// A directory fsync error is ignored: some filesystems (vfat/exfat USB
+// sticks) refuse it, and the file is already durable by then.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, perm)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	if err == nil {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	syncDir(filepath.Dir(path))
+	return nil
+}
+
+// syncDir fsyncs a directory so entries just created or renamed in it
+// survive a power cut. Best effort: some filesystems (vfat/exfat USB
+// sticks) refuse a directory fsync, and callers have already made the file
+// content itself durable.
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
 }
 
 // settingChanged is a tiny helper for the handful of places a persistent
@@ -340,13 +379,8 @@ func exportConfigTo(dir string) error {
 	if err != nil {
 		return fmt.Errorf("marshalling config: %v", err)
 	}
-	dst := filepath.Join(dir, configExportName)
-	tmp := dst + ".tmp"
-	if err := os.WriteFile(tmp, data, 0600); err != nil {
+	if err := writeFileAtomic(filepath.Join(dir, configExportName), data, 0600); err != nil {
 		return fmt.Errorf("writing %s: %v", configExportName, err)
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return fmt.Errorf("committing %s: %v", configExportName, err)
 	}
 	logInfof("config exported to USB as %s", configExportName)
 	return nil
@@ -3268,6 +3302,11 @@ func startRecording() {
 			} else {
 				logErrorf("fsync of take %s: open failed: %v", closedFile, err)
 			}
+			// The take is a new entry in its day folder (itself possibly
+			// new today): without these the content is durable but the
+			// file may not be findable after a power cut.
+			syncDir(filepath.Dir(closedFile))
+			syncDir(filepath.Dir(filepath.Dir(closedFile)))
 		}
 		close(done)
 	}()
@@ -4392,7 +4431,11 @@ func copyFile(src, dst string, cancelled func() bool) error {
 		os.Remove(tmp)
 		return err
 	}
-	return os.Rename(tmp, dst)
+	if err := os.Rename(tmp, dst); err != nil {
+		return err
+	}
+	syncDir(filepath.Dir(dst))
+	return nil
 }
 
 // deleteAllRecordings removes every take and reports how many could not be

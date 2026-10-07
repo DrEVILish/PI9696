@@ -307,12 +307,10 @@ Not tracked (created by the installer): `inferno/`, `statime/`, `web/` assets,
 1. **No HTTPS** and no CSRF token: trusted networks only.
 2. **Wi-Fi AP** brings up hostapd on `wlan0` but configures no address or
    DHCP for clients.
-3. **Power loss**: take content is fsync'd but the directory entry is not,
-   and the config's temp file is not fsync'd before its rename.
-4. **TX after the first playback** keeps streaming silence rather than
+3. **TX after the first playback** keeps streaming silence rather than
    nothing (stopping the stream goes through the plugin's deadlock-prone stop
    path).
-5. **Pi 5** GPIO, SPI and the PTP hardware clock are supported by the code
+4. **Pi 5** GPIO, SPI and the PTP hardware clock are supported by the code
    and installer but have not yet been verified on hardware; the Pi 4 is.
 
 ---

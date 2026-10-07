@@ -130,12 +130,7 @@ func writeRecordingChannels(wav string, chans []recChannel) error {
 	if err != nil {
 		return err
 	}
-	path := channelsSidecar(wav)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return writeFileAtomic(channelsSidecar(wav), append(data, '\n'), 0o644)
 }
 
 // recordingChannels returns a take's channels: its sidecar, else (older
@@ -279,6 +274,7 @@ func hostIPv4s() []net.IP {
 	}
 	return out
 }
+
 // channelSummary is the recordings table's one-line view of a take's
 // channel names.
 func channelSummary(chans []recChannel) string {
