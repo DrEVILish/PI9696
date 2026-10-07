@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"math"
 	"os"
 	"os/exec"
@@ -220,7 +221,7 @@ func applyConfigSettings(c *PersistedConfig) {
 func currentConfig() PersistedConfig {
 	return PersistedConfig{
 		DeviceName:        deviceName,
-		ChannelLabels:     copyChannelLabels(channelLabels),
+		ChannelLabels:     maps.Clone(channelLabels),
 		SampleRateIdx:     sampleRateIdx,
 		ChannelCount:      channelCount,
 		TagPresetIdx:      tagPresetIdx,
@@ -230,7 +231,7 @@ func currentConfig() PersistedConfig {
 		TransportMode:     transportMode,
 		Theme:             themeSlug,
 		ThemeVariant:      themeVariant,
-		ThemeTints:        copyThemeTints(themeTints),
+		ThemeTints:        maps.Clone(themeTints),
 		DisplayMotion:     displayMotion,
 		DisplayContrast:   displayContrast,
 		DensityIdx:        displayDensityIdx,

@@ -801,17 +801,6 @@ func validThemeTints(in map[string]string) map[string]string {
 	return out
 }
 
-func copyThemeTints(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
 // themeTintSpec returns a theme's tint declaration, nil if it has none.
 func themeTintSpec(slug string) *themeTintEntry {
 	for _, t := range availableThemes() {

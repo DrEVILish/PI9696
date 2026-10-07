@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,14 +27,6 @@ func validChannelLabels(in map[int]string) map[int]string {
 	return out
 }
 
-func copyChannelLabels(in map[int]string) map[int]string {
-	out := make(map[int]string, len(in))
-	for k, v := range in {
-		out[k] = v
-	}
-	return out
-}
-
 // applyChannelLabels overlays labels on names (index i is channel i+1).
 func applyChannelLabels(names []string, labels map[int]string) []string {
 	for i := range names {
@@ -49,7 +42,7 @@ func applyChannelLabels(names []string, labels map[int]string) []string {
 func displayChannelNames(n int) []string {
 	names := liveRxChannelNames(n)
 	mutex.Lock()
-	labels := copyChannelLabels(channelLabels)
+	labels := maps.Clone(channelLabels)
 	mutex.Unlock()
 	return applyChannelLabels(names, labels)
 }

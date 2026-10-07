@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -17,7 +18,8 @@ func useChannelLabels(t *testing.T, labels map[int]string) {
 	t.Helper()
 	mutex.Lock()
 	orig := channelLabels
-	channelLabels = copyChannelLabels(labels)
+	channelLabels = map[int]string{}
+	maps.Copy(channelLabels, labels)
 	mutex.Unlock()
 	t.Cleanup(func() {
 		mutex.Lock()
@@ -110,7 +112,7 @@ func TestChannelLabelsLoadAndNameNewTakes(t *testing.T) {
 	cfg := currentConfig()
 	cfg.ChannelLabels = map[int]string{1: "Kick in", 0: "bad", 200: "bad", 3: ""}
 	applyConfigSettings(&cfg)
-	loaded := copyChannelLabels(channelLabels)
+	loaded := maps.Clone(channelLabels)
 	mutex.Unlock()
 	if len(loaded) != 1 || loaded[1] != "Kick in" {
 		t.Fatalf("loaded labels = %v, want only channel 1", loaded)
