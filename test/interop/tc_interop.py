@@ -516,6 +516,8 @@ def main():
             if pr.poll() is None:
                 pr.terminate()
         netaudio("--name", "TCSINK", "subscription", "remove", "--all")
+        # only the unit's TIMECODE input: its audio inputs stay as they were
+        netaudio("subscription", "remove", "--rx", f"TIMECODE@{name}")
     print(json.dumps(ck.results, indent=2))
     return 0 if ck.results and all(r["ok"] for r in ck.results) else 1
 
