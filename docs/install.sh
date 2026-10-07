@@ -26,7 +26,7 @@ INSTALLER_URL="${PI9696_INSTALLER_URL:-https://drevilish.github.io/pi9696/instal
 # Pinned sources. Move a pin deliberately; every one is checked out exactly.
 REPO_URL="https://github.com/DrEVILish/pi9696.git"
 INFERNO_URL="https://github.com/DrEVILish/inferno.git"
-INFERNO_REF="3a54d8e"                       # fork dev
+INFERNO_REF="dd2d582"                       # fork dev
 STATIME_URL="https://github.com/teodly/statime.git"
 STATIME_BRANCH="inferno-dev"
 STATIME_REF="244f20a"
