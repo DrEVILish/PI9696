@@ -247,8 +247,12 @@ func currentConfig() PersistedConfig {
 }
 
 // persistConfig snapshots the current non-destructive settings to ConfigPath.
-// Safe to call under the app mutex (it only reads globals); the write goes
-// through writeFileAtomic so a power cut can't truncate or lose it.
+// Callers hold the app mutex (it reads the settings globals). It only takes
+// the snapshot: the durable write (fsync of the file and its directory)
+// happens on configWriterLoop, off the mutex, because the config shares the
+// SD card with a recording take and an fsync behind ffmpeg's dirty data can
+// take seconds - the same reason the take's own fsync runs unlocked. Use
+// waitConfigWritten where the file must be on disk before going on.
 func persistConfig() {
 	cur := currentConfig()
 	data, err := json.MarshalIndent(&cur, "", "  ")
@@ -256,16 +260,77 @@ func persistConfig() {
 		logErrorf("Failed to marshal config: %v", err)
 		return
 	}
-	if err := os.MkdirAll(filepath.Dir(ConfigPath), 0755); err != nil {
-		logErrorf("Failed to create config dir: %v", err)
-		return
-	}
-	if err := writeFileAtomic(ConfigPath, data, 0600); err != nil {
-		logErrorf("Failed to write config: %v", err)
-		return
-	}
-	logDebugf("Persisted settings to %s", ConfigPath)
+	cfgWriter.enqueue(ConfigPath, data)
 }
+
+// cfgWriter is the single config writer. One goroutine writes the latest
+// snapshot, so two saves can never race on the shared temp file or land
+// out of order; snapshots queued while a write runs collapse into one.
+var cfgWriter = newConfigWriter()
+
+type configWriter struct {
+	mu      sync.Mutex
+	cond    *sync.Cond
+	path    string
+	data    []byte
+	queued  uint64 // sequence number of the latest snapshot
+	written uint64 // latest sequence number written (or failed)
+	started bool
+}
+
+func newConfigWriter() *configWriter {
+	w := &configWriter{}
+	w.cond = sync.NewCond(&w.mu)
+	return w
+}
+
+func (w *configWriter) enqueue(path string, data []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.path, w.data = path, data
+	w.queued++
+	if !w.started {
+		w.started = true
+		go w.loop()
+	}
+	w.cond.Broadcast()
+}
+
+func (w *configWriter) loop() {
+	w.mu.Lock()
+	for {
+		for w.written == w.queued {
+			w.cond.Wait()
+		}
+		path, data, seq := w.path, w.data, w.queued
+		w.mu.Unlock()
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			logErrorf("Failed to create config dir: %v", err)
+		} else if err := writeFileAtomic(path, data, 0600); err != nil {
+			logErrorf("Failed to write config: %v", err)
+		} else {
+			logDebugf("Persisted settings to %s", path)
+		}
+		w.mu.Lock()
+		w.written = seq
+		w.cond.Broadcast()
+	}
+}
+
+// wait blocks until every snapshot queued before the call is written.
+func (w *configWriter) wait() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for target := w.queued; w.written < target; {
+		w.cond.Wait()
+	}
+}
+
+// waitConfigWritten blocks until every persistConfig so far is on disk.
+// It never takes the app mutex, so calling it with the mutex held cannot
+// deadlock, but doing so holds the UI for the write - shutdown and tests
+// only.
+func waitConfigWritten() { cfgWriter.wait() }
 
 // writeFileAtomic replaces path with data so that after a power cut it holds
 // either the old or the new content, never a truncated file. A bare
@@ -1360,6 +1425,7 @@ func gracefulShutdown() {
 	mutex.Lock()
 	flushConfig()
 	mutex.Unlock()
+	waitConfigWritten()
 	// Stop accepting new work first: a record/play arriving mid-drain would
 	// start transport the drain below just stood down. Close the shutdown
 	// channel before anything else so the network monitor can't enqueue a
@@ -3301,6 +3367,12 @@ func startRecording() {
 				f.Close()
 			} else {
 				logErrorf("fsync of take %s: open failed: %v", closedFile, err)
+			}
+			// The channel-names sidecar was written without an fsync
+			// under the mutex at take start; make it durable with the take.
+			if f, err := os.Open(channelsSidecar(closedFile)); err == nil {
+				f.Sync()
+				f.Close()
 			}
 			// The take is a new entry in its day folder (itself possibly
 			// new today): without these the content is durable but the

@@ -1014,12 +1014,14 @@ func TestSimDefaultLogLevelDebug(t *testing.T) {
 	t.Cleanup(func() {
 		mutex.Lock()
 		flushConfig()
+		waitConfigWritten()
 		ConfigPath = origPath
 		mutex.Unlock()
 		applyLogLevel(origLevel)
 	})
 	mutex.Lock()
 	flushConfig()
+	waitConfigWritten()
 	ConfigPath = filepath.Join(t.TempDir(), "nonexistent-config.json")
 	mutex.Unlock()
 	applyLogLevel(LogError)
@@ -2038,6 +2040,7 @@ func TestLogLevelSetAndPersist(t *testing.T) {
 
 	// A raised level round-trips through the persisted config.
 	persistConfig()
+	waitConfigWritten()
 	loadPersistedConfig()
 	if currentLogLevel() != LogInfo {
 		t.Fatalf("expected persisted log level Info to reload, got %d", currentLogLevel())
@@ -2097,6 +2100,7 @@ func TestOledBrightnessAdjustAndPersist(t *testing.T) {
 	oledBrightnessPct = 37
 
 	persistConfig()
+	waitConfigWritten()
 	oledBrightnessPct = 0
 	loadPersistedConfig()
 	if oledBrightnessPct != 37 {
@@ -2360,6 +2364,7 @@ func TestFilePrefixPersists(t *testing.T) {
 
 	filePrefix = "VenueB"
 	persistConfig()
+	waitConfigWritten()
 	filePrefix = ""
 	loadPersistedConfig()
 	if filePrefix != "VenueB" {
@@ -3093,6 +3098,7 @@ func TestDemoTogglePersists(t *testing.T) {
 	mutex.Lock()
 	setDemoModeLocked(true)
 	flushConfig()
+	waitConfigWritten()
 	mutex.Unlock()
 	if !readFlag() {
 		t.Fatal("demo mode true did not persist")
@@ -3100,6 +3106,7 @@ func TestDemoTogglePersists(t *testing.T) {
 	mutex.Lock()
 	setDemoModeLocked(false)
 	flushConfig()
+	waitConfigWritten()
 	mutex.Unlock()
 	if readFlag() {
 		t.Fatal("demo mode false did not persist")
@@ -3893,6 +3900,7 @@ func TestPersistRoundTripsAllFields(t *testing.T) {
 	mutex.Unlock()
 	applyLogLevel(LogDebug)
 	persistConfig()
+	waitConfigWritten()
 
 	// Reset everything to defaults, then load and demand it all back.
 	mutex.Lock()
@@ -4757,6 +4765,7 @@ func TestSettingChangedDebouncesWrites(t *testing.T) {
 	mutex.Lock()
 	settingChanged()
 	flushConfig()
+	waitConfigWritten()
 	mutex.Unlock()
 	if _, err := os.Stat(filepath.Join(filepath.Dir(ConfigPath), "config.json")); err != nil {
 		t.Fatal("flushConfig did not persist synchronously")
@@ -5594,6 +5603,7 @@ func TestLoginPageDeviceNameRaceFree(t *testing.T) {
 		mutex.Lock()
 		deviceName = orig
 		persistConfig()
+		waitConfigWritten()
 		mutex.Unlock()
 	})
 	stop := make(chan struct{})
@@ -5644,6 +5654,7 @@ func TestConfigImportAppliesDemoAndHyperdeck(t *testing.T) {
 		setHyperdeckEnabledLocked(origHD)
 		hyperdeckBindAddr = origBind
 		persistConfig()
+		waitConfigWritten()
 		mutex.Unlock()
 	})
 
@@ -5919,6 +5930,7 @@ func TestDeviceNameRowSameInDashboardAndSave(t *testing.T) {
 		mutex.Lock()
 		deviceName = orig
 		persistConfig()
+		waitConfigWritten()
 		mutex.Unlock()
 	})
 	form := url.Values{"name": {"Row Check"}}
@@ -7473,6 +7485,9 @@ func TestLoadAndImportClampAlike(t *testing.T) {
 	origSSID, origPass, origWifi := wifiSSID, wifiPassword, wifiEnabled
 	origDemo, origHD := demoMode, hyperdeckEnabled
 	defer func() {
+		// Let the import's asynchronous save land before TempDir cleanup
+		// removes its directory.
+		waitConfigWritten()
 		ConfigPath = origConfigPath
 		applyConfigSettings(&baseline)
 		wifiSSID, wifiPassword, wifiEnabled = origSSID, origPass, origWifi

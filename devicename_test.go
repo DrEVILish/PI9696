@@ -46,6 +46,7 @@ func TestControllerRenameAdoptsRequestedName(t *testing.T) {
 	if got := request("Stage-Left\n"); got != "Stage-Left" || name() != "Stage-Left" {
 		t.Fatalf("rename: adopted %q, device name %q", got, name())
 	}
+	waitConfigWritten() // persistConfig writes asynchronously
 	loadPersistedConfig()
 	if name() != "Stage-Left" {
 		t.Fatalf("the controller's name was not persisted: %q", name())

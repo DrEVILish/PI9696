@@ -120,17 +120,31 @@ func snapshotRecordingChannels(wav string, channels int) {
 			chans[i].Name = l
 		}
 	}
-	if err := writeRecordingChannels(wav, chans); err != nil {
+	// Not durable here: this runs under the app mutex as the take starts,
+	// and the take's finalize fsyncs the sidecar with the take, unlocked.
+	if err := writeRecordingChannels(wav, chans, false); err != nil {
 		logWarnf("channel names for %s: %v", filepath.Base(wav), err)
 	}
 }
 
-func writeRecordingChannels(wav string, chans []recChannel) error {
+// writeRecordingChannels replaces a take's sidecar. durable fsyncs it (see
+// writeFileAtomic); without it the write is still all-or-nothing on a clean
+// run but a power cut can lose it, for callers holding the app mutex that
+// leave the fsync to someone unlocked.
+func writeRecordingChannels(wav string, chans []recChannel, durable bool) error {
 	data, err := json.MarshalIndent(recChannelsFile{Channels: chans}, "", "  ")
 	if err != nil {
 		return err
 	}
-	return writeFileAtomic(channelsSidecar(wav), append(data, '\n'), 0o644)
+	path := channelsSidecar(wav)
+	if durable {
+		return writeFileAtomic(path, append(data, '\n'), 0o644)
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // recordingChannels returns a take's channels: its sidecar, else (older
@@ -187,7 +201,7 @@ func renameRecordingChannels(wav string, names map[int]string) error {
 		}
 		chans[num-1].Name = name
 	}
-	return writeRecordingChannels(wav, chans)
+	return writeRecordingChannels(wav, chans, true)
 }
 
 // migrateInfernoState moves inferno's saved state into infernoStateDir the
