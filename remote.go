@@ -1378,6 +1378,7 @@ type dashboardData struct {
 	PrefixFragment       template.HTML
 	TransportFragment    template.HTML
 	HyperdeckFragment    template.HTML
+	TimecodeFragment     template.HTML
 	LogLevelFragment     template.HTML
 	BrightnessFragment   template.HTML
 	AutoDimFragment      template.HTML
@@ -2457,6 +2458,7 @@ html[data-theme] body{background:transparent}
         </g>
 
         <text class="deck-text" x="410" y="122" text-anchor="middle">PI9696</text>
+        <text class="deck-text" id="tcText" x="410" y="140" text-anchor="middle"></text>
 
         <circle class="device-guide" cx="221" cy="162" r="7"/>
         <circle class="device-guide" cx="599" cy="162" r="7"/>
@@ -2491,6 +2493,10 @@ html[data-theme] body{background:transparent}
       </svg>
     </section>
     <div id="teleSock" hx-ext="ws" hx-ws:connect="/ws/telemetry" hx-target="#diskInfo" hx-swap="innerHTML" hidden></div>
+    <div class="field-row deck-status" id="chaseRow">
+      <button type="button" class="btn btn-secondary" id="chaseBtn" title="Play the selected take in sync with incoming timecode" onclick="toggleChase()">Arm Timecode Chase</button>
+      <span class="hint" id="chaseState"></span>
+    </div>
     <div id="config" class="deck-status" hx-get="/api/config" hx-trigger="load" hx-swap="innerHTML">Loading...</div>
   </div>
 
@@ -2535,6 +2541,7 @@ html[data-theme] body{background:transparent}
         <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-metadata" id="tab-metadata">Metadata</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-transport" id="tab-transport">Transport</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-display" id="tab-display">Display</button>
+        <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-timecode" id="tab-timecode">Timecode</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-demo" id="tab-demo">Demo</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-logging" id="tab-logging">Logging</button>
         <button type="button" class="tab" role="tab" aria-selected="false" data-pane="pane-config" id="tab-config">Config</button>
@@ -2997,6 +3004,32 @@ chMeters.addEventListener('keydown', function(ev) {
   }
 });
 
+// Timecode readouts: the deck line, the Status row and the chase button.
+var chaseArmed = false;
+function applyTimecode(tc) {
+  if (!tc) return;
+  var line = tc.source === 'Off' ? '' : ('TC IN ' + tc.in.replace(/^(LTC|MTC) /, '$1 ') + (tc.out ? '  OUT ' + tc.out : ''));
+  var t = document.getElementById('tcText');
+  if (t && t.textContent !== line) t.textContent = line;
+  var st = document.getElementById('tcstatus');
+  var long = tc.inLong + (tc.out ? ' · out ' + tc.out : '') + (tc.peers ? ' · ' + tc.peers : '');
+  if (st && st.textContent !== long) st.textContent = long;
+  chaseArmed = !!tc.armed;
+  var b = document.getElementById('chaseBtn');
+  if (b) {
+    var label = chaseArmed ? 'Disarm Chase' : 'Arm Timecode Chase';
+    if (b.textContent !== label) b.textContent = label;
+    b.disabled = tc.source === 'Off' && !chaseArmed;
+  }
+  var cs = document.getElementById('chaseState');
+  var cl = chaseArmed ? (tc.take + ': ' + tc.chase) : '';
+  if (cs && cs.textContent !== cl) cs.textContent = cl;
+}
+function toggleChase() {
+  var body = new URLSearchParams({arm: chaseArmed ? '0' : '1'});
+  fetch('/api/timecode/arm', {method: 'POST', body: body, headers: {'Content-Type': 'application/x-www-form-urlencoded'}});
+}
+
 function applyMeter(m) {
   FLOOR = m.floorDB;
 
@@ -3011,6 +3044,8 @@ function applyMeter(m) {
   if (txEl && typeof m.txShort === 'string' && txEl.textContent !== m.txShort) {
     txEl.textContent = m.txShort;
   }
+
+  applyTimecode(m.timecode);
 
   var paused = !!m.paused;
   // Reels and the tape-path pulse stop moving while paused (frozen transport)
@@ -3302,6 +3337,10 @@ connectMeterSocket();
         {{.AutoDimFragment}}
       </section>
 
+      <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-timecode" id="pane-timecode">
+        {{.TimecodeFragment}}
+      </section>
+
       <section class="settings-group field-group settings-pane" role="tabpanel" aria-labelledby="tab-demo" id="pane-demo">
         {{.DemoFragment}}
       </section>
@@ -3418,6 +3457,7 @@ func buildDashboardData(r *http.Request) dashboardData {
 		PrefixFragment:       frag(filePrefixFragmentTmpl, filePrefixView()),
 		TransportFragment:    frag(selectFragmentTmpl, transportSelect()),
 		HyperdeckFragment:    frag(switchFragmentTmpl, hyperdeckSwitch()),
+		TimecodeFragment:     tcSettingsFragment(),
 		LogLevelFragment:     frag(selectFragmentTmpl, logLevelSelect()),
 		ThemeFragment:        frag(themeFragmentTmpl, themePicker()),
 		TintFragment:         frag(tintFragmentTmpl, currentTintView()),
@@ -3587,6 +3627,7 @@ var configTmpl = template.Must(template.New("config").Parse(`
 <tr><td>Tag</td><td>{{.Tag}}</td></tr>
 <tr><td>Inferno</td><td>{{.Inferno}}</td></tr>
 <tr><td>Inferno TX</td><td id="txstatus">{{.TXShort}}</td></tr>
+<tr><td>Timecode</td><td id="tcstatus"></td></tr>
 <tr><td>Clock</td><td>{{.Clock}}</td></tr>
 <tr><td>Network</td><td>{{.Network}}</td></tr>
 <tr><td>Uptime</td><td>{{.Uptime}}</td></tr>
@@ -4002,6 +4043,8 @@ type meterResponse struct {
 	// ChannelNames label the meter strips: the unit's RX channel names as
 	// a network controller named them (channelnames.go).
 	ChannelNames []string `json:"channelNames"`
+	// Timecode is the timecode input, output and chase (tcweb.go).
+	Timecode tcMeterView `json:"timecode"`
 }
 
 // jsonSafeDB coerces a dB level to a JSON-encodable value. encoding/json will
@@ -4027,6 +4070,7 @@ func jsonSafeDB(v float64) float64 {
 func currentMeterResponse() meterResponse {
 	resp := buildMeterLevels()
 	resp.ChannelNames = displayChannelNames(len(resp.Channels))
+	resp.Timecode = currentTimecodeStatus()
 	return resp
 }
 
@@ -4672,6 +4716,7 @@ func newRemoteMux() *http.ServeMux {
 	mux.HandleFunc("GET /api/meter", requireAuth(handleAPIMeter))
 	mux.HandleFunc("GET /ws/meter", requireAuth(websocket.Handler(handleWSMeter).ServeHTTP))
 	mux.HandleFunc("GET /ws/telemetry", requireAuth(websocket.Handler(handleWSTelemetry).ServeHTTP))
+	registerTimecodeRoutes(mux, requireAuth)
 	mux.HandleFunc("GET /api/config", requireAuth(handleAPIConfig))
 	mux.HandleFunc("POST /api/device-name", requireAuth(handleAPIDeviceName))
 	mux.HandleFunc("POST /api/settings/vu-range", requireAuth(handleAPISettingsVURange))

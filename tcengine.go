@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"pi9696/alsapcm"
+	"pi9696/hardware"
 )
 
 // The timecode engine: what the unit reads, writes and stamps.
@@ -737,5 +738,92 @@ func wavTimeReference(path string) (int64, error) {
 		if _, err := f.Seek(size+size&1, io.SeekCurrent); err != nil {
 			return 0, err
 		}
+	}
+}
+
+// --- Front panel (OLED) ------------------------------------------------------
+
+// renderTimecodeMenu draws the Timecode submenu. Values fit one 256px row.
+// Caller holds the app mutex (render).
+func renderTimecodeMenu() {
+	out := "off"
+	if tcOutputOn {
+		out = "on"
+	}
+	chase := "arm"
+	if tcChase.armed {
+		chase = "armed"
+	}
+	in, _ := tcStatusText()
+	renderEditableMenu([]hardware.MenuItem{
+		{Label: "Source →", Value: tcSourceNames[tcSourceIdx]},
+		{Label: "Record →", Value: tcRecordNames[tcRecordIdx]},
+		{Label: "Output →", Value: out},
+		{Label: "Rate →", Value: tcRates[tcRateIdx].Name},
+		{Label: "Chase", Value: chase},
+		{Label: "In", Value: in},
+		{Label: "← Back", Value: ""},
+	})
+}
+
+// adjustTimecodeSetting steps the edited row of the Timecode submenu.
+// Caller holds the app mutex.
+func adjustTimecodeSetting(row, direction int) {
+	step := func(i, n int) int { return ((i+direction)%n + n) % n }
+	switch row {
+	case 0:
+		tcSourceIdx = step(tcSourceIdx, len(tcSourceNames))
+		if tcSourceIdx == tcSourceOff {
+			tcDisarmLocked("timecode source off")
+		}
+	case 1:
+		tcRecordIdx = step(tcRecordIdx, len(tcRecordNames))
+	case 2:
+		tcOutputOn = !tcOutputOn
+	case 3:
+		tcRateIdx = step(tcRateIdx, len(tcRates))
+	default:
+		return
+	}
+	tcSettingsChangedLocked()
+	settingChanged()
+}
+
+// handleTimecodeClick: Source/Record/Output/Rate are press-to-edit; Chase
+// arms or disarms the selected take; Back returns to Settings. Caller
+// holds the app mutex.
+func handleTimecodeClick() {
+	if editingParameter {
+		editingParameter = false
+		return
+	}
+	switch selectedMenu {
+	case 0, 1, 2, 3:
+		editingParameter = true
+	case 4:
+		if tcChase.armed {
+			tcDisarmLocked("from the front panel")
+		} else if err := tcArmLocked(); err != nil {
+			showSysNotice("CHASE: " + strings.ToUpper(tcShortReason(err)))
+			logWarnf("Chase not armed: %v", err)
+		}
+	case 6:
+		currentState = StateSettings
+		selectedMenu = 11
+		menuScrollOffset = 0
+	}
+}
+
+// tcShortReason fits an arm refusal into the panel's notice line.
+func tcShortReason(err error) string {
+	switch msg := err.Error(); {
+	case strings.Contains(msg, "source"):
+		return "no source"
+	case strings.Contains(msg, "stop"):
+		return "busy"
+	case strings.Contains(msg, "no take"):
+		return "no take"
+	default:
+		return "format mismatch"
 	}
 }

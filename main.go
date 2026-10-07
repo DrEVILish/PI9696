@@ -1072,6 +1072,7 @@ const (
 	StateAudio      // Audio submenu: Sample Rate, Channel Count, Tag, Prefix
 	StateMetering   // Metering submenu: Meter Range, Peak Hold
 	StateDisplay    // Display submenu: Brightness, Auto Dim, Menu Timeout, Back
+	StateTimecode   // Timecode submenu: Source, Record, Output, Rate, Chase, input readout, Back
 )
 
 // Recording output is WAV (PCM 24-bit) only - see OutputBitsPerSample and the
@@ -1575,6 +1576,13 @@ func onEncoderRotate(direction int) {
 			adjustRecordPrefix(direction)
 		}
 
+	case StateTimecode:
+		if !editingParameter {
+			navigateMenu(direction)
+			break
+		}
+		adjustTimecodeSetting(selectedMenu, direction)
+
 	case StateMetering:
 		if !editingParameter {
 			navigateMenu(direction)
@@ -1667,6 +1675,9 @@ func onEncoderClick() {
 
 	case StateAudio:
 		handleAudioClick()
+
+	case StateTimecode:
+		handleTimecodeClick()
 
 	case StateMetering:
 		handleMeteringClick()
@@ -1916,7 +1927,7 @@ func applyMenuTimeoutLocked(now time.Time) {
 	switch currentState {
 	case StateIdleBrowse:
 		exitIdleBrowse()
-	case StateSettings, StateAudio, StateMetering, StateDisplay,
+	case StateSettings, StateAudio, StateMetering, StateDisplay, StateTimecode,
 		StateCopyFiles, StateSystemOptions, StateNetworkInfo, StateRemoteInfo,
 		StateWifi, StateWifiQR, StateConfirm:
 		currentState = StateIdle
@@ -1931,7 +1942,9 @@ func navigateMenu(direction int) {
 
 	switch currentState {
 	case StateSettings:
-		maxItems = 12 // Audio, Metering, Display, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, Monitoring, WiFi, Exit
+		maxItems = 13 // Audio, Metering, Display, Logging, Copy Files, System Options, Network Info, Remote Access, Restart Inferno, Monitoring, WiFi, Timecode, Exit
+	case StateTimecode:
+		maxItems = 7 // Source, Record, Output, Rate, Chase, In, Back
 	case StateAudio:
 		maxItems = 6 // Sample Rate, Channel Count, Tag, Prefix, TX status, Back
 	case StateMetering:
@@ -2022,7 +2035,11 @@ func handleSettingsClick() {
 		currentState = StateWifi
 		selectedMenu = 0
 		menuScrollOffset = 0
-	case 11: // Exit
+	case 11: // Timecode submenu
+		currentState = StateTimecode
+		selectedMenu = 0
+		menuScrollOffset = 0
+	case 12: // Exit
 		currentState = StateIdle
 		menuScrollOffset = 0
 	}
@@ -4906,6 +4923,8 @@ func render() {
 		renderWifiQRScreen()
 	case StateAudio:
 		renderAudioMenu()
+	case StateTimecode:
+		renderTimecodeMenu()
 	case StateMetering:
 		renderMeteringMenu()
 	case StateDisplay:
@@ -5461,6 +5480,7 @@ func renderSettingsMenu() {
 		{Label: "Restart Inferno", Value: getInfernoStatusText()},
 		{Label: "Monitoring", Value: map[bool]string{true: "on", false: "off"}[monitoring]},
 		{Label: "WiFi →", Value: map[bool]string{true: "on", false: "off"}[wifiEnabled]},
+		{Label: "Timecode →", Value: tcSourceNames[tcSourceIdx]},
 		{Label: "Exit", Value: ""},
 	}
 
@@ -5836,6 +5856,12 @@ func renderAudioMenu() {
 		{Label: "TX", Value: txStatusShortLocked()},
 		{Label: "← Back", Value: ""},
 	}
+	renderEditableMenu(items)
+}
+
+// renderEditableMenu draws a submenu of press-to-edit rows (Audio,
+// Timecode): four visible rows, scrolling, "»" on the row being edited.
+func renderEditableMenu(items []hardware.MenuItem) {
 	totalItems := len(items)
 	maxVisibleItems := 4
 
