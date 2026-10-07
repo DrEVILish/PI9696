@@ -304,3 +304,31 @@ func TestChaseRestartAnchors(t *testing.T) {
 		t.Fatalf("option off: take start %d, want its own timecode (7)", ref)
 	}
 }
+
+// The playback position comes in up to a packet ahead of the media clock:
+// the offset estimate is the largest recent one, and a stream restart (a
+// jump far beyond packet jitter) starts the history over.
+func TestStreamOffsetTakesTheRunningMaximum(t *testing.T) {
+	tcMu.Lock()
+	defer tcMu.Unlock()
+	tcMedia.dHist, tcMedia.dNext = [tcOffsetWindow]tcOffsetSample{}, 0
+	now := time.Now()
+	const sr = 48000
+	// True offset 1000; each estimate is 0..47 samples short (a 48-sample
+	// packet's phase).
+	var got float64
+	for i := 0; i < 100; i++ {
+		got = tcOffsetMaxLocked(1000-float64((i*29)%48), now.Add(time.Duration(i)*time.Millisecond), sr)
+	}
+	if got != 1000 {
+		t.Fatalf("offset %v, want the true 1000", got)
+	}
+	// Old estimates age out.
+	if got = tcOffsetMaxLocked(990, now.Add(3*time.Second), sr); got != 990 {
+		t.Fatalf("after 2 s only the new estimate counts: %v", got)
+	}
+	// A restart: a new offset far away replaces the history at once.
+	if got = tcOffsetMaxLocked(50000, now.Add(3*time.Second+time.Millisecond), sr); got != 50000 {
+		t.Fatalf("after a restart: %v", got)
+	}
+}
