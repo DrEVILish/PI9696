@@ -173,8 +173,8 @@ Settings → Timecode on the panel and the Timecode pane of the dashboard.
   take plays it is the take's own timecode at the playhead, to the sample;
   otherwise the incoming timecode when locked (a relay), else the time of
   day at the selected Rate. Pausing stops it; a locate sends an MTC full
-  frame. Measured on the network, the relayed code trails the source by
-  about 11 ms (the unit's own receive latency).
+  frame. Measured on the network, the relayed code is within 0.5 ms of the
+  source.
 - **Recording** (Record: Off / Metadata / Audio, default Metadata). The
   take's first sample is stamped with the incoming timecode, or the time of
   day without a lock, as the BWF `bext` time reference (samples since
@@ -189,10 +189,22 @@ Settings → Timecode on the panel and the Timecode pane of the dashboard.
   Arm Timecode Chase under the deck; `POST /api/timecode/arm`). When the
   input locks inside the take, playback starts at the position the code
   names; the playback pump then skips or holds back samples whenever the
-  take is more than 10 ms off the code, which aligns the start to the
+  take is more than 1 ms off the code, which aligns the start to the
   sample and absorbs a source drifting against the network clock. Drift is
-  measured every 20 ms: a warning past one frame, a mean/max summary every
-  10 s, and every correction logged. The code stopping or leaving the take
+  measured on every chunk: a warning past 10 ms, a mean/max summary every
+  10 s, and every correction logged. Measured on the network over 57 s
+  chases: within 0.5 ms of the source, drift max 0.21 ms per 10 s, and no
+  correction after the start.
+- **Timing by the media clock** (`tcmedia.go`). The inferno plugin drives
+  the capture and transmit streams by the network's PTP media clock;
+  after every read and write the unit records each stream's hardware
+  position (`snd_pcm_delay`), which ties a transmit position to the
+  capture position of the same media instant, sample for sample. The
+  chase and the relay compare what goes on the wire with the code at that
+  instant, plus inferno's receive latency (10 ms) for LTC, which reaches
+  the capture that much after the source sent it. MTC labels, which arrive
+  over the network directly, are placed on the capture stream on arrival
+  and averaged over the last 16. The code stopping or leaving the take
   stops playback and keeps the take armed; a jump of a second or more
   relocates; any transport key disarms. A take without timecode starts at
   00:00:00:00 (its `bext` time reference is used for takes from elsewhere).
