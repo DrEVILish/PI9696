@@ -454,6 +454,9 @@ def main():
         route(a.pia_name, "E2ESINK", ch)
         time.sleep(3)
         log("Pi-A: play")
+        # Load this take first: Play starts the loaded take, and a selection
+        # left from earlier would play a different one.
+        pia.post("/api/playback/select", {"file": os.path.relpath(take, "/rec")})
         pia.post("/api/input/button/play")
         time.sleep(1)
         log("  playing: %s" % pia.meter().get("playing"))
