@@ -6126,6 +6126,11 @@ func startFakeTake(t *testing.T) []string {
 	mutex.Unlock()
 	t.Cleanup(func() {
 		mutex.Lock()
+		// Un-fake Inferno before stopping: with it still "running", the
+		// take's finalize resumed the input monitor, which ran the fake
+		// ffmpeg into this test's temp dir while cleanup removed it
+		// ("directory not empty").
+		infernoState = origState
 		if isRecording {
 			stopRecording()
 		}
