@@ -247,7 +247,9 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 	// anything reads the FIFO (playback stands the monitor down), or the
 	// TIMECODE channel stops reaching the LTC reader mid-chase.
 	fifo := fifoFeed{fd: fd, ctl: rxFifoCtl, dropWhenFull: true}
-	var droppedAt time.Time
+	var droppedAt, backlogAt time.Time
+	var maxBacklog int64
+	defer func() { logDebugf("in-process inferno: capture loop's largest backlog %d frames", maxBacklog) }()
 	for {
 		select {
 		case <-quit:
@@ -284,6 +286,21 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 		tcFeedLTC(dev, frames[:n*channels], channels, fifo.pos, time.Now(), rate)
 		fifo.pos += int64(n)
 		tcNoteCapture(dev, fifo.pos, rate)
+		// The plugin only reports an overrun once the loop is a whole ring
+		// behind; past half of one, frames it has not read yet start being
+		// overwritten (a take then loses a block and repeats the next).
+		if c, ok := dev.(streamClocks); ok {
+			if cp := c.CaptureClock(); cp.Valid {
+				backlog := cp.Hw - cp.Appl
+				if backlog > maxBacklog {
+					maxBacklog = backlog
+				}
+				if backlog > int64(txRingFrames(rate)/2) && time.Since(backlogAt) >= infernoLogSummaryEvery {
+					logWarnf("in-process inferno: capture loop %d frames (%.0f ms) behind the network", backlog, float64(backlog)*1000/float64(rate))
+					backlogAt = time.Now()
+				}
+			}
+		}
 		out := fifo.layout(frames[:n*channels], channels)
 		if err := fifo.write(framesAsS32LE(out, buf), quit, 2*time.Millisecond); err != nil {
 			if err != errFifoQuit {
