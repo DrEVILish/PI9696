@@ -64,6 +64,13 @@ static void pcm_writei(snd_pcm_t *pcm, const void *buf, int frames, int *out_fra
 	*out_err = 0;
 }
 
+static void pcm_delay(snd_pcm_t *pcm, long *out_frames, int *out_err) {
+	snd_pcm_sframes_t d = 0;
+	int err = snd_pcm_delay(pcm, &d);
+	*out_frames = (long)d;
+	*out_err = err < 0 ? err : 0;
+}
+
 static void pcm_prepare(snd_pcm_t *pcm, int *out_err) {
 	int err = snd_pcm_prepare(pcm);
 	*out_err = err < 0 ? err : 0;
@@ -108,12 +115,18 @@ type Device struct {
 	closed        bool
 	// xruns counts overruns/underruns recovered in place. Each one is a gap
 	// in the audio that Read/Write otherwise hide from the caller.
-	xruns atomic.Int64
+	xruns     atomic.Int64
+	playDelay atomic.Int64
 }
 
 // Xruns returns how many overruns (capture) and underruns (playback) the
 // device has recovered from since it was opened.
 func (d *Device) Xruns() int64 { return d.xruns.Load() }
+
+// PlaybackDelay is the playback stream's delay after the last write, in
+// frames (snd_pcm_delay): how long until a frame written now is played.
+// 0 before the first write.
+func (d *Device) PlaybackDelay() int64 { return d.playDelay.Load() }
 
 // Open opens the named ALSA device for both capture and playback at the given
 // rate and channel count. Both settings come from the app's audio settings, so
@@ -212,6 +225,14 @@ func (d *Device) Write(buf []int32) (int, error) {
 		var frames, rc C.int
 		C.pcm_writei(d.play, unsafe.Pointer(&buf[0]), C.int(want), &frames, &rc)
 		if rc == 0 {
+			// How far behind the write the stream plays, for the
+			// timecode output and the chase (PlaybackDelay).
+			var delay C.long
+			var drc C.int
+			C.pcm_delay(d.play, &delay, &drc)
+			if drc == 0 && delay >= 0 {
+				d.playDelay.Store(int64(delay))
+			}
 			return int(frames), nil
 		}
 		if !recoverable(rc) {

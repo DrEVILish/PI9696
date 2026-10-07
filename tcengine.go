@@ -436,6 +436,18 @@ func txRingFrames(rate int) int {
 	return ring
 }
 
+// txDelayFrames is how long until a frame written to holder now is
+// played, in frames: the device's own figure (snd_pcm_delay after its last
+// write) when it has one, else the full ring.
+func txDelayFrames(holder any, rate int) int64 {
+	if d, ok := holder.(interface{ PlaybackDelay() int64 }); ok {
+		if n := d.PlaybackDelay(); n > 0 {
+			return n
+		}
+	}
+	return int64(txRingFrames(rate))
+}
+
 // tcIdleGen writes the free-running LTC (tcFreeRun) for the idle feeder.
 // It keeps its own sample count, so the code is continuous, and relocates
 // when that drifts more than half a frame from where it should be.
@@ -448,7 +460,7 @@ type tcIdleGen struct {
 
 // fill writes the TIMECODE channel of buf (frames of channels) for the
 // next chunk, or silence when the output is off.
-func (g *tcIdleGen) fill(buf []int32, channels, sampleRate int) {
+func (g *tcIdleGen) fill(buf []int32, channels, sampleRate int, delay int64) {
 	if !tcLive.output.Load() || channels < 2 {
 		g.valid = false
 		for i := channels - 1; i < len(buf); i += channels {
@@ -460,7 +472,7 @@ func (g *tcIdleGen) fill(buf []int32, channels, sampleRate int) {
 	if g.clock != nil {
 		now = g.clock
 	}
-	at := now().Add(time.Duration(txRingFrames(sampleRate)) * time.Second / time.Duration(sampleRate))
+	at := now().Add(time.Duration(delay) * time.Second / time.Duration(sampleRate))
 	frames, rate := tcFreeRun(at)
 	r := tcRates[rate]
 	target := int64(tcSecondsOfFrames(frames, r) * float64(sampleRate))

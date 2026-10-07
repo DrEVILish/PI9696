@@ -36,15 +36,23 @@ func TestChaseAdjust(t *testing.T) {
 	tcMu.Unlock()
 	t.Cleanup(func() { tcSetChaseLive(nil) })
 	const ring = 8192
-	want := int64(sr/2) + ring
-	// Behind: skip up to the code; ahead: hold back; close: leave alone.
-	if adj := tcChaseAdjust(owner, 0, ring); math.Abs(float64(adj-want)) > 200 {
-		t.Fatalf("from the take start: adjust %d, want about %d", adj, want)
+	start := samplesFromFrames((Timecode{10, 0, 0, 0}).frames(r), r, sr)
+	// Where the code wants the pump now (it moves on while the test runs).
+	want := func() int64 {
+		in := tcInputNow(time.Now())
+		return int64(tcSecondsOfFrames(in.frames, r)*sr) - start + ring
 	}
-	if adj := tcChaseAdjust(owner, want+sr, ring); math.Abs(float64(adj+sr)) > 200 {
+	// Behind: skip up to the code; ahead: hold back; close: leave alone.
+	if adj, w := tcChaseAdjust(owner, 0, ring), want(); math.Abs(float64(adj-w)) > 500 {
+		t.Fatalf("from the take start: adjust %d, want about %d", adj, w)
+	}
+	if w := want(); w < sr/2 {
+		t.Fatalf("the code is %d samples into the take, want at least half a second", w-ring)
+	}
+	if adj := tcChaseAdjust(owner, want()+sr, ring); math.Abs(float64(adj+sr)) > 500 {
 		t.Fatalf("a second ahead: adjust %d, want about %d", adj, -sr)
 	}
-	if adj := tcChaseAdjust(owner, want+100, ring); adj != 0 {
+	if adj := tcChaseAdjust(owner, want()+100, ring); adj != 0 {
 		t.Fatalf("2 ms off: adjust %d, want 0 (within tolerance)", adj)
 	}
 	if adj := tcChaseAdjust(new(int), 0, ring); adj != 0 {

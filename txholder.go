@@ -599,7 +599,7 @@ func startTxIdleFeeder(holder txFrameWriter, channels, rate int) {
 				continue
 			}
 			start := time.Now()
-			tc.fill(buf, channels, rate)
+			tc.fill(buf, channels, rate, txDelayFrames(holder, rate))
 			if _, err := txWrite(holder, buf); err != nil {
 				return
 			}
@@ -697,14 +697,14 @@ func playoutFor(file string, pos time.Duration) txPlayout {
 
 // publish makes this pump the source of the playing take's timecode
 // position (tcPlay): written is the next take frame it writes.
-func (p txPlayout) publish(owner any, written int64, paused bool) {
+func (p txPlayout) publish(owner any, written, delay int64, paused bool) {
 	tcMu.Lock()
 	defer tcMu.Unlock()
 	if tcPlay.owner != owner {
 		tcPlay.owner = owner
 		tcPlay.timeRef, tcPlay.rate, tcPlay.sr = p.tcRef, p.tcRate, p.sampleRate
-		tcPlay.ring = int64(txRingFrames(p.sampleRate))
 	}
+	tcPlay.ring = delay
 	tcPlay.active = true
 	tcPlay.written, tcPlay.paused, tcPlay.at = written, paused, time.Now()
 }
@@ -878,7 +878,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 		}
 		if paused {
 			takeOver()
-			p.publish(cmd, written, true)
+			p.publish(cmd, written, txDelayFrames(holder, p.sampleRate), true)
 			if _, err := txWrite(holder, zeros); err != nil {
 				break
 			}
@@ -896,7 +896,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 				}
 				// Chasing timecode (tcchase.go): skip or hold back to
 				// meet the code before writing.
-				if adj := tcChaseAdjust(cmd, written, int64(txRingFrames(max(p.sampleRate, 1)))); adj > 0 {
+				if adj := tcChaseAdjust(cmd, written, txDelayFrames(holder, max(p.sampleRate, 1))); adj > 0 {
 					skip := min(adj, int64(full))
 					carry = carry[skip*int64(frameBytes):]
 					written += skip
@@ -920,7 +920,7 @@ func pumpPlaybackToTx(cmd *exec.Cmd, src io.Reader, holder txFrameWriter, p txPl
 				if enc != nil && tcLive.output.Load() {
 					enc.fill(samples[:full*channels], channels, channels-1, p.tcRef+written)
 				}
-				p.publish(cmd, written, false)
+				p.publish(cmd, written, txDelayFrames(holder, p.sampleRate), false)
 				if _, err := txWrite(holder, samples[:full*channels]); err != nil {
 					failed = true
 					break

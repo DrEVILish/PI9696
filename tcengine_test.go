@@ -215,7 +215,7 @@ func TestIdleFeederTimecodeIsContinuous(t *testing.T) {
 	var all []int32
 	buf := make([]int32, txPumpFrames*3)
 	for i := 0; i < 50; i++ {
-		g.fill(buf, 3, sr)
+		g.fill(buf, 3, sr, 8192)
 		all = append(all, buf...)
 		clock = clock.Add(time.Duration(txPumpFrames) * time.Second / sr)
 	}
@@ -239,7 +239,7 @@ func TestIdleFeederTimecodeIsContinuous(t *testing.T) {
 	for i := range buf {
 		buf[i] = 1
 	}
-	g.fill(buf, 3, sr)
+	g.fill(buf, 3, sr, 8192)
 	for i := 2; i < len(buf); i += 3 {
 		if buf[i] != 0 {
 			t.Fatal("TIMECODE not silent with the output off")
