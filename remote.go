@@ -1538,41 +1538,75 @@ var brightnessFragmentTmpl = template.Must(template.New("brightness").Parse(`<di
 </div>
 </div>`))
 
-// autoDimFragmentTmpl is the Display -> Auto Dim setting: an on/off switch
-// for the dim-then-off idle behavior. Mirrors the WiFi switch markup.
-var autoDimFragmentTmpl = template.Must(template.New("autodim").Parse(`<div id="autodim" class="setting-cell">
+// switchFragmentTmpl renders every on/off setting (Auto Dim, HyperDeck
+// Control, Demo Mode, Monitoring) as the same switch markup; Readout labels
+// the two states and Hint, when set, adds a caveat row under the switch.
+var switchFragmentTmpl = template.Must(template.New("switch").Parse(`<div id="{{.Id}}" class="setting-cell">
 <div class="field-row">
-<form hx-post="/api/settings/dim" hx-target="#autodim" hx-swap="outerHTML">
-<label class="label" for="autoDimToggle">Auto Dim</label>
-<label class="switch" for="autoDimToggle">
-<input id="autoDimToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
+<form hx-post="{{.Post}}" hx-target="#{{.Id}}" hx-swap="outerHTML">
+<label class="label" for="{{.InputId}}">{{.Label}}</label>
+<label class="switch" for="{{.InputId}}">
+<input id="{{.InputId}}" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
 <span class="switch-track"><span class="switch-thumb"></span></span>
-<span class="switch-readout" data-on="AUTO" data-off="MANUAL"></span>
+<span class="switch-readout" {{.Readout}}></span>
 </label>
 </form>
 </div>
-</div>`))
+{{if .Hint}}<div class="field-row"><span class="hint field-hint">{{.Hint}}</span></div>
+{{end}}</div>`))
 
-// brightnessView/autoDimView carry the exact values the fragments render, so
-// both the dashboard and the htmx POST handlers share one template.
-type brightnessView struct {
-	Pct int
+// switchView is one on/off setting row; the *Switch functions build it
+// from the live flag under the app mutex.
+type switchView struct {
+	Id, Post, InputId, Label, Hint string
+	// Readout is the data-on/data-off pair. Passed whole: html/template
+	// reads a templated "data-on" value as an on* event handler and would
+	// JS-quote it.
+	Readout template.HTMLAttr
+	Enabled bool
 }
 
-type autoDimView struct {
-	Enabled bool
+func readout(on, off string) template.HTMLAttr {
+	return template.HTMLAttr(`data-on="` + on + `" data-off="` + off + `"`)
+}
+
+func autoDimSwitch() switchView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return switchView{Id: "autodim", Post: "/api/settings/dim", InputId: "autoDimToggle", Label: "Auto Dim", Readout: readout("AUTO", "MANUAL"), Enabled: autoDimEnabled}
+}
+
+// hyperdeckSwitch is Transport -> HyperDeck Control (TCP 9993); the hint
+// states the no-auth caveat so the toggle reads as an informed choice.
+func hyperdeckSwitch() switchView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return switchView{Id: "hyperdeck", Post: "/api/settings/hyperdeck", InputId: "hyperdeckToggle", Label: "HyperDeck Control", Readout: readout("ON", "OFF"),
+		Hint: "TCP 9993, Blackmagic protocol, no auth while on", Enabled: hyperdeckEnabled}
+}
+
+func demoSwitch() switchView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return switchView{Id: "demo", Post: "/api/settings/demo", InputId: "demoToggle", Label: "Demo Mode", Readout: readout("DEMO", "LIVE"), Enabled: demoMode}
+}
+
+func monitorSwitch() switchView {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return switchView{Id: "monitor", Post: "/api/settings/monitor", InputId: "monitorToggle", Label: "Monitoring", Readout: readout("ON", "OFF"), Enabled: monitoring}
+}
+
+// brightnessView carries the exact value the fragment renders, so both the
+// dashboard and the htmx POST handler share one template.
+type brightnessView struct {
+	Pct int
 }
 
 func brightnessViewData() brightnessView {
 	mutex.Lock()
 	defer mutex.Unlock()
 	return brightnessView{Pct: oledBrightnessPct}
-}
-
-func autoDimViewData() autoDimView {
-	mutex.Lock()
-	defer mutex.Unlock()
-	return autoDimView{Enabled: autoDimEnabled}
 }
 
 func handleAPISettingsBrightness(w http.ResponseWriter, r *http.Request) {
@@ -1601,35 +1635,7 @@ func handleAPISettingsAutoDim(w http.ResponseWriter, r *http.Request) {
 	noteActivity()
 	settingChanged()
 	mutex.Unlock()
-	renderFragment(w, autoDimFragmentTmpl, autoDimViewData())
-}
-
-// hyperdeckFragmentTmpl is the Transport -> HyperDeck Control setting: an
-// on/off switch for the Blackmagic HyperDeck protocol port (TCP 9993).
-// Mirrors the Demo Mode switch; the hint states the no-auth caveat so the
-// toggle reads as an informed choice, not a footnote.
-var hyperdeckFragmentTmpl = template.Must(template.New("hyperdeck").Parse(`<div id="hyperdeck" class="setting-cell">
-<div class="field-row">
-<form hx-post="/api/settings/hyperdeck" hx-target="#hyperdeck" hx-swap="outerHTML">
-<label class="label" for="hyperdeckToggle">HyperDeck Control</label>
-<label class="switch" for="hyperdeckToggle">
-<input id="hyperdeckToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="switch-track"><span class="switch-thumb"></span></span>
-<span class="switch-readout" data-on="ON" data-off="OFF"></span>
-</label>
-</form>
-</div>
-<div class="field-row"><span class="hint field-hint">TCP 9993, Blackmagic protocol, no auth while on</span></div>
-</div>`))
-
-type hyperdeckView struct {
-	Enabled bool
-}
-
-func hyperdeckViewData() hyperdeckView {
-	mutex.Lock()
-	defer mutex.Unlock()
-	return hyperdeckView{Enabled: hyperdeckEnabled}
+	renderFragment(w, switchFragmentTmpl, autoDimSwitch())
 }
 
 func handleAPISettingsHyperdeck(w http.ResponseWriter, r *http.Request) {
@@ -1639,34 +1645,7 @@ func handleAPISettingsHyperdeck(w http.ResponseWriter, r *http.Request) {
 	settingChanged()
 	noteActivity()
 	mutex.Unlock()
-	renderFragment(w, hyperdeckFragmentTmpl, hyperdeckViewData())
-}
-
-// demoFragmentTmpl is the Demo -> Demo Mode setting: an on/off switch for
-// the simulated-audio demonstration mode. Mirrors the Auto Dim switch.
-var demoFragmentTmpl = template.Must(template.New("demo").Parse(`<div id="demo" class="setting-cell">
-<div class="field-row">
-<form hx-post="/api/settings/demo" hx-target="#demo" hx-swap="outerHTML">
-<label class="label" for="demoToggle">Demo Mode</label>
-<label class="switch" for="demoToggle">
-<input id="demoToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="switch-track"><span class="switch-thumb"></span></span>
-<span class="switch-readout" data-on="DEMO" data-off="LIVE"></span>
-</label>
-</form>
-</div>
-</div>`))
-
-// demoView carries the demo-mode flag the fragment renders, so both the
-// dashboard and the htmx POST handler share one template.
-type demoView struct {
-	Enabled bool
-}
-
-func demoViewData() demoView {
-	mutex.Lock()
-	defer mutex.Unlock()
-	return demoView{Enabled: demoMode}
+	renderFragment(w, switchFragmentTmpl, hyperdeckSwitch())
 }
 
 func handleAPISettingsDemoMode(w http.ResponseWriter, r *http.Request) {
@@ -1681,34 +1660,7 @@ func handleAPISettingsDemoMode(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `<span class="err">BUSY - STOP FIRST</span>`)
 		return
 	}
-	renderFragment(w, demoFragmentTmpl, demoViewData())
-}
-
-// monitorFragmentTmpl is the Audio -> Monitoring setting: an on/off switch
-// for the input monitor. Mirrors the Demo Mode switch.
-var monitorFragmentTmpl = template.Must(template.New("monitor").Parse(`<div id="monitor" class="setting-cell">
-<div class="field-row">
-<form hx-post="/api/settings/monitor" hx-target="#monitor" hx-swap="outerHTML">
-<label class="label" for="monitorToggle">Monitoring</label>
-<label class="switch" for="monitorToggle">
-<input id="monitorToggle" name="enabled" type="checkbox" {{if .Enabled}}checked{{end}} onchange="this.form.requestSubmit()">
-<span class="switch-track"><span class="switch-thumb"></span></span>
-<span class="switch-readout" data-on="ON" data-off="OFF"></span>
-</label>
-</form>
-</div>
-</div>`))
-
-// monitorView carries the monitoring flag the fragment renders, so both the
-// dashboard and the htmx POST handler share one template.
-type monitorView struct {
-	Enabled bool
-}
-
-func monitorViewData() monitorView {
-	mutex.Lock()
-	defer mutex.Unlock()
-	return monitorView{Enabled: monitoring}
+	renderFragment(w, switchFragmentTmpl, demoSwitch())
 }
 
 func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
@@ -1737,7 +1689,7 @@ func handleAPISettingsMonitor(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(3 * time.Second):
 		}
 	}
-	renderFragment(w, monitorFragmentTmpl, monitorViewData())
+	renderFragment(w, switchFragmentTmpl, monitorSwitch())
 }
 
 var channelCountFragmentTmpl = template.Must(template.New("channelcount").Parse(`<div id="channelcount" class="setting-cell">
@@ -3463,7 +3415,7 @@ func buildDashboardData(r *http.Request) dashboardData {
 	renderFragment(&tagBuf, selectFragmentTmpl, tagSelect())
 	renderFragment(&prefixBuf, filePrefixFragmentTmpl, filePrefixView())
 	renderFragment(&transportBuf, selectFragmentTmpl, transportSelect())
-	renderFragment(&hyperdeckBuf, hyperdeckFragmentTmpl, hyperdeckViewData())
+	renderFragment(&hyperdeckBuf, switchFragmentTmpl, hyperdeckSwitch())
 	renderFragment(&logLevelBuf, selectFragmentTmpl, logLevelSelect())
 	renderFragment(&themeBuf, themeFragmentTmpl, themePicker())
 	var tintBuf bytes.Buffer
@@ -3475,10 +3427,10 @@ func buildDashboardData(r *http.Request) dashboardData {
 		}
 	}
 	renderFragment(&brightnessBuf, brightnessFragmentTmpl, brightnessViewData())
-	renderFragment(&autoDimBuf, autoDimFragmentTmpl, autoDimViewData())
-	renderFragment(&demoBuf, demoFragmentTmpl, demoViewData())
+	renderFragment(&autoDimBuf, switchFragmentTmpl, autoDimSwitch())
+	renderFragment(&demoBuf, switchFragmentTmpl, demoSwitch())
 	renderFragment(&nameBuf, deviceNameFragmentTmpl, deviceNameNow())
-	renderFragment(&monitorBuf, monitorFragmentTmpl, monitorViewData())
+	renderFragment(&monitorBuf, switchFragmentTmpl, monitorSwitch())
 
 	// Generate WiFi QR code as base64 PNG for the settings modal
 	var qrBase64 string
