@@ -3653,26 +3653,12 @@ var (
 	recFilesCached []string
 )
 
+// recordingFilesScan lists takes in /rec and its day directories; the two
+// patterns match disjoint depths, so no path can appear twice.
 func recordingFilesScan() []string {
-	seen := map[string]bool{}
-	var files []string
-	patterns := []string{
-		filepath.Join(RecordPath, "*.wav"),
-		filepath.Join(RecordPath, "*", "*.wav"),
-	}
-	for _, pat := range patterns {
-		matches, err := filepath.Glob(pat)
-		if err != nil {
-			continue
-		}
-		for _, m := range matches {
-			if !seen[m] {
-				seen[m] = true
-				files = append(files, m)
-			}
-		}
-	}
-	return files
+	top, _ := filepath.Glob(filepath.Join(RecordPath, "*.wav"))
+	days, _ := filepath.Glob(filepath.Join(RecordPath, "*", "*.wav"))
+	return append(top, days...)
 }
 
 // latestRecording returns the most recently created recording, sorted by
