@@ -609,7 +609,6 @@ func noteActivity() {
 func applyWifiConfig(ssid, pass string, enabled bool) {
 	if isSimMode() {
 		logInfof("wifi: sim mode - AP %q enabled=%v (no hardware change)", ssid, enabled)
-		wifiInited = true
 		return
 	}
 
@@ -631,7 +630,6 @@ func applyWifiConfig(ssid, pass string, enabled bool) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		logErrorf("wifi: hostapd %s failed: %v: %s", map[bool]string{true: "start", false: "stop"}[enabled], err, out)
 	}
-	wifiInited = true
 	logInfof("wifi: access point %q %s", ssid, map[bool]string{true: "started", false: "stopped"}[enabled])
 }
 
@@ -1272,10 +1270,6 @@ type PersistedConfig struct {
 	// label, see channellabels.go); absent means inferno's names.
 	ChannelLabels map[int]string `json:"channelLabels,omitempty"`
 }
-
-// wifiInited tracks whether applyWifiConfig has been run at least once so the
-// startup OFF default and the "on/off at startup" toggle don't fight.
-var wifiInited bool
 
 func main() {
 	var err error
