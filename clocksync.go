@@ -64,7 +64,11 @@ func readStatimeObservation(path string, timeout time.Duration) (string, time.Du
 		return "", 0, err
 	}
 	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(timeout))
+	// Without the deadline the read below is unbounded, so failing to set
+	// it is an error, not something to carry on past.
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return "", 0, fmt.Errorf("statime observation: %w", err)
+	}
 	raw, err := io.ReadAll(io.LimitReader(conn, 1<<20))
 	if err != nil {
 		return "", 0, err
