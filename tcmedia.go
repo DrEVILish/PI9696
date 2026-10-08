@@ -35,7 +35,7 @@ var tcMedia struct {
 	offRx int64 // capture stream position minus the capture stream's appl count
 
 	// Recent estimates of the capture-minus-playback start offset (see
-	// tcRxPosOfTxLocked), for their running maximum.
+	// tcRxPosOfTxLocked), averaged.
 	dHist [tcOffsetWindow]tcOffsetSample
 	dNext int
 }
@@ -103,28 +103,36 @@ func tcRxPosAtLocked(t time.Time) (float64, bool) {
 	return hwAt(cp, t, m.rate) + float64(m.offRx), true
 }
 
-// tcOffsetMaxLocked records an offset estimate and returns the largest of
-// those within tcOffsetSpan. An estimate more than a few packets away from
-// the rest means the streams restarted (an xrun re-prepares one): the
-// history starts over. Caller holds tcMu.
-func tcOffsetMaxLocked(d float64, at time.Time, rate int) float64 {
+// tcOffsetLocked records an offset estimate and returns the mean of those
+// within tcOffsetSpan, which smooths the estimates' jitter (the transmit
+// position steps by packet; the clock points are taken a little apart).
+// An estimate more than 10 ms away from the rest means the streams
+// restarted (an xrun re-prepares one): the history starts over. Caller
+// holds tcMu.
+//
+// (Measured on the network, the raw, mean, minimum and maximum estimates
+// put the chased output 0.48, 0.50, 0.46 and 0.58 ms ahead of the source,
+// all with no drift: the mean is the steadiest without assuming which way
+// the jitter leans.)
+func tcOffsetLocked(d float64, at time.Time, rate int) float64 {
 	m := &tcMedia
-	best := d
-	jump := float64(rate) / 100 // 10 ms: far beyond packet jitter
+	jump := float64(rate) / 100
+	sum, n := d, 1
 	for _, s := range m.dHist {
 		if s.at.IsZero() || at.Sub(s.at) > tcOffsetSpan {
 			continue
 		}
 		if s.d-d > jump || d-s.d > jump {
 			m.dHist = [tcOffsetWindow]tcOffsetSample{}
-			best = d
+			sum, n = d, 1
 			break
 		}
-		best = max(best, s.d)
+		sum += s.d
+		n++
 	}
 	m.dHist[m.dNext] = tcOffsetSample{d: d, at: at}
 	m.dNext = (m.dNext + 1) % tcOffsetWindow
-	return best
+	return sum / float64(n)
 }
 
 // tcRxPosOfTxLocked is the capture stream position at the media instant
@@ -144,14 +152,10 @@ func tcRxPosOfTxLocked(q int64) (float64, bool) {
 		t = pp.At
 	}
 	// Same instant on both streams: capture hw - playback hw is the
-	// offset between their start times. The capture position follows the
-	// media clock exactly, but the playback position is the timestamp of
-	// the transmitter's next packet: 0 to 1 packet ahead of now, at
-	// random. Each estimate is that much too small, so the true offset is
-	// the largest of the recent ones (one taken right at a packet
-	// boundary). The raw estimates left the output 0.5 ms (half a 1 ms
-	// packet) early, with 0.1-0.2 ms of jitter.
-	d := tcOffsetMaxLocked(hwAt(cp, t, m.rate)-hwAt(pp, t, m.rate), t, m.rate)
+	// offset between their start times. The playback position steps by
+	// the transmitter's packets, so each estimate jitters by up to a
+	// packet: averaged over the last 2 s.
+	d := tcOffsetLocked(hwAt(cp, t, m.rate)-hwAt(pp, t, m.rate), t, m.rate)
 	x := float64(q) + d + float64(m.offRx)
 	// Received LTC is inferno's receive latency old by the time it is
 	// captured: what the source sends at a media instant is the code

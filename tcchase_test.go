@@ -306,30 +306,28 @@ func TestChaseRestartAnchors(t *testing.T) {
 	}
 }
 
-// The playback position comes in up to a packet ahead of the media clock:
-// the offset estimate is the largest recent one, and a stream restart (a
-// jump far beyond packet jitter) starts the history over.
-func TestStreamOffsetTakesTheRunningMaximum(t *testing.T) {
+// The stream offset estimate is the mean of the last 2 s of estimates, and
+// a stream restart (a jump far beyond packet jitter) starts it over.
+func TestStreamOffsetAveragesEstimates(t *testing.T) {
 	tcMu.Lock()
 	defer tcMu.Unlock()
 	tcMedia.dHist, tcMedia.dNext = [tcOffsetWindow]tcOffsetSample{}, 0
 	now := time.Now()
 	const sr = 48000
-	// True offset 1000; each estimate is 0..47 samples short (a 48-sample
-	// packet's phase).
+	// True offset 1000, estimates jittering -24..+23 samples around it.
 	var got float64
-	for i := 0; i < 100; i++ {
-		got = tcOffsetMaxLocked(1000-float64((i*29)%48), now.Add(time.Duration(i)*time.Millisecond), sr)
+	for i := 0; i < 96; i++ {
+		got = tcOffsetLocked(1000+float64(i%48-24), now.Add(time.Duration(i)*time.Millisecond), sr)
 	}
-	if got != 1000 {
-		t.Fatalf("offset %v, want the true 1000", got)
+	if math.Abs(got-999.5) > 0.01 {
+		t.Fatalf("offset %v, want the mean 999.5", got)
 	}
 	// Old estimates age out.
-	if got = tcOffsetMaxLocked(990, now.Add(3*time.Second), sr); got != 990 {
+	if got = tcOffsetLocked(990, now.Add(3*time.Second), sr); got != 990 {
 		t.Fatalf("after 2 s only the new estimate counts: %v", got)
 	}
 	// A restart: a new offset far away replaces the history at once.
-	if got = tcOffsetMaxLocked(50000, now.Add(3*time.Second+time.Millisecond), sr); got != 50000 {
+	if got = tcOffsetLocked(50000, now.Add(3*time.Second+time.Millisecond), sr); got != 50000 {
 		t.Fatalf("after a restart: %v", got)
 	}
 }
