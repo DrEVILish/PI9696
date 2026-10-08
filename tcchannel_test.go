@@ -8,7 +8,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-	"unsafe"
 )
 
 func TestDropLastChannel(t *testing.T) {
@@ -154,9 +153,10 @@ func TestInfernoRxLoopTimecodeLayout(t *testing.T) {
 	}
 }
 
-// A dropping writer never part-writes a chunk: one that does not fit the
-// FIFO whole is dropped whole, so the capture loop never waits on it.
-func TestFifoFeedDropsWholeChunks(t *testing.T) {
+// The capture loop's writer: a full FIFO never blocks the loop, an
+// overflowing queue drops whole chunks, and what does reach the FIFO is
+// whole, in order chunks.
+func TestFifoAsyncNeverBlocksAndKeepsChunksWhole(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fifo")
 	if err := syscall.Mkfifo(path, 0600); err != nil {
 		t.Fatal(err)
@@ -166,22 +166,65 @@ func TestFifoFeedDropsWholeChunks(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer syscall.Close(fd)
-	f := fifoFeed{fd: fd, ctl: make(chan fifoLayoutReq), dropWhenFull: true}
+	quit := make(chan struct{})
+	defer close(quit)
+	const chunk = 6000 // not a divisor of the pipe size: chunks straddle it
+	f := fifoFeed{fd: fd, ctl: make(chan fifoLayoutReq)}
+	f.startAsync(chunk, quit)
 	size, _, _ := syscall.Syscall(syscall.SYS_FCNTL, uintptr(fd), linuxFGetPipeSz, 0)
-	// Leave 100 bytes of room.
-	if err := f.write(make([]byte, int(size)-100), nil, time.Millisecond); err != nil {
-		t.Fatal(err)
-	}
+	// Nobody reads: far more than the FIFO and the queue hold.
+	total := int(size)/chunk + 2*cap(f.async.queue) + 10
 	start := time.Now()
-	if err := f.write(make([]byte, 4096), nil, time.Millisecond); err != nil {
-		t.Fatal(err)
+	for i := 0; i < total; i++ {
+		b := make([]byte, chunk)
+		for j := range b {
+			b[j] = byte(i)
+		}
+		if err := f.write(b, quit, time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Millisecond) // let the writer fill the FIFO
 	}
-	if time.Since(start) > 100*time.Millisecond || f.dropped != 4096 {
-		t.Fatalf("a chunk that does not fit: dropped %d bytes after %v", f.dropped, time.Since(start))
+	if el := time.Since(start); el > time.Duration(total)*time.Millisecond+500*time.Millisecond {
+		t.Fatalf("queueing %d chunks took %v: the loop waited on the FIFO", total, el)
 	}
-	var held int32
-	syscall.Syscall(syscall.SYS_IOCTL, uintptr(fd), syscall.TIOCINQ, uintptr(unsafe.Pointer(&held)))
-	if int(held) != int(size)-100 {
-		t.Fatalf("FIFO holds %d bytes, want %d: part of the dropped chunk was written", held, int(size)-100)
+	if f.dropped == 0 || f.dropped%chunk != 0 {
+		t.Fatalf("dropped %d bytes, want whole chunks (and some)", f.dropped)
+	}
+	// Read everything back (the writer drains its queue as room appears):
+	// whole chunks, increasing.
+	var got []byte
+	tmp := make([]byte, 65536)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		n, err := syscall.Read(fd, tmp)
+		if n > 0 {
+			got = append(got, tmp[:n]...)
+			deadline = time.Now().Add(300 * time.Millisecond)
+			continue
+		}
+		if err != nil && err != syscall.EAGAIN {
+			t.Fatal(err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if len(got)%chunk != 0 {
+		t.Fatalf("read %d bytes: not whole chunks", len(got))
+	}
+	last := -1
+	for off := 0; off < len(got); off += chunk {
+		c := got[off : off+chunk]
+		for _, v := range c {
+			if v != c[0] {
+				t.Fatalf("chunk at %d is mixed", off)
+			}
+		}
+		if int(c[0]) <= last {
+			t.Fatalf("chunk %d after %d: out of order", c[0], last)
+		}
+		last = int(c[0])
+	}
+	if want := int64(total*chunk - len(got)); f.dropped != want {
+		t.Fatalf("dropped %d bytes, but %d did not arrive", f.dropped, want)
 	}
 }

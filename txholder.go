@@ -250,7 +250,8 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 	// Drop, never wait: the device must be read on time whether or not
 	// anything reads the FIFO (playback stands the monitor down), or the
 	// TIMECODE channel stops reaching the LTC reader mid-chase.
-	fifo := fifoFeed{fd: fd, ctl: rxFifoCtl, dropWhenFull: true}
+	fifo := fifoFeed{fd: fd, ctl: rxFifoCtl}
+	fifo.startAsync(len(buf), quit)
 	var droppedAt, backlogAt time.Time
 	var maxBacklog, lastBacklog int64
 	// Timing of the last iteration's steps, logged when the loop falls
@@ -328,7 +329,13 @@ func infernoRxLoop(dev pairedDevice, path string, quit <-chan struct{}, done cha
 		}
 		tWritten = time.Now()
 		if fifo.dropped > 0 && time.Since(droppedAt) >= infernoLogSummaryEvery {
-			logDebugf("in-process inferno: FIFO full (no reader?), %d bytes not queued", fifo.dropped)
+			// Expected with no reader (playback stands the monitor down);
+			// during a take it is a gap in the take.
+			if takeLive.Load() {
+				logErrorf("in-process inferno: the take's ffmpeg fell seconds behind, %d bytes of input dropped - a gap in the take", fifo.dropped)
+			} else {
+				logDebugf("in-process inferno: no FIFO reader, %d bytes not queued", fifo.dropped)
+			}
 			fifo.dropped, droppedAt = 0, time.Now()
 		}
 	}
@@ -394,18 +401,102 @@ type fifoFeed struct {
 	withTC bool
 	pos    int64 // frames taken from the source so far
 	drop   bool  // a switch happened mid-chunk: abandon the rest of it
-	// dropWhenFull drops a chunk the FIFO has no room for instead of
-	// waiting (the capture loop; the demo generator is paced by waiting).
-	// Only whole chunks: once part of one is written, the rest follows,
-	// so the stream never loses frame alignment.
-	dropWhenFull bool
-	dropped      int64 // bytes dropped since the last report
+	// async hands the writes to a writer goroutine (the capture loop; the
+	// demo generator writes itself, since waiting is what paces it).
+	async   *fifoAsync
+	dropped int64 // bytes dropped since the last report
+}
+
+// fifoAsync is the capture loop's FIFO writer. A pipe write can stall for
+// hundreds of milliseconds - the pipe allocates pages, and with the page
+// cache full of a take's unwritten data that waits on the SD card - and
+// the capture loop must never wait: past the plugin's ring (170 ms) unread
+// frames are overwritten, and a 15-minute take recorded its TIMECODE
+// channel with 7-9 breaks that way (the loop measured FIFO writes of
+// 114-230 ms). The loop queues each chunk instead; the writer drains the
+// queue, waiting out a full or slow FIFO. Only when the queue itself is
+// full (seconds behind) is a chunk dropped, whole.
+type fifoAsync struct {
+	queue chan fifoChunk
+	free  chan []byte
+	mu    sync.Mutex // held around each write; a layout switch takes it
+	gen   uint64     // bumped by a layout switch: queued and part-written chunks are abandoned
+	err   atomic.Pointer[error]
+}
+
+// fifoChunk is a queued chunk and the layout generation it belongs to.
+type fifoChunk struct {
+	b   []byte
+	gen uint64
+}
+
+// takeLive mirrors isRecording for the capture loop's drop reports.
+var takeLive atomic.Bool
+
+// fifoAsyncBytes bounds the writer's queue: about 2.7 s at 2 channels,
+// 0.65 s at 128.
+const fifoAsyncBytes = 16 << 20
+
+// startAsync starts the writer for chunks of up to chunkBytes.
+func (f *fifoFeed) startAsync(chunkBytes int, quit <-chan struct{}) {
+	n := min(max(fifoAsyncBytes/max(chunkBytes, 1), 8), 128)
+	a := &fifoAsync{queue: make(chan fifoChunk, n), free: make(chan []byte, n)}
+	for i := 0; i < n; i++ {
+		a.free <- make([]byte, chunkBytes)
+	}
+	f.async = a
+	go a.run(f.fd, quit)
+}
+
+func (a *fifoAsync) run(fd int, quit <-chan struct{}) {
+	for {
+		var c fifoChunk
+		select {
+		case <-quit:
+			return
+		case c = <-a.queue:
+		}
+		b := c.b
+		for off := 0; off < len(b); {
+			a.mu.Lock()
+			if a.gen != c.gen { // queued before a layout switch drained the FIFO
+				a.mu.Unlock()
+				break
+			}
+			w, err := syscall.Write(fd, b[off:])
+			a.mu.Unlock()
+			if err != nil && err != syscall.EAGAIN {
+				a.err.Store(&err)
+				return
+			}
+			if err != nil || w == 0 {
+				select {
+				case <-quit:
+					return
+				case <-time.After(2 * time.Millisecond):
+				}
+				continue
+			}
+			off += w
+		}
+		a.free <- b[:cap(b)]
+	}
 }
 
 // serve applies a pending layout switch, if any.
 func (f *fifoFeed) serve() bool {
 	select {
 	case r := <-f.ctl:
+		if a := f.async; a != nil {
+			// No write in flight while the FIFO drains, and nothing
+			// queued in the old layout survives.
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			a.gen++
+			for len(a.queue) > 0 {
+				a.free <- (<-a.queue).b[:0]
+			}
+		}
 		var scratch [65536]byte
 		for {
 			n, err := syscall.Read(f.fd, scratch[:])
@@ -438,11 +529,17 @@ var errFifoQuit = errors.New("quit")
 // old layout) is dropped.
 func (f *fifoFeed) write(out []byte, quit <-chan struct{}, wait time.Duration) error {
 	f.drop = false
-	// Dropping: a chunk that does not fit whole is dropped whole, so the
-	// writer never waits on a part-written chunk (which stalled the loop).
-	if f.dropWhenFull && !f.fits(len(out)) {
-		f.serve()
-		f.dropped += int64(len(out))
+	if a := f.async; a != nil {
+		if e := a.err.Load(); e != nil {
+			return *e
+		}
+		select {
+		case b := <-a.free:
+			// gen is only changed by serve, on this goroutine.
+			a.queue <- fifoChunk{b: append(b[:0], out...), gen: a.gen}
+		default:
+			f.dropped += int64(len(out)) // the writer is seconds behind
+		}
 		return nil
 	}
 	for off := 0; off < len(out); {
@@ -459,28 +556,12 @@ func (f *fifoFeed) write(out []byte, quit <-chan struct{}, wait time.Duration) e
 			if f.serve() {
 				return nil
 			}
-			if f.dropWhenFull && off == 0 {
-				f.dropped += int64(len(out))
-				return nil
-			}
 			time.Sleep(wait)
 			continue
 		}
 		off += w
 	}
 	return nil
-}
-
-// fits reports whether n bytes fit in the FIFO now (its size minus what it
-// holds). Unknown sizes count as fitting.
-func (f *fifoFeed) fits(n int) bool {
-	size, _, e1 := syscall.Syscall(syscall.SYS_FCNTL, uintptr(f.fd), linuxFGetPipeSz, 0)
-	var held int32
-	_, _, e2 := syscall.Syscall(syscall.SYS_IOCTL, uintptr(f.fd), syscall.TIOCINQ, uintptr(unsafe.Pointer(&held)))
-	if e1 != 0 || e2 != 0 {
-		return true
-	}
-	return int(size)-int(held) >= n
 }
 
 // dropLastChannel removes the last channel of interleaved frames in place

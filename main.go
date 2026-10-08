@@ -3322,6 +3322,7 @@ func startRecording() {
 
 	ffmpegCmd = cmd
 	isRecording = true
+	takeLive.Store(true)
 	currentState = StateRecording
 	// The take's channel names: inferno's names as they are now (see
 	// channelnames.go). A small file, written once per take.
@@ -3394,6 +3395,7 @@ func startRecording() {
 			}
 			ffmpegCmd = nil
 			isRecording = false
+			takeLive.Store(false)
 			tcEndAudioTakeLocked()
 			meterPeakDB = meterSilence
 			meterRMSDB = meterSilence
