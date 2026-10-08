@@ -274,8 +274,9 @@ func TestChaseRestartAnchors(t *testing.T) {
 		mutex.Unlock()
 		tcSetChaseLive(nil)
 	})
+	// Locked 3 frames after the code started running at tc.
 	at := func(tc Timecode) tcReading {
-		return tcReading{source: "LTC", frames: float64(tc.frames(r)), rate: tcRateDefault, locked: true}
+		return tcReading{source: "LTC", frames: float64(tc.frames(r) + 3), rate: tcRateDefault, locked: true, runStart: float64(tc.frames(r))}
 	}
 	samples := func(tc Timecode) int64 { return samplesFromFrames(tc.frames(r), r, sr) }
 	step := func(rd tcReading) int64 {

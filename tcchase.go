@@ -203,10 +203,17 @@ func tcChaseStepLocked(r tcReading, now time.Time) {
 	}
 	if tcRestartOn && restarted {
 		rate := tcRates[r.rate]
-		c.ref = int64(math.Round(tcSecondsOfFrames(r.frames, rate) * float64(c.sr)))
+		// Anchored where the code restarted - its first frame - not where
+		// the restart was noticed (a lock takes a few frames): the take's
+		// first sample belongs with the code's first frame.
+		at := r.runStart
+		if at <= 0 || at > r.frames || r.frames-at > tcFramesOfSeconds(1, rate) {
+			at = r.frames
+		}
+		c.ref = int64(math.Round(tcSecondsOfFrames(at, rate) * float64(c.sr)))
 		c.anchored = true
 		tcSetChaseLive(c.cmd)
-		logInfof("Chase: %s restarted at %s - restarting %s from the top", r.source, timecodeAt(int64(r.frames), rate).format(rate), filepath.Base(c.file))
+		logInfof("Chase: %s restarted at %s - restarting %s from the top", r.source, timecodeAt(int64(math.Round(at)), rate).format(rate), filepath.Base(c.file))
 		if playing {
 			tcChaseStopPlaybackLocked()
 			c.state = "restarting"

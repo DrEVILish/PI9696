@@ -168,7 +168,8 @@ var tcLTC struct {
 	endPos     int64
 	wall       time.Time
 	rate       int
-	run        int // consecutive frames
+	run        int   // consecutive frames
+	runStart   int64 // frame count of the run's first frame
 }
 
 // tcMTC is the MTC reader's state (tcMu).
@@ -180,8 +181,11 @@ var tcMTC struct {
 	rate    int
 	running bool
 	run     int
-	from    string
-	hist    []mtcAnchor // recent labels on the capture stream (tcmedia.go)
+	// runStart is the code position where the current run began: the
+	// first label of the run, at its first quarter frame.
+	runStart float64
+	from     string
+	hist     []mtcAnchor // recent labels on the capture stream (tcmedia.go)
 }
 
 // tcRateForDecoded resolves a decoded frame's rate: the decoder's reading
@@ -220,7 +224,7 @@ func tcFeedLTC(stream any, frames []int32, stride int, first int64, readAt time.
 		if l.has && next == l.nextFrames+1 && rate == l.rate {
 			l.run++
 		} else {
-			l.run = 1
+			l.run, l.runStart = 1, next-1
 		}
 		l.has, l.nextFrames, l.endPos, l.rate = true, next, f.endPos, rate
 		l.wall = readAt.Add(-time.Duration(end-f.endPos) * time.Second / time.Duration(sr))
@@ -254,7 +258,7 @@ func tcHandleMIDI(msg []byte, from string) {
 	if d.running && m.has && m.running && m.rate == d.rate && math.Abs(frames-m.frames-2) < 0.01 {
 		m.run++
 	} else if d.running {
-		m.run = 1
+		m.run, m.runStart = 1, frames-d.offsetFrames
 	} else {
 		m.run = 0
 	}
@@ -280,6 +284,19 @@ type tcReading struct {
 	// stopped: a source that was seen but is not running (MTC parked at a
 	// full frame, LTC that stopped): frames holds where it stopped.
 	seen bool
+	// runStart is where the code started running this time (frames since
+	// midnight): its first frame after starting or jumping. The lock comes
+	// a few frames later; a restart is anchored here.
+	runStart float64
+}
+
+// tcRunStartLocked is the selected input's current run start. Caller holds
+// tcMu.
+func tcRunStartLocked(src int) float64 {
+	if src == tcSourceMTC {
+		return tcMTC.runStart
+	}
+	return float64(tcLTC.runStart)
 }
 
 // tcInputNow is the selected input as of now: locked with the position
@@ -292,13 +309,13 @@ func tcInputNow(now time.Time) tcReading {
 	// position being captured now, and the code there.
 	if x, ok := tcRxPosAtLocked(now); ok {
 		if frames, rate, ok := tcCodeAtRxLocked(x); ok {
-			return tcReading{source: tcSourceNames[src], frames: frames, rate: rate, locked: true, seen: true}
+			return tcReading{source: tcSourceNames[src], frames: frames, rate: rate, locked: true, seen: true, runStart: tcRunStartLocked(src)}
 		}
 	}
 	switch src {
 	case tcSourceLTC:
 		l := &tcLTC
-		r := tcReading{source: "LTC", rate: l.rate, seen: l.has}
+		r := tcReading{source: "LTC", rate: l.rate, seen: l.has, runStart: float64(l.runStart)}
 		if !l.has {
 			return r
 		}
@@ -311,7 +328,7 @@ func tcInputNow(now time.Time) tcReading {
 		return r
 	case tcSourceMTC:
 		m := &tcMTC
-		r := tcReading{source: "MTC", rate: m.rate, seen: m.has, frames: m.frames}
+		r := tcReading{source: "MTC", rate: m.rate, seen: m.has, frames: m.frames, runStart: m.runStart}
 		if m.has && m.running && m.run >= 2 && now.Sub(m.wall) < tcStaleAfter {
 			r.locked = true
 			r.frames += tcFramesOfSeconds(now.Sub(m.wall).Seconds(), tcRates[m.rate])
