@@ -180,6 +180,10 @@ type ltcDecoder struct {
 	frameLens  []int64 // recent frame lengths in samples, for the rate
 	maxFrame   int
 	threshold  int32
+	// resyncAt is where the decoder last lost the code (silence, a cut, a
+	// misread) and started over, -1 never: the earliest the code it
+	// decodes next can have started.
+	resyncAt int64
 }
 
 func newLTCDecoder(sampleRate int) *ltcDecoder {
@@ -187,6 +191,7 @@ func newLTCDecoder(sampleRate int) *ltcDecoder {
 		sampleRate: sampleRate,
 		period:     float64(sampleRate) / 2000, // 25 fps; adapts within bits
 		lastEnd:    -1,
+		resyncAt:   -1,
 		threshold:  1 << 24, // about -42 dBFS: below this is not a level change
 	}
 }
@@ -233,7 +238,7 @@ func (d *ltcDecoder) edge(gap, at int64, found func(ltcDecoded)) {
 		// Not LTC timing (silence, a dropout, noise): start over, but keep
 		// the period if the gap is a plausible bit at another rate.
 		d.halfPend = false
-		d.nbits = 0
+		d.nbits, d.resyncAt = 0, at
 		if g >= float64(d.sampleRate)/2600 && g <= float64(d.sampleRate)/1800 {
 			d.period = g
 		}
@@ -242,7 +247,7 @@ func (d *ltcDecoder) edge(gap, at int64, found func(ltcDecoded)) {
 		if d.halfPend {
 			// A full period after a lone half: the halves were misread.
 			d.halfPend = false
-			d.nbits = 0
+			d.nbits, d.resyncAt = 0, at
 			return
 		}
 		d.bit(0, at, found)

@@ -468,3 +468,36 @@ func TestLTCRunStartAfterAJump(t *testing.T) {
 		}
 	}
 }
+
+// Code starting out of silence: the run starts at its first frame, whether
+// or not the decoder caught that frame.
+func TestLTCRunStartOutOfSilence(t *testing.T) {
+	setTimecodeSettings(t, tcSourceLTC, tcRecordMeta, false)
+	const sr = 48000
+	r := tcRates[tcRateDefault]
+	b := Timecode{5, 0, 0, 0}
+	for _, lead := range []int{0, 1, 333, 1024, 4000, -1, -333, -4000} {
+		resetTimecodeReaders()
+		code := ltcStream(b, sr, 1, 0, sr)
+		if lead < 0 {
+			// Starting at the polarity the decoder last saw: the onset is
+			// no edge at all, and the first bit is misread.
+			for i := range code {
+				code[i] = -code[i]
+			}
+			lead = -lead
+		}
+		buf := append(make([]int32, sr/2+lead), code...)
+		stream := new(int)
+		now := time.Now()
+		for pos := 0; pos+1024 <= len(buf); pos += 1024 {
+			tcFeedLTC(stream, buf[pos:pos+1024], 1, int64(pos), now, sr)
+		}
+		tcMu.Lock()
+		got, run := tcLTC.runStart, tcLTC.run
+		tcMu.Unlock()
+		if run < tcLockFrames || got != b.frames(r) {
+			t.Errorf("silence then code (+%d): run of %d from %v, want from %v", lead, run, timecodeAt(got, r), b)
+		}
+	}
+}
