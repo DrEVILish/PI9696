@@ -382,6 +382,16 @@ def main():
     orig = pia.sh("python3 -c \"import json;c=json.load(open('/etc/pi9696/config.json'));print(json.dumps({k:c.get(k) for k in ('tcSource','tcRecord','tcOutput','tcRate','tcMTCPeer')}))\" 2>/dev/null").stdout.strip()
     log(f"unit timecode settings before: {orig or '(defaults)'}; status {before}")
 
+    # An earlier run killed hard (OOM, ^C) can leave its aplay/arecord
+    # running, holding the instances' ports: the new ones then panic and
+    # capture nothing. Kill them by pid (pkill -f would match this shell).
+    for line in subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True).stdout.splitlines():
+        pid, _, args = line.strip().partition(" ")
+        if ("arecord" in args or "aplay" in args) and "-D inferno" in args and (a.work in args or args.endswith(" -")):
+            log(f"killing a leftover {args.split()[0]} (pid {pid})")
+            subprocess.run(["kill", pid])
+    time.sleep(1)
+
     gen = LTCGen(frame_of(10, 0, 0, 0))
     procs = []
     stop_feed = threading.Event()
@@ -407,6 +417,10 @@ def main():
         cap_t0 = time.time()
         wait_device("TCSRC")
         wait_device("TCSINK")
+        time.sleep(2)
+        for log_name in ("src.log", "sink.log"):
+            if "panicked" in open(f"{a.work}/{log_name}").read():
+                raise RuntimeError(f"an inferno instance on this host failed to start (see {a.work}/{log_name})")
         for tx, rx in ((f"1@TCSRC", f"TIMECODE@{name}"), (f"TIMECODE@{name}", "1@TCSINK"), ("1@TCSRC", "2@TCSINK")):
             out = netaudio("subscription", "add", "--tx", tx, "--rx", rx)
             log(f"route {tx} -> {rx}: {out.strip()[-80:] or 'ok'}")
@@ -535,7 +549,7 @@ def main():
         # take's own timecode; the take must restart from its top there.
         pia.post("/api/settings/timecode-restart", {"enabled": "on"})
         pia.post("/api/timecode/arm", {"arm": "1"})
-        take_first = ref // SPF                       # the take's own first frame
+        take_first = ref / SPF                        # the take's own start (frames, not frame-aligned)
         for k, jump in enumerate((frame_of(5, 0, 0, 0), frame_of(4, 30, 0, 0))):
             mark = capture_frames(cap)
             gen.jump(jump)
@@ -548,14 +562,14 @@ def main():
             # same position, so their difference is constant.
             srcf = dict(d_src)
             diffs = [o for e, o in offsets(d_out, d_src) if srcf.get(e, -1) >= jump]
-            want = take_first - jump
+            want = take_first - jump                   # the take starts where the code restarted
             # (before the take starts, the output relays the source)
             near = [o for o in diffs if abs(o - want) < 1]
             med = float(np.median(near)) if near else float("nan")
             ok = len(near) > 2 * FPS and abs(med - want) < 0.05
             ck.check(f"restart mode: take restarts from its top ({k + 1})", ok,
-                     f"take code - source code = {med:+.3f} frames over {len(near)} frames, want {want:+d} "
-                     f"(take starts at {fmt(take_first)}, code restarted at {fmt(jump)})")
+                     f"take code - source code = {med:+.3f} frames over {len(near)} frames, want {want:+.3f} "
+                     f"(take starts at {fmt(int(take_first))}, code restarted at {fmt(jump)})")
         gen.stop()
         time.sleep(1.5)
         pia.post("/api/timecode/arm", {"arm": "0"})
