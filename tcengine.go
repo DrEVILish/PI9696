@@ -225,6 +225,19 @@ func tcFeedLTC(stream any, frames []int32, stride int, first int64, readAt time.
 			l.run++
 		} else {
 			l.run, l.runStart = 1, next-1
+			// A code that jumps while running cuts its old frame short,
+			// and the decoder can lose the new code's first frame while
+			// it resyncs to the cut. The new code starts in that cut old
+			// frame: every whole frame between the old code's last frame
+			// and this one is a new frame missed (within a second; after
+			// silence there is no such reference).
+			if l.has {
+				spf := float64(sr) * float64(tcRates[rate].Den) / float64(tcRates[rate].Num)
+				gap := float64(f.endPos-l.endPos) - spf
+				if gap >= spf && gap < float64(sr) {
+					l.runStart -= int64(gap / spf)
+				}
+			}
 		}
 		l.has, l.nextFrames, l.endPos, l.rate = true, next, f.endPos, rate
 		l.wall = readAt.Add(-time.Duration(end-f.endPos) * time.Second / time.Duration(sr))

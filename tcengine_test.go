@@ -441,3 +441,30 @@ func TestRecordTimecodeAsAudioAndMetadata(t *testing.T) {
 		t.Fatal("still in the timecode-as-audio layout after the take")
 	}
 }
+
+// A code that jumps mid-frame: the new run starts at the new code's first
+// frame, whether or not the decoder caught that frame.
+func TestLTCRunStartAfterAJump(t *testing.T) {
+	setTimecodeSettings(t, tcSourceLTC, tcRecordMeta, false)
+	const sr = 48000
+	r := tcRates[tcRateDefault]
+	for _, cut := range []int{700, 1000, 1500, 1900} {
+		resetTimecodeReaders()
+		a := Timecode{10, 0, 0, 0}
+		b := Timecode{5, 0, 0, 0}
+		// 1 s of A, then A's next frame cut after cut samples, then B
+		// from its first frame.
+		buf := append(ltcStream(a, sr, 1, 0, sr+cut)[:sr+cut], ltcStream(b, sr, 1, 0, sr)...)
+		stream := new(int)
+		now := time.Now()
+		for pos := 0; pos+1024 <= len(buf); pos += 1024 {
+			tcFeedLTC(stream, buf[pos:pos+1024], 1, int64(pos), now, sr)
+		}
+		tcMu.Lock()
+		got, run := tcLTC.runStart, tcLTC.run
+		tcMu.Unlock()
+		if run < tcLockFrames || got != b.frames(r) {
+			t.Errorf("cut %d samples into a frame: run of %d from %v, want from %v", cut, run, timecodeAt(got, r), b)
+		}
+	}
+}
